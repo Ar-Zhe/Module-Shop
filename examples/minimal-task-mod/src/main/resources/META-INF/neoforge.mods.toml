@@ -1,0 +1,23 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+
+[[mods]]
+modId="example_task_mod"
+version="1.0.0"
+displayName="Example Task Mod (Module Shop API demo)"
+description='''演示如何通过 Module Shop 的公共 API 完成：查余额 / 发星币 / 发物品 / 发奖励邮件 / 幂等防重复领取。'''
+
+[[dependencies.example_task_mod]]
+    modId="neoforge"
+    type="required"
+    versionRange="[21.1.0,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.example_task_mod]]
+    modId="server_shop_mod_1789689358"
+    type="required"
+    versionRange="[1.0.0,)"
+    ordering="AFTER"
+    side="BOTH"
