@@ -1,0 +1,1 @@
+cn.autoforged.module_shop.integration.kubejs.ModuleShopKubeJsPlugin

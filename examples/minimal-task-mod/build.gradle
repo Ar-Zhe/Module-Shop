@@ -1,0 +1,27 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.144'
+}
+
+version = mod_version
+group = 'com.example.taskmod'
+base { archivesName = "example-task-mod-${mod_version}" }
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = project.neo_version
+    runs { client { client() } server { server() } }
+    mods {
+        example_task_mod { sourceSet sourceSets.main }
+    }
+}
+
+repositories { mavenCentral() }
+
+dependencies {
+    // ★ 示例的关键一行：只编译期依赖「模块商店」的 jar —— 运行时由服务端提供
+    compileOnly files(project.findProperty('module_shop_jar'))
+}
+
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
