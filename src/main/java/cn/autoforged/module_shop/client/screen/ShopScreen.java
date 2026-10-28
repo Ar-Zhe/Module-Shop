@@ -86,7 +86,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     // 左侧菜单（visibleTabs）与编辑模式下的「模块管理」（所有模块 = 已启用 + 已移除）都由这个数组推导，
     // **不要再另写一份模块清单**，否则新模块会「侧栏有、模块管理里没有」。
     private static final String[] TAB_IDS = {"daily", "buyback", "mall", "shipping", "auction", "stall", "demand", "mail",
-            "exchange"};
+            "exchange", "signin", "trade", "transfer"};
+
+    /** 侧栏里**固定置顶**的模块（顺序即显示顺序）。 */
+    private static final List<String> PINNED_TOP = List.of("signin", "trade", "transfer");
 
     /** 全部模块 id（侧栏、模块管理、服务端校验共用同一份）。 */
     static List<String> allModuleIds() {
@@ -112,7 +115,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             // 摊位：玩家自己上架，管理员这里只放「下架时间」设置（没有可编辑的条目列表）。
             new AdminModule("stall", "gui.module_shop.admin_stall"),
             // 求购：玩家自己发布悬赏；管理员这里可以调设置、看全部求购并强制撤销。
-            new AdminModule("demand", "gui.module_shop.admin_demand"));
+            new AdminModule("demand", "gui.module_shop.admin_demand"),
+            // 签到：奖励、补签、累计档位、里程、累计加成 / 自动签到 —— 全部集中在这里设置。
+            new AdminModule("signin", "gui.module_shop.admin_signin"));
 
     // ================= 购物城（新增模块）=================
     /** 货架 2 行 6 列 = 一页 12 件。 */
@@ -191,6 +196,13 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     // ---- 侧栏拖拽（管理员编辑模式）----
     /** 是否处于布局编辑模式（从「商店设置」页的「编辑布局」进入）。 */
     private boolean layoutEdit;
+    /** 签到页：管理员「编辑日程」态（点日历上的日期 = 新建 / 修改那天的日程）。 */
+    private boolean signInEdit;
+    /** 签到页本帧要画的悬浮提示：单个 Tooltip 与日程多行 Tooltip（都留到最后统一画，避免被后画的格子盖住）。 */
+    private Component signInTip;
+    private List<Component> signInTipLines;
+    /** 本帧要画的物品悬浮框（留到整个界面画完再画，避免被后面的行盖住）。 */
+    private ItemStack pendingItemTip = ItemStack.EMPTY;
     /** 正在按住 / 拖动中的页签 id。 */
     private String dragTab;
     /** 本次按住是否已经超过阈值（true = 拖拽，false = 点击）。 */
@@ -254,6 +266,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     // ---- 购物城界面状态 ----
     /** 搜索框（只在购物城页显示；聚焦时数字键不再触发切页快捷键）。 */
     private net.minecraft.client.gui.components.EditBox mallSearchBox;
+    /** 交易 / 转账页的玩家搜索框（同样只有这两页显示）。 */
+    private net.minecraft.client.gui.components.EditBox tradeSearchBox;
+    /** 交易 / 转账页的玩家列表页码。 */
+    private int tradePage;
     /** 排序 / 分类下拉是否展开（展开时不下画网格，避免物品图标穿透面板）。 */
     private boolean mallSortOpen;
     private boolean mallCatOpen;
@@ -395,6 +411,15 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         });
         this.mallSearchBox.setVisible(false);
         this.addRenderableWidget(this.mallSearchBox);
+        // 交易 / 转账：玩家搜索框（同一个框两页共用；这两页的内容区就是「在线玩家列表」）。
+        this.tradeSearchBox = new net.minecraft.client.gui.components.EditBox(this.font, 0, 0, 268, 13,
+                Component.translatable("gui.module_shop.trade.search_hint"));
+        this.tradeSearchBox.setBordered(false);
+        this.tradeSearchBox.setMaxLength(32);
+        this.tradeSearchBox.setHint(Component.translatable("gui.module_shop.trade.search_hint"));
+        this.tradeSearchBox.setResponder(text -> this.tradePage = 0);
+        this.tradeSearchBox.setVisible(false);
+        this.addRenderableWidget(this.tradeSearchBox);
     }
 
     private void sendAdminType() {
@@ -455,6 +480,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             case "demand" -> "tab.module_shop.demand";
             case "mail" -> "tab.module_shop.mail";
             case "exchange" -> "tab.module_shop.exchange";
+            case "signin" -> "tab.module_shop.signin";
+            case "trade" -> "tab.module_shop.trade";
+            case "transfer" -> "tab.module_shop.transfer";
             case "admin" -> "tab.module_shop.admin";
             default -> id;
         };
@@ -571,6 +599,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         this.scrollFadeBottom = Integer.MIN_VALUE;
         // JEI 桥接：每帧先清空，只有真的画了物品 tooltip 的地方才会重新赋值。
         this.jeiHover = net.minecraft.world.item.ItemStack.EMPTY;
+        this.pendingItemTip = ItemStack.EMPTY;
         this.pointerX = mouseX;
         this.pointerY = mouseY;
         // 每帧兜一层：当前页签被移除（自己删的，或别的管理员热同步过来）时，
@@ -588,6 +617,11 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             this.mallSearchBox.setPosition(contentX() + 5, contentY() + 4);
             this.mallSearchBox.setVisible("mall".equals(currentTab) && !this.layoutEdit
                     && !ClientShopData.mallViewRecent);
+        }
+        if (this.tradeSearchBox != null) {
+            this.tradeSearchBox.setPosition(contentX() + 5, contentY() + 2);
+            this.tradeSearchBox.setVisible(("trade".equals(currentTab) || "transfer".equals(currentTab))
+                    && !this.layoutEdit);
         }
         super.render(g, mouseX, mouseY, partialTick);
         int x = left();
@@ -624,6 +658,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             case "demand" -> drawDemand(g, contentX, contentY, contentW, contentH, mouseX, mouseY);
             case "mail" -> drawMail(g, contentX, contentY, contentW, contentH, mouseX, mouseY);
             case "exchange" -> drawExchange(g, contentX, contentY, contentW, contentH, mouseX, mouseY);
+            case "signin" -> drawSignIn(g, contentX, contentY, contentW, contentH, mouseX, mouseY);
+            case "trade" -> drawPlayerPicker(g, contentX, contentY, contentW, contentH, mouseX, mouseY, false);
+            case "transfer" -> drawPlayerPicker(g, contentX, contentY, contentW, contentH, mouseX, mouseY, true);
             case "admin" -> drawAdmin(g, contentX, contentY, contentW, contentH, mouseX, mouseY);
             default -> {
             }
@@ -637,6 +674,11 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             int bandBottom = this.scrollFadeBottom == Integer.MIN_VALUE
                     ? barTop(contentY, contentH) : this.scrollFadeBottom + 10;
             drawScrollHint(g, contentX, contentW, Math.min(bandBottom, barTop(contentY, contentH)));
+        }
+        // 物品悬浮框：留到整个界面画完再画（原版样式与 JEI 快捷键都基于当前悬停的物品）。
+        if (!this.pendingItemTip.isEmpty()) {
+            g.renderTooltip(this.font, this.pendingItemTip, mouseX, mouseY);
+            this.pendingItemTip = ItemStack.EMPTY;
         }
     }
 
@@ -681,15 +723,23 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         IOStyle.flashGlowScaled(g, this.font, Component.literal(shown), textX, balanceY, BALANCE_TEXT,
                 IOStyle.BLUE, "balance");
         if (balanceHover) {
-            Component tip = Component.literal(ClientShopData.money(ClientShopData.balance)).append("\n")
-                    .append(Component.translatable("gui.module_shop.bill.open_tip"));
-            if (ClientShopData.maxBalance > 0L) {
-                tip = tip.copy().append("\n").append(Component.translatable(
-                        "gui.module_shop.balance_cap", ClientShopData.money(ClientShopData.maxBalance)));
+            // 按需求：余额悬停**只显示**「点击查看账单明细」一行。
+            // 唯一例外：编辑布局模式（管理员）多一行「右键修改货币名称」，否则这个入口没人能发现。
+            if (this.layoutEdit && ClientShopData.canAdmin) {
+                java.util.List<Component> tipLines = new java.util.ArrayList<>();
+                tipLines.add(Component.translatable("gui.module_shop.bill.open_tip"));
+                tipLines.add(Component.translatable("gui.module_shop.currency_hint"));
+                g.renderComponentTooltip(this.font, tipLines, mouseX, mouseY);
+            } else {
+                g.renderTooltip(this.font, Component.translatable("gui.module_shop.bill.open_tip"),
+                        mouseX, mouseY);
             }
-            g.renderTooltip(this.font, tip, mouseX, mouseY);
         }
-        addRegion(textX - 2, balanceY - 2, balanceW + 4, 11, "open_bill", null, null);
+        if (this.layoutEdit && ClientShopData.canAdmin) {
+            addRegion(textX - 2, balanceY - 2, balanceW + 4, 11, null, "rename_currency", null);
+        } else {
+            addRegion(textX - 2, balanceY - 2, balanceW + 4, 11, "open_bill", null, null);
+        }
     }
 
     /** 头像：圆角方框 + 玩家皮肤（拿不到皮肤时退回纯色块）。 */
@@ -717,6 +767,23 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         return Component.literal(this.font.plainSubstrByWidth(plain, Math.max(1, room - 5)) + "…");
     }
 
+    /** 管理员（编辑布局中）：改**货币名称**（全服生效，留空 = 恢复配置里的默认值）。 */
+    private void openCurrencyRename() {
+        CompoundTag req = new CompoundTag();
+        req.putString("default_name", ClientShopData.currencyName());
+        req.putString("info", Component.translatable("gui.module_shop.currency_info",
+                Integer.toString(ShopManager.CURRENCY_NAME_MAX)).getString());
+        openInput("admin_currency_set", "gui.module_shop.input.currency", req, "name");
+    }
+    /** 管理员：改左上角**主标题**（留空 = 恢复默认「模块商店」）。 */
+    private void openShopTitleRename() {
+        CompoundTag req = new CompoundTag();
+        String current = ClientShopData.shopTitle == null ? "" : ClientShopData.shopTitle;
+        req.putString("default_name", current);
+        req.putString("info", Component.translatable("gui.module_shop.shop_title_info",
+                Integer.toString(SidebarLayout.MAX_TITLE)).getString());
+        openInput("admin_shop_title_set", "gui.module_shop.input.shop_title", req, "name");
+    }
     /** 编辑模式右键页签：打开重命名输入框（留空 = 恢复原名）。 */
     private void openTabRename(String id) {
         if (id == null || id.isEmpty() || "admin".equals(id)) {
@@ -741,6 +808,15 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                         tabLabelWithOriginal(adminMode))
                 : tabLabel(currentTab);
         g.drawString(this.font, headerTitle, contentX, titleY, COLOR_TEXT, false);
+        // 管理员：**右键标题**即可重命名当前模块（和右键侧栏页签等效）。
+        if (ClientShopData.canAdmin && !"admin".equals(currentTab)) {
+            int titleW = this.font.width(headerTitle);
+            addRegion(contentX - 2, titleY - 2, titleW + 8, 12, null, "rename_current_tab", null);
+            if (IOStyle.inside(contentX - 2, titleY - 2, titleW + 8, 12, mouseX, mouseY)) {
+                g.renderTooltip(this.font,
+                        Component.translatable("gui.module_shop.rename_hint", tabOriginal(currentTab)), mouseX, mouseY);
+            }
+        }
         // 关闭（右上角的 ×）：直角方块 + 1px 硬边框
         int closeX = x + PANEL_W - 22;
         int closeY = y + 7;
@@ -764,36 +840,31 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             g.renderTooltip(this.font, Component.translatable("gui.module_shop.notify.settings_title"),
                     mouseX, mouseY);
         }
-        // 右侧分类药丸：管理员「商店设置」/ 签到 / 交易 / 转账 —— 一律从右往左按实际文字宽度排，绝不重叠。
+        // 右侧分类药丸：管理员「编辑布局」+「商店设置」—— 签到/交易/转账 已改为左侧模块，不再占顶部。
         int pillH = 16;
         int pillY = y + 6;
         int px = closeX - 20 - 6;
         java.util.List<String> actions = new java.util.ArrayList<>();
-        actions.add("transfer_gui");
-        actions.add("trade_select");
-        actions.add("open_signin");
         if (ClientShopData.canAdmin) {
-            // 管理员：最左侧再加一枚「商店设置」（进管理页 → 编辑布局 / 模块管理）。
-            // 少了它，管理员删掉某些模块后就只能靠 /shop admin 指令回到设置页。
+            actions.add("sidebar_edit");
             actions.add("admin_open");
         }
         for (String action : actions) {
             String key = switch (action) {
-                case "transfer_gui" -> "gui.module_shop.transfer";
-                case "trade_select" -> "gui.module_shop.trade";
+                case "sidebar_edit" -> "gui.module_shop.layout_edit";
                 case "admin_open" -> "gui.module_shop.admin_open";
-                default -> "gui.module_shop.signin.open";
+                default -> "gui.module_shop.admin_open";
             };
             int w = this.font.width(Component.translatable(key)) + 14;
             px -= w;
             boolean hover = IOStyle.inside(px, pillY, w, pillH, mouseX, mouseY);
-            boolean selected = "admin_open".equals(action) && "admin".equals(currentTab);
+            boolean selected = "sidebar_edit".equals(action)
+                    ? this.layoutEdit
+                    : ("admin".equals(currentTab) && "admin_open".equals(action));
             IOStyle.pill(g, this.font, px, pillY, w, pillH, Component.translatable(key), selected, hover, true);
             addRegion(px, pillY, w, pillH, action, null, null);
-            if ("transfer_gui".equals(action)) {
-                ClientNotifications.drawBadge(g, this.font, NotificationType.WALLET, px + w, pillY);
-            } else if ("trade_select".equals(action)) {
-                ClientNotifications.drawBadge(g, this.font, NotificationType.TRADE, px + w, pillY);
+            if ("admin_open".equals(action)) {
+                ClientNotifications.drawBadge(g, this.font, NotificationType.MAIL, px + w, pillY);
             }
             px -= 4;
         }
@@ -819,8 +890,20 @@ public class ShopScreen extends Screen implements JeiHoverSource {
      */
     private void drawSidebar(GuiGraphics g, int x, int y, int mouseX, int mouseY) {
         // 品牌行：纯文字（按需求不要前缀图标）
-        g.drawString(this.font, Component.translatable("gui.module_shop.title"), x + 8, y + 8,
-                IOStyle.BLUE, false);
+        // 品牌行：纯文字，**在侧栏宽度内水平居中**；管理员可**右键改名**（全服生效的主标题）。
+        Component brand = ClientShopData.shopTitle == null || ClientShopData.shopTitle.isBlank()
+                ? Component.translatable("gui.module_shop.title")
+                : Component.literal(ClientShopData.shopTitle);
+        int brandX = x + (SIDEBAR_W - this.font.width(brand)) / 2;
+        g.drawString(this.font, brand, brandX, y + 8, IOStyle.BLUE, false);
+        if (this.layoutEdit && ClientShopData.canAdmin) {
+            // 主标题改名只在「编辑布局」里可点：平时右键标题什么都不发生，避免误触把全服标题改掉。
+            addRegion(brandX - 2, y + 6, this.font.width(brand) + 4, 12, null, "rename_shop_title", null);
+            if (IOStyle.inside(brandX - 2, y + 6, this.font.width(brand) + 4, 12, mouseX, mouseY)) {
+                g.renderTooltip(this.font, Component.translatable("gui.module_shop.shop_title_hint", brand),
+                        mouseX, mouseY);
+            }
+        }
 
         this.tabRects.clear();
         List<String> tabs = visibleTabs();
@@ -1040,7 +1123,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         }
         IOStyle.navItem(g, tabX, ty, tabW, tabH, fitTabLabel(id, tabW), selected, hover, dragging);
         NotificationType badge = switch (id) {
-            case "daily", "buyback" -> NotificationType.SHOP;
+            // 每日商店与每日收购分开计数：以前共用 SHOP，刷新时两个页签的红点会一起亮。
+            case "daily" -> NotificationType.SHOP;
+            case "buyback" -> NotificationType.BUYBACK;
             case "auction" -> NotificationType.AUCTION;
             case "stall" -> NotificationType.STALL;
             case "mail" -> NotificationType.MAIL;
@@ -1581,7 +1666,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                         x + cardW / 2, cardY + 42, entry.rarity.color());
                 // 底部强调色标题条（物品名）
                 IOStyle.labelBar(g, this.font, x + 3, cardY + cardH - 15, cardW - 6, 13,
-                        IOStyle.ellipsize(this.font, entry.stack.getHoverName(), cardW - 12), true);
+                        IOStyle.ellipsize(this.font, plainNameComponent(entry.stack), cardW - 12), true);
                 IOStyle.rounded(g, x + 5, cardY + 4, 3, 3, 0, border);
             } else {
                 // 牌背面用品质配色，让玩家不用翻开就能看出品质。
@@ -1604,7 +1689,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             addRegion(x, cardY, cardW, cardH, flipped ? "buy_shop" : "flip_shop", null, extra);
             if (flipped && mx >= x && mx < x + cardW && my >= cardY && my < cardY + cardH) {
                 this.jeiHover = entry.stack;
-                g.renderTooltip(this.font, entry.stack, mx, my);
+                this.pendingItemTip = entry.stack;
             }
         }
         // 付费刷新按钮：小尺寸，悬停显示本次花费与今日剩余次数（统一摆在底栏右下角）。
@@ -1626,13 +1711,37 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         }
     }
 
+    /** 每日商店长条列表一屏能放几行（与 {@code drawDailyList} 的绘制循环同一套算法）。 */
+    private static int dailyRowsPerScreen(int contentH) {
+        int viewH = Math.max(30, contentH - BAR_H - 10);
+        int rowH = 30;
+        int gap = 4;
+        int rows = 0;
+        int y = 2;   // 绘制时从 cy+2 开始
+        while (y + rowH <= viewH) {
+            y += rowH + gap;
+            rows++;
+        }
+        return Math.max(1, rows);
+    }
+
+    /** 每日收购列表一屏能放几行（与 {@code drawBuyback} 的排版一致）。 */
+    private static int buybackRowsPerScreen(int contentH) {
+        int listH = Math.max(60, contentH - BAR_H - 10 - 6);
+        int rowH = Math.min(28, Math.max(20, listH / 6));
+        return Math.max(1, listH / rowH);
+    }
+
     /** 牌数超过 6 张时的横向长条列表：每行 1 个，滚轮整行滚动。 */
     private void drawDailyList(GuiGraphics g, int cx, int cy, int cw, int ch, int mx, int my, float partialTick) {
         int count = ClientShopData.dailyShop.size();
         int rowH = 30;
         int gap = 4;
         int viewH = Math.max(30, ch - BAR_H - 10);
-        int first = Mth.clamp(ClientShopData.dailyListRow, 0, Math.max(0, count - 1));
+        // 一屏能放几行（与下面的绘制循环同一套算法）：滚到最后一屏时最后一条正好贴着底边，
+        // 不能再往下滚出一片空白。
+        int perScreen = dailyRowsPerScreen(ch);
+        int first = Mth.clamp(ClientShopData.dailyListRow, 0, Math.max(0, count - perScreen));
         ClientShopData.dailyListRow = first;
         int y = cy + 2;
         int drawn = 0;
@@ -1648,15 +1757,13 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         IOStyle.right(g, this.font, Component.translatable("gui.module_shop.daily_pos",
                 Math.min(count, first + Math.max(1, drawn)), count),
                 refreshBtnX(cx, cw) - BAR_GAP, barTextY(cy, ch), IOStyle.TEXT_2);
-        if (drawn < count) {
+        // 「下面还有」箭头只在**确实还有**的时候画（以前只看 drawn < count，滚到底也还在闪）。
+        if (first + drawn < count) {
             markMoreBelow(cy + viewH);
         }
-        if (drawn < count || first > 0) {
-            g.fill(cx + cw - 2, cy, cx + cw, cy + viewH, IOStyle.HAIR);
-            int thumbH = Math.max(14, viewH * Math.min(drawn, count) / Math.max(1, count));
-            int thumbY = cy + (viewH - thumbH) * first / Math.max(1, count - 1);
-            g.fill(cx + cw - 2, thumbY, cx + cw, thumbY + thumbH, IOStyle.BLUE);
-        }
+        // 滚动条：轨道从第一行顶边到最后一行底边（和列表严格对齐），滚到底时滑块贴底。
+        int rowsBottom = drawn <= 0 ? cy + 2 : y - gap;
+        drawScrollBar(g, cx + cw - 2, cy + 2, Math.max(1, rowsBottom - (cy + 2)), first, perScreen, count);
     }
 
     /** 一条横向长条：品质色条 + 图标 + 名称 + 品质 + 价格 + 剩余（按宽度自适应）。 */
@@ -1685,7 +1792,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             g.renderItemDecorations(this.font, entry.stack, cx + 16, y + 7);
             int rightW = Math.min(120, Math.max(80, cw / 3));
             int priceX = cx + cw - rightW;
-            Component name = IOStyle.ellipsize(this.font, entry.stack.getHoverName(), priceX - (cx + 40) - 6);
+            Component name = IOStyle.ellipsize(this.font, plainNameComponent(entry.stack), priceX - (cx + 40) - 6);
             IOStyle.text(g, this.font, name, cx + 40, y + 6, IOStyle.TEXT);
             IOStyle.text(g, this.font, Component.translatable(entry.rarity.translationKey()), cx + 40, y + 17, rarity);
             IOStyle.text(g, this.font, Component.literal(ClientShopData.money(entry.price)), priceX, y + 6,
@@ -1712,7 +1819,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         addRegion(cx + 2, y, cw - 4, rowH, flipped ? "buy_shop" : "flip_shop", null, extra);
         if (flipped && hover) {
             this.jeiHover = entry.stack;
-                g.renderTooltip(this.font, entry.stack, mx, my);
+            this.pendingItemTip = entry.stack;
         }
     }
 
@@ -1739,7 +1846,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         int listH = Math.max(60, ch - BAR_H - 10 - 6);
         int rowH = Math.min(28, Math.max(20, listH / 6));
         int perScreen = Math.max(1, listH / rowH);
-        int first = Mth.clamp(ClientShopData.buybackListRow, 0, Math.max(0, list.size() - 1));
+        int first = Mth.clamp(ClientShopData.buybackListRow, 0, Math.max(0, list.size() - perScreen));
         ClientShopData.buybackListRow = first;
         int startY = cy + 6;
         for (int i = first; i < list.size(); i++) {
@@ -1749,9 +1856,16 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             }
             var entry = list.get(i);
             int y = startY + slot * rowH;
-            int textY = y + (rowH - 12) / 2;
+            int cardH = rowH - 4;
+            // 右侧「收购价 / 还能收购」两行必须**始终落在行框内**：
+            // 以前固定画在 y+3 / y+13，窗口矮或 GUI 缩放偏大（rowH 小）时第二行会压到行框底线上
+            //（截图里那个「还能收购 16」的 16 就横跨了边框）。现在按行高挑字号、两行整体垂直居中。
+            float numScale = cardH >= 20 ? 1.0F : 0.8F;
+            int lineH = Math.round(10.0F * numScale);
+            int blockTop = y + Math.max(1, (cardH - (lineH * 2 - 2)) / 2);
+            int textY = y + (cardH - 8) / 2;
             // 版式：左侧品质色条 + 物品图标 + 居中物品名，右侧价格 / 剩余两行；品质只用色条表示（不写品质文字）。
-            IOStyle.card(g, cx + 4, y, cw - 8, rowH - 4, 0);
+            IOStyle.card(g, cx + 4, y, cw - 8, cardH, 0);
             IOStyle.rounded(g, cx + 8, y + 2, 3, rowH - 8, 0, IOStyle.rarity(entry.rarity));
             Bricks.slot(g, cx + 14, y + (rowH - 4 - 16) / 2);
             int iconY = y + (rowH - 4 - 16) / 2;
@@ -1760,23 +1874,24 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             String price = Component.translatable("gui.module_shop.buyback_price",
                     ClientShopData.money(entry.price)).getString();
             // 品质只用左侧色条表示，不再写品质文字（原来那一行会显得很挤）；物品名超宽自动省略，避免压到右侧价格。
-            int priceLeft = cx + cw - 12 - this.font.width(price);
-            Component itemName = IOStyle.ellipsize(this.font, entry.stack.getHoverName(),
+            int priceLeft = cx + cw - 12 - Math.round(this.font.width(price) * numScale);
+            Component itemName = IOStyle.ellipsize(this.font, plainNameComponent(entry.stack),
                     Math.max(24, priceLeft - 6 - (cx + 36)));
             g.drawString(this.font, itemName, cx + 36, textY, COLOR_TEXT, false);
-            g.drawString(this.font, price, priceLeft, y + 3, COLOR_GOLD, false);
+            drawLabelRight(g, cx + cw - 12, blockTop, Component.literal(price), COLOR_GOLD, numScale);
             // 需求 9：剩余可收购数量来自该物品自己的上限。
             int remaining = entry.remaining();
             String remainText = Component.translatable("gui.module_shop.buyback_remaining", remaining).getString();
-            g.drawString(this.font, remainText, cx + cw - 12 - this.font.width(remainText), y + 13,
-                    remaining > 0 ? COLOR_MUTED : IOStyle.RED, false);
+            drawLabelRight(g, cx + cw - 12, blockTop + lineH, Component.literal(remainText),
+                    remaining > 0 ? COLOR_MUTED : IOStyle.RED, numScale);
             CompoundTag extra = new CompoundTag();
             extra.putInt("index", i);
             // 需求 9：点击不立即出售，而是弹出数量输入，让玩家自己调节卖出的数量。
             addRegion(cx + 4, y, cw - 8, rowH - 4, "sell_buyback_gui", null, extra);
-            if (mx >= cx + 14 && mx < cx + 30 && my >= iconY && my < iconY + 16) {
+            // 整行悬停都显示原版物品悬浮框（不再只有图标那一小块），JEI 的 R / U 也跟着生效。
+            if (IOStyle.inside(cx + 4, y, cw - 8, rowH - 4, mx, my)) {
                 this.jeiHover = entry.stack;
-                g.renderTooltip(this.font, entry.stack, mx, my);
+                this.pendingItemTip = entry.stack;
             }
         }
         if (list.size() > first + perScreen) {
@@ -1784,11 +1899,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         }
         // 需求 8：条目多于一屏时右侧显示滚动条。
         if (list.size() > perScreen) {
-            int viewH = perScreen * rowH;
-            g.fill(cx + cw - 2, startY, cx + cw, startY + viewH, IOStyle.HAIR);
-            int thumbH = Math.max(14, viewH * perScreen / Math.max(1, list.size()));
-            int thumbY = startY + (viewH - thumbH) * first / Math.max(1, list.size() - 1);
-            g.fill(cx + cw - 2, thumbY, cx + cw, thumbY + thumbH, IOStyle.BLUE);
+            // 轨道 = 最后一张卡片的底边（每行卡片本身比行距矮 4px）。
+            drawScrollBar(g, cx + cw - 2, startY, perScreen * rowH - 4, first, perScreen, list.size());
         }
         // ---- 底栏：右侧「刷新收购」，管理员控件从右往左依次摆在它左边，提示文字再往左靠 ----
         int barLabelY = barTextY(cy, ch);
@@ -1969,16 +2081,23 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 var entry = stall.get(i);
                 g.renderItem(entry.stack, sx + 4, slotY);
                 g.renderItemDecorations(this.font, entry.stack, sx + 4, slotY);
-                // 需求 4/6：单件价格 + 剩余库存，售空显示“已售空”。
-                g.drawString(this.font, Component.literal(ClientShopData.money(entry.price)), sx + 26, sy + 4, COLOR_GOLD, false);
+                // 两行文字（价格 / 库存·已售出）以前固定写在 sy+4 / sy+15，格子一矮第二行就压到框线上
+                //（截图里「库存 1 已售出 0 件」横跨边框）。现在按格高挑字号、两行整体垂直居中，
+                // 右边界统一留出「X」按钮的位置，长文案自动省略。
+                float numScale = cellH >= 20 ? 1.0F : 0.8F;
+                int lineH = Math.round(10.0F * numScale);
+                int blockTop = sy + Math.max(1, (cellH - (lineH * 2 - 2)) / 2);
+                int textLeft = sx + 26;
+                int textRight = sx + cellW - 26;
+                Component priceText = Component.literal(ClientShopData.money(entry.price));
+                drawLabel(g, textLeft, blockTop, priceText, COLOR_GOLD, numScale);
                 // 「下架时间」限时时，在价格右侧显示剩余时间（右对齐到 X 按钮左边，放不下就不画）。
                 Component remain = stallRemainText(entry);
                 if (remain != null) {
-                    int remainRight = sx + cellW - 26;
-                    int remainX = remainRight - this.font.width(remain);
-                    int priceRight = sx + 26 + this.font.width(Component.literal(ClientShopData.money(entry.price)));
+                    int remainX = textRight - Math.round(this.font.width(remain) * numScale);
+                    int priceRight = textLeft + Math.round(this.font.width(priceText) * numScale);
                     if (remainX > priceRight + 3) {
-                        g.drawString(this.font, remain, remainX, sy + 4, 0xE0A34A, true);
+                        drawLabel(g, remainX, blockTop, remain, 0xE0A34A, numScale);
                     }
                 }
                 String stockText;
@@ -1990,10 +2109,14 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                     stockText = Component.translatable("gui.module_shop.stall_stock", entry.stock).getString();
                     stockColor = COLOR_MUTED;
                 }
-                g.drawString(this.font, stockText, sx + 26, sy + 15, stockColor, false);
-                // 需求 9：在商品旁空白处显示该商品累计已售出件数。
-                g.drawString(this.font, Component.translatable("gui.module_shop.stall_sold_count", entry.sold),
-                        sx + 26 + this.font.width(stockText) + 8, sy + 15, 0x88BBFF, true);
+                int stockY = blockTop + lineH;
+                drawLabel(g, textLeft, stockY, Component.literal(stockText), stockColor, numScale);
+                // 需求 9：在商品旁空白处显示该商品累计已售出件数（放不下就省略，绝不压到「X」按钮）。
+                int soldX = textLeft + Math.round(this.font.width(stockText) * numScale) + Math.round(8 * numScale);
+                Component sold = IOStyle.ellipsize(this.font,
+                        Component.translatable("gui.module_shop.stall_sold_count", entry.sold),
+                        Math.max(12, (int) ((textRight - soldX) / numScale)));
+                drawLabel(g, soldX, stockY, sold, 0x88BBFF, numScale);
                 CompoundTag extra = new CompoundTag();
                 extra.putInt("index", i);
                 // 右侧小按钮先注册，保证点击优先命中“下架”而不是整格改价。
@@ -2742,13 +2865,480 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         return ADMIN_MODULES.get(0).nameKey();
     }
 
+    // =========================================================== 签到（模块页）
+    /** 签到日历一格的高度（比原来那个独立界面矮一档，正好塞进内容区）。 */
+    private static final int SIGNIN_CELL_H = 16;
+    /** 交易 / 转账页一屏显示几个在线玩家（一行 24px，5 行刚好不顶到底栏）。 */
+    private static final int TRADE_PAGE_SIZE = 5;
+
+    /**
+     * 签到页：原来要「点按钮再弹一个窗口」的独立签到界面，现在直接画在内容区里（功能完全一样）。
+     *
+     * <p>自上而下：连续签到里程进度条（关闭累计算时整条隐藏）→ 年月导航 → 星期 → 日历 → 底栏「今日签到」。
+     * 日历格子：已签到变绿、今天描蓝框、未来变灰、可补签的能点（二次确认后扣费）；
+     * 管理员在「商店设置 → 签到」点「编辑日程」后，点日期即可新建 / 修改那天的日程。
+     */
+    private void drawSignIn(GuiGraphics g, int cx, int cy, int cw, int ch, int mx, int my) {
+        this.signInTip = null;
+        this.signInTipLines = null;
+        if (ClientShopData.signInMonth == 0) {
+            java.time.LocalDate now = java.time.LocalDate.now();
+            ClientShopData.signInMonth = now.getYear() * 12 + now.getMonthValue() - 1;
+        }
+        int topY = cy + 2;
+        // 进度条：关了「累计加成」也要画 —— 里程奖励和累计加成是两回事，
+        // 没这条玩家就看不到「本轮第几天 / 还有几天到下一个档位」。
+        if (ClientShopData.signInCumulative || hasSignInMilestone()) {
+            drawSignInProgress(g, cx, topY, cw, mx, my);
+            topY += 19;
+        }
+        drawSignInCalendar(g, cx, topY, cw, false, true, mx, my);
+        drawSignInFooter(g, cx, cy, cw, ch, mx, my);
+    }
+
+    /**
+     * 签到日历（**签到页和商店设置 → 签到共用同一份代码**，所以两处永远同步）。
+     *
+     * @param editable    管理员编辑态：点日期 = 新建 / 修改那天的日程（此时不注册补签点击）
+     * @param allowMakeup 允许点过去日期补签（只有玩家签到页开；管理页点了会误扣费，所以关掉）
+     * @return 日历底边 y
+     */
+    private int drawSignInCalendar(GuiGraphics g, int cx, int topY, int cw, boolean editable, boolean allowMakeup,
+            int mx, int my) {
+        if (ClientShopData.signInMonth == 0) {
+            java.time.LocalDate now = java.time.LocalDate.now();
+            ClientShopData.signInMonth = now.getYear() * 12 + now.getMonthValue() - 1;
+        }
+        int gridX = cx + 4;
+        int cellW = Math.max(22, (cw - 8) / 7);
+        int gridW = cellW * 7;
+        java.time.YearMonth ym = java.time.YearMonth.of(ClientShopData.signInMonth / 12,
+                ClientShopData.signInMonth % 12 + 1);
+        java.time.LocalDate today = java.time.LocalDate.now();
+        java.util.Locale locale = Minecraft.getInstance().getLanguageManager().getJavaLocale();
+
+        // ---- 年月导航：年份在左、月份在右，各自带翻页 ----
+        drawSignInArrow(g, gridX, topY, "<<", "signin_year_prev", mx, my);
+        Component yearText = Component.literal(Integer.toString(ym.getYear()));
+        g.drawString(this.font, yearText, gridX + 14, topY + 2, IOStyle.TEXT, false);
+        drawSignInArrow(g, gridX + 14 + this.font.width(yearText) + 2, topY, ">>", "signin_year_next", mx, my);
+
+        String monthText = ym.getMonth().getDisplayName(java.time.format.TextStyle.SHORT, locale);
+        int monthTail = 14 + this.font.width(monthText) + 2 + 12;
+        int monthX = Math.max(gridX + 88, gridX + gridW - monthTail);
+        drawSignInArrow(g, monthX, topY, "<", "signin_month_prev", mx, my);
+        g.drawString(this.font, monthText, monthX + 14, topY + 2, IOStyle.TEXT, false);
+        drawSignInArrow(g, monthX + 14 + this.font.width(monthText) + 2, topY, ">", "signin_month_next", mx, my);
+
+        // ---- 星期 ----
+        int weekY = topY + 14;
+        for (int c = 0; c < 7; c++) {
+            String dow = java.time.DayOfWeek.of(c + 1).getDisplayName(java.time.format.TextStyle.NARROW, locale);
+            drawSmallLabel(g, gridX + c * cellW + cellW / 2 - (int) (this.font.width(dow) * 0.4F), weekY,
+                    Component.literal(dow), IOStyle.TEXT_2);
+        }
+
+        // ---- 日历 ----
+        int cellY = weekY + 10;
+        int firstOffset = ym.atDay(1).getDayOfWeek().getValue() - 1;
+        int length = ym.lengthOfMonth();
+        for (int d = 1; d <= length; d++) {
+            java.time.LocalDate date = ym.atDay(d);
+            int idx = firstOffset + d - 1;
+            int cellX = gridX + (idx % 7) * cellW;
+            int cellYY = cellY + (idx / 7) * SIGNIN_CELL_H;
+            boolean isToday = date.equals(today);
+            boolean signed = ClientShopData.signInDays.contains(date.toEpochDay());
+            boolean future = date.isAfter(today);
+            boolean canMakeup = !signed && date.isBefore(today)
+                    && date.toEpochDay() >= today.toEpochDay() - ClientShopData.signInMakeupDays;
+            List<ClientShopData.ActivityView> acts = signInActivitiesOf(date.toEpochDay());
+            IOStyle.rounded(g, cellX + 1, cellYY + 1, cellW - 2, SIGNIN_CELL_H - 2, 3,
+                    signed ? IOStyle.GREEN_TINT : future ? IOStyle.DISABLED_BG : IOStyle.CARD);
+            if (isToday) {
+                IOStyle.ring(g, cellX + 1, cellYY + 1, cellW - 2, SIGNIN_CELL_H - 2, 3, IOStyle.BLUE);
+            }
+            String dayText = Integer.toString(d);
+            g.drawString(this.font, dayText, cellX + (cellW - this.font.width(dayText)) / 2, cellYY + 3,
+                    signed ? IOStyle.GREEN_DARK : future ? IOStyle.DISABLED_TEXT : IOStyle.TEXT, false);
+            // 日程：格子底部一条彩色短线（最多 3 条），颜色由管理员在日程编辑里定。
+            for (int k = 0; k < acts.size() && k < 3; k++) {
+                int barW = Math.max(3, (cellW - 8) / Math.min(3, Math.max(1, acts.size())));
+                IOStyle.rounded(g, cellX + 4 + k * barW, cellYY + SIGNIN_CELL_H - 5, barW - 1, 2, 1,
+                        acts.get(k).color == 0 ? IOStyle.ORANGE : acts.get(k).color);
+            }
+            if (IOStyle.inside(cellX + 1, cellYY + 1, cellW - 2, SIGNIN_CELL_H - 2, mx, my)) {
+                if (!acts.isEmpty()) {
+                    List<Component> lines = new ArrayList<>();
+                    for (int k = 0; k < acts.size(); k++) {
+                        ClientShopData.ActivityView act = acts.get(k);
+                        if (k > 0) {
+                            lines.add(Component.literal(" "));
+                        }
+                        lines.add(Component.literal(act.title)
+                                .withStyle(net.minecraft.ChatFormatting.BOLD));
+                        if (act.note != null && !act.note.isEmpty()) {
+                            addSignInWrapped(lines, act.note, net.minecraft.ChatFormatting.GRAY);
+                        }
+                        if (act.money > 0L) {
+                            lines.add(Component.translatable("gui.module_shop.signin.activity_money",
+                                    ClientShopData.money(act.money)).withStyle(net.minecraft.ChatFormatting.GOLD));
+                        }
+                        String itemNames = signInItemNames(act.itemText);
+                        if (!itemNames.isEmpty()) {
+                            addSignInWrapped(lines, Component.translatable(
+                                    "gui.module_shop.signin.activity_items", itemNames).getString(),
+                                    net.minecraft.ChatFormatting.GRAY);
+                        }
+                    }
+                    this.signInTipLines = lines;
+                } else if (allowMakeup && canMakeup) {
+                    this.signInTip = Component.translatable("gui.module_shop.signin.makeup_tip",
+                            ClientShopData.money(ClientShopData.signInMakeupCost), date.toString());
+                } else if (isToday) {
+                    this.signInTip = Component.translatable(signed
+                            ? "gui.module_shop.signin.done" : "gui.module_shop.signin.do");
+                }
+            }
+            if (ClientShopData.canAdmin && editable) {
+                CompoundTag extra = new CompoundTag();
+                extra.putLong("day", date.toEpochDay());
+                // 右上角小方块＝右键清空那天。必须**先注册**：点击派发命中第一个区域就吃掉整次点击，
+                // 后注册的话右键会被下面那个整格区域先接走，清空永远点不出来。
+                if (!acts.isEmpty()) {
+                    addRegion(cellX + cellW - 8, cellYY + 1, 6, 6, "signin_activity_edit",
+                            "signin_activity_clear", extra);
+                }
+                addRegion(cellX + 1, cellYY + 1, cellW - 2, SIGNIN_CELL_H - 2, "signin_activity_edit", null, extra);
+            } else if (allowMakeup && canMakeup) {
+                CompoundTag extra = new CompoundTag();
+                extra.putLong("day", date.toEpochDay());
+                addRegion(cellX + 1, cellYY + 1, cellW - 2, SIGNIN_CELL_H - 2, "signin_makeup", null, extra);
+            }
+        }
+        // 日历里的悬停提示统一在这里画：画在格子里会被后画的格子盖住。
+        if (this.signInTipLines != null && !this.signInTipLines.isEmpty()) {
+            g.renderComponentTooltip(this.font, this.signInTipLines, mx, my);
+            this.signInTipLines = null;
+        } else if (this.signInTip != null) {
+            g.renderTooltip(this.font, this.signInTip, mx, my);
+            this.signInTip = null;
+        }
+        return cellY + (firstOffset + length + 6) / 7 * SIGNIN_CELL_H;
+    }
+
+    /** 签到页底栏：今日签到按钮 + 状态文字（商店设置里的日历不画这一条）。 */
+    private void drawSignInFooter(GuiGraphics g, int cx, int cy, int cw, int ch, int mx, int my) {
+        // ---- 底栏：今日签到按钮 + 状态 ----
+        boolean done = ClientShopData.signInDone;
+        int btnY = barMid(cy, ch, 14);
+        int btnW = 76;
+        IOStyle.button(g, cx + 4, btnY, btnW, 14,
+                Component.translatable(done ? "gui.module_shop.signin.done" : "gui.module_shop.signin.do"),
+                this.font, mx, my, !done && ClientShopData.signInEnabled,
+                done ? IOStyle.Btn.GRAY : IOStyle.Btn.PRIMARY);
+        if (!done && ClientShopData.signInEnabled) {
+            addRegion(cx + 4, btnY, btnW, 14, "sign_in", null, null);
+        }
+        if (IOStyle.inside(cx + 4, btnY, btnW, 14, mx, my)) {
+            this.signInTip = Component.translatable("gui.module_shop.signin.gain_tip",
+                    ClientShopData.money(ClientShopData.signInBase + signInTierBonus()));
+        }
+        int statusX = cx + 4 + btnW + 8;
+        drawBarLabel(g, statusX, barTextY(cy, ch), cx + cw - 6,
+                Component.translatable(done ? "gui.module_shop.signin.status_done"
+                        : "gui.module_shop.signin.status", ClientShopData.signInStreak,
+                        ClientShopData.money(ClientShopData.signInBase + signInTierBonus())), COLOR_MUTED);
+
+        // 悬浮提示统一留到最后画：画在格子里会被后画的格子盖住。
+        if (this.signInTipLines != null && !this.signInTipLines.isEmpty()) {
+            g.renderComponentTooltip(this.font, this.signInTipLines, mx, my);
+            this.signInTipLines = null;
+        } else if (this.signInTip != null) {
+            g.renderTooltip(this.font, this.signInTip, mx, my);
+            this.signInTip = null;
+        }
+    }
+
+    /**
+     * 签到里程进度条（做细做小）：一条 4px 细轨 + 每个里程一个 5px 圆点，到达的点变绿，
+     * 下面用 0.7 倍小字标「3d」，点太密时自动跳过标签避免压字；悬停圆点看该里程的奖励。
+     */
+    private void drawSignInProgress(GuiGraphics g, int cx, int y, int cw, int mx, int my) {
+        int cycle = Math.max(1, ClientShopData.signInCycleDays);
+        int streak = ClientShopData.signInStreak;
+        int roundDay = streak <= 0 ? 0 : (streak - 1) % cycle + 1;
+        int round = streak <= 0 ? 1 : (streak - 1) / cycle + 1;
+        // 右端留出「第 N 轮」的位置：里程是每轮重来的，不写轮次玩家会以为 7 天之后就到头了。
+        Component roundText = Component.translatable("gui.module_shop.signin.round", round);
+        int badgeW = Math.round(this.font.width(roundText) * 0.7F) + 8;
+        int px = cx + 6;
+        int pw = Math.max(40, cw - 12 - badgeW);
+        int barY = y + 3;
+        int barH = 4;
+        float ratio = Math.min(1F, roundDay / (float) cycle);
+        IOStyle.rounded(g, px, barY, pw, barH, 2, IOStyle.SEG_TRACK);
+        if (ratio > 0F) {
+            IOStyle.rounded(g, px, barY, Math.max(barH, Math.round(pw * ratio)), barH, 2, IOStyle.GREEN);
+        }
+        int lastRight = Integer.MIN_VALUE;
+        int[] days = ClientShopData.signInMileDays;
+        for (int i = 0; i < days.length; i++) {
+            // 档位天数大于一轮长度的永远到不了（例如每轮 7 天却配了 14 天档），不画。
+            if (days[i] <= 0 || days[i] > cycle) {
+                continue;
+            }
+            int dx = px + Math.round(pw * days[i] / (float) cycle);
+            dx = Mth.clamp(dx, px + 5, px + pw - 5);
+            boolean reached = roundDay >= days[i];
+            int dotY = barY + (barH - 5) / 2;
+            IOStyle.rounded(g, dx - 2, dotY, 5, 5, 2, reached ? IOStyle.GREEN : IOStyle.TOGGLE_OFF);
+            if (!reached) {
+                IOStyle.ring(g, dx - 2, dotY, 5, 5, 2, IOStyle.HAIR);
+            }
+            Component label = Component.literal(days[i] + "d");
+            int lw = Math.round(this.font.width(label) * 0.7F);
+            int lx = Mth.clamp(dx - lw / 2, cx + 2, px + pw - lw);
+            if (lx > lastRight + 3) {
+                g.pose().pushPose();
+                g.pose().translate(lx, barY + 8, 0.0F);
+                g.pose().scale(0.7F, 0.7F, 1.0F);
+                g.drawString(this.font, label, 0, 0, reached ? IOStyle.GREEN : IOStyle.TEXT_2, false);
+                g.pose().popPose();
+                lastRight = lx + lw;
+            }
+            if (IOStyle.inside(dx - 6, dotY - 2, 12, 9, mx, my)) {
+                long money = i < ClientShopData.signInMileMoney.length ? ClientShopData.signInMileMoney[i] : 0L;
+                this.signInTip = Component.translatable("gui.module_shop.signin.mile_tip", days[i],
+                        ClientShopData.money(money), ClientShopData.money(signInTierBonusAt(days[i])));
+            }
+        }
+        // 右端「第 N 轮」：每满一轮，里程档位重新可领。
+        drawSmallLabel(g, cx + cw - 4 - Math.round(this.font.width(roundText) * 0.7F), barY - 2,
+                roundText, IOStyle.BLUE);
+    }
+
+    /** 有没有「本轮内能达成、且有奖励」的里程档位（有就说明进度条值得画）。 */
+    private static boolean hasSignInMilestone() {
+        int cycle = Math.max(1, ClientShopData.signInCycleDays);
+        for (int i = 0; i < ClientShopData.signInMileDays.length; i++) {
+            int day = ClientShopData.signInMileDays[i];
+            long money = i < ClientShopData.signInMileMoney.length ? ClientShopData.signInMileMoney[i] : 0L;
+            if (day > 0 && day <= cycle && money > 0L) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 签到页的翻页小箭头（12×12）。 */
+    private void drawSignInArrow(GuiGraphics g, int x, int y, String label, String action, int mx, int my) {
+        boolean hover = IOStyle.inside(x, y, 12, 12, mx, my);
+        IOStyle.smallButton(g, x, y, 12, 12, Component.literal(label), this.font, hover, IOStyle.GRAY_BTN,
+                IOStyle.GRAY_BTN_HOVER, IOStyle.TEXT, mx, my);
+        addRegion(x, y, 12, 12, action, null, null);
+    }
+
+    /** 把一段可能很长的正文按内容区宽度折行，逐行加进 tooltip。 */
+    private void addSignInWrapped(List<Component> lines, String text, net.minecraft.ChatFormatting style) {
+        String rest = text;
+        int maxW = 148;
+        while (!rest.isEmpty()) {
+            String cut = this.font.plainSubstrByWidth(rest, maxW);
+            if (cut.isEmpty()) {
+                cut = rest.substring(0, 1);
+            }
+            lines.add(Component.literal(cut).withStyle(style));
+            rest = rest.substring(cut.length());
+        }
+    }
+
+    /** 把「id xN,id2 xM」解析成「物品名×N、…」文本（日程悬浮窗用；解析不出来的直接跳过）。 */
+    private static String signInItemNames(String text) {
+        if (text == null || text.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String piece : text.split(",")) {
+            String raw = piece.trim();
+            if (raw.isEmpty()) {
+                continue;
+            }
+            int count = 1;
+            int idx = raw.lastIndexOf('x');
+            if (idx > 0) {
+                try {
+                    count = Math.max(1, Math.min(64, Integer.parseInt(raw.substring(idx + 1).trim())));
+                    raw = raw.substring(0, idx).trim();
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            net.minecraft.resources.ResourceLocation id = net.minecraft.resources.ResourceLocation.tryParse(raw);
+            if (id == null) {
+                continue;
+            }
+            net.minecraft.world.item.Item item = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(id);
+            if (item == null || item == net.minecraft.world.item.Items.AIR) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append("、");
+            }
+            sb.append(new ItemStack(item).getHoverName().getString()).append("×").append(count);
+        }
+        return sb.toString();
+    }
+
+    /** 某一天的全部日程。 */
+    private static List<ClientShopData.ActivityView> signInActivitiesOf(long day) {        List<ClientShopData.ActivityView> list = new ArrayList<>();
+        for (ClientShopData.ActivityView view : ClientShopData.activityDays) {
+            if (view.day == day) {
+                list.add(view);
+            }
+        }
+        return list;
+    }
+
+    /** 当前连续天数对应的累计签到加成（关闭累计签到时为 0）。 */
+    private static long signInTierBonus() {
+        return signInTierBonusAt(ClientShopData.signInStreak);
+    }
+
+    /** 指定天数对应的累计签到加成（取不超过该天数的最高档位）。 */
+    private static long signInTierBonusAt(int day) {
+        if (!ClientShopData.signInCumulative) {
+            return 0L;
+        }
+        long bonus = 0L;
+        for (int i = 0; i < ClientShopData.signInTierDays.length; i++) {
+            if (day >= ClientShopData.signInTierDays[i]) {
+                bonus = Math.max(bonus, i < ClientShopData.signInTierBonus.length
+                        ? ClientShopData.signInTierBonus[i] : 0L);
+            }
+        }
+        return bonus;
+    }
+
+    /** 交易 / 转账：在线玩家选择（同一个渲染，{@code transfer} 只影响文案和点击后的行为）。 */
+    private void drawPlayerPicker(GuiGraphics g, int cx, int cy, int cw, int ch, int mx, int my, boolean transfer) {
+        // 搜索框底：真正的输入框是 EditBox（文字由它在 super.render 里画，会自动盖在这层底上）。
+        IOStyle.rounded(g, cx + 4, cy, cw - 8, 17, 3, IOStyle.FIELD_BG);
+        if (this.tradeSearchBox != null && this.tradeSearchBox.isFocused()) {
+            IOStyle.ring(g, cx + 4, cy, cw - 8, 17, 3, IOStyle.BORDER_HOVER);
+        }
+        List<ClientShopData.OnlinePlayer> players = tradePlayers();
+        int pages = Math.max(1, (players.size() + TRADE_PAGE_SIZE - 1) / TRADE_PAGE_SIZE);
+        this.tradePage = Mth.clamp(this.tradePage, 0, pages - 1);
+        int rowH = 24;
+        int top = cy + 20;
+        for (int i = 0; i < TRADE_PAGE_SIZE; i++) {
+            int index = this.tradePage * TRADE_PAGE_SIZE + i;
+            if (index >= players.size()) {
+                break;
+            }
+            ClientShopData.OnlinePlayer player = players.get(index);
+            int ry = top + i * rowH;
+            boolean hover = IOStyle.inside(cx + 4, ry, cw - 8, rowH - 2, mx, my);
+            IOStyle.card(g, cx + 4, ry, cw - 8, rowH - 2, 3);
+            if (hover) {
+                IOStyle.ring(g, cx + 4, ry, cw - 8, rowH - 2, 3, IOStyle.BORDER_HOVER);
+            }
+            // 左侧 3px 色条：交易=金、转账=蓝，一眼区分两页。
+            IOStyle.rounded(g, cx + 8, ry + 4, 3, rowH - 10, 1, transfer ? IOStyle.BLUE : IOStyle.ORANGE);
+            if (player.uuid != null) {
+                Skins.drawHead(g, player.uuid, cx + 13, ry + 3, 16);
+            }
+            g.drawString(this.font, player.name, cx + 33, ry + 7, IOStyle.TEXT, false);
+            drawSmallLabelRight(g, cx + cw - 10, ry + 8,
+                    Component.translatable(transfer ? "gui.module_shop.transfer.click_to_transfer"
+                            : "gui.module_shop.trade.click_to_trade"), IOStyle.TEXT_3);
+            CompoundTag extra = new CompoundTag();
+            extra.putString("name", player.name);
+            addRegion(cx + 4, ry, cw - 8, rowH - 2, "trade_pick", null, extra);
+        }
+        if (players.isEmpty()) {
+            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.no_online"),
+                    cx + cw / 2, top + 44, COLOR_MUTED);
+        }
+        // 底栏：交易页有「交易请求」入口（带红点）；有分页时右侧放翻页 + 页码。
+        int barY = barMid(cy, ch, 14);
+        if (!transfer) {
+            int bw = 66;
+            addRegion(cx + 4, barY, bw, 14, "trade_requests_open", null, null);
+            drawSmallLabelButton(g, cx + 4, barY, bw, 14,
+                    Component.translatable("gui.module_shop.trade.requests"),
+                    IOStyle.inside(cx + 4, barY, bw, 14, mx, my), false, false);
+            ClientNotifications.drawBadge(g, this.font, NotificationType.TRADE, cx + 4 + bw, barY);
+        }
+        if (pages > 1) {
+            int nextX = cx + cw - 4 - 42;
+            int prevX = nextX - 4 - 42;
+            addRegion(prevX, barY, 42, 14, "trade_page_prev", null, null);
+            drawSmallLabelButton(g, prevX, barY, 42, 14, Component.translatable("gui.module_shop.page_prev"),
+                    IOStyle.inside(prevX, barY, 42, 14, mx, my), false, false);
+            addRegion(nextX, barY, 42, 14, "trade_page_next", null, null);
+            drawSmallLabelButton(g, nextX, barY, 42, 14, Component.translatable("gui.module_shop.page_next"),
+                    IOStyle.inside(nextX, barY, 42, 14, mx, my), false, false);
+            Component pageLabel = Component.translatable("gui.module_shop.page", this.tradePage + 1, pages);
+            drawSmallLabel(g, prevX - 8 - Math.round(this.font.width(pageLabel) * 0.8F), barTextY(cy, ch),
+                    pageLabel, COLOR_MUTED);
+        }
+    }
+
+    /** 交易 / 转账页的玩家列表：去掉自己 + 按搜索框过滤。 */
+    private List<ClientShopData.OnlinePlayer> tradePlayers() {
+        String self = ClientShopData.playerName;
+        String query = this.tradeSearchBox == null ? "" : this.tradeSearchBox.getValue().trim().toLowerCase();
+        List<ClientShopData.OnlinePlayer> result = new ArrayList<>();
+        for (ClientShopData.OnlinePlayer player : ClientShopData.onlinePlayers) {
+            if (player.name.equals(self)) {
+                continue;
+            }
+            if (!query.isEmpty() && !player.name.toLowerCase().contains(query)) {
+                continue;
+            }
+            result.add(player);
+        }
+        return result;
+    }
+
+    /** 物品名（只要名字本身）：去掉 § 格式符和「私用区字符」——资源包/模组常把私用区映射成图标，
+     *  在列表里会渲染成一个个小贴图（看起来像名字后面跟着几张小图），这里直接剔掉。 */
+    private static String plainName(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) {
+            return "";
+        }
+        String raw = stack.getHoverName().getString();
+        StringBuilder sb = new StringBuilder(raw.length());
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '\u00a7') {
+                i++;                      // 跳过 § 后面的格式码
+                continue;
+            }
+            if (c >= '\ue000' && c <= '\uf8ff') {
+                continue;                 // 私用区（字体图标）
+            }
+            if (Character.isISOControl(c)) {
+                continue;
+            }
+            sb.append(c);
+        }
+        return sb.toString().trim();
+    }
+
+    /** 列表里的物品名：纯文本 + 统一颜色（不继承物品自定义名字的颜色/样式）。 */
+    private Component plainNameComponent(ItemStack stack) {
+        return Component.literal(plainName(stack));
+    }
+
     private void drawAdmin(GuiGraphics g, int cx, int cy, int cw, int ch, int mx, int my) {
         boolean mall = "mall".equals(adminMode);
         boolean ship = "shipping".equals(adminMode);
         boolean stalls = "stall".equals(adminMode);
         boolean demands = "demand".equals(adminMode);
-        boolean shop = !mall && !ship && !stalls && !demands && !"buyback".equals(adminMode);
-        // 顶部：「选择模块编辑」下拉 —— 取代原来的两个固定页签。
+        boolean signin = "signin".equals(adminMode);
+        boolean shop = !mall && !ship && !stalls && !demands && !signin && !"buyback".equals(adminMode);
         // 以后新增可编辑模块，只要往 ADMIN_MODULES 里加一行，这里会自动多出一项。
         Component pickLabel = Component.translatable("gui.module_shop.admin_select_module");
         int ddW = (int) (this.font.width(pickLabel) * 0.8F) + 24;
@@ -2791,7 +3381,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         int ddListH = ADMIN_MODULES.size() * ddRowH + 4;
         int ddListBottom = ddListY + ddListH;
 
-        List<ConfiguredOffer> pool = (stalls || demands) ? List.of()
+        List<ConfiguredOffer> pool = (stalls || demands || signin) ? List.of()
                 : (mall ? ClientShopData.adminMall
                         : (ship ? ClientShopData.adminShipping
                                 : (shop ? ClientShopData.adminShop : ClientShopData.adminBuyback)));
@@ -2865,8 +3455,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 g.renderTooltip(this.font, offer.stack, mx, my);
             }
         }
-        if (pool.isEmpty()) {
+        if (pool.isEmpty() && !signin && !this.adminModuleOpen) {
             // 摊位页没有"管理员条目"：这里换成设置说明，避免显示成「没有条目」让人以为坏了。
+            // 「选择模块」下拉展开时整块跳过：物品图标是另一批渲染，会**穿透**下拉面板浮在上面
+            //（玩家求购页之前就是图标压在「每日收购」那行字上），所以先不画，等面板收起再画。
             if (stalls) {
                 drawStallExpireHint(g, cx, cy, cw);
             } else if (demands) {
@@ -2904,70 +3496,106 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         // 第一行按钮：添加条目 / （模块专属：刷新参数 | 导入模组 | 每日额度 | 下架时间）/ 编辑布局；
         // 购物城多一个「补货设置」，所以那一行是 4 个按钮（等宽，文字都短，不会挤）。
         // 摊位页没有「添加条目」（玩家自己上架），只有「下架时间」+「编辑布局」两个按钮。
-        int columns = mall ? 5 : (stalls ? 2 : (demands ? 3 : 3));
+        int columns = mall ? 5 : (stalls ? 2 : (demands ? 3 : (signin ? 4 : 3)));
         int btnW = Math.max(44, (cw - 8 - (columns - 1) * 6) / columns);
         int btnGap = 6;
-        if (!stalls && !demands) {
-            CompoundTag addExtra = new CompoundTag();
-            addExtra.putString("mode", adminMode);
-            addRegion(cx + 4, rowA, btnW, 14, "admin_add", null, addExtra);
-            drawSmallLabelButton(g, cx + 4, rowA, btnW, 14, Component.translatable("gui.module_shop.admin_add"), false);
-        }
-        // 模块专属按钮：每日商店 / 收购 → 刷新参数；购物城 → 导入模组（+ 补货设置）；出货箱 → 每日额度；
-        // 摊位 → 下架时间（永久 / 游戏时间 / 现实时间）。
-        int genX = cx + 4 + (btnW + btnGap);
-        if (demands) {
-            int setX = cx + 4;
-            addRegion(setX, rowA, btnW, 14, "demand_settings", null, null);
-            drawSmallLabelButton(g, setX, rowA, btnW, 14,
-                    Component.translatable("gui.module_shop.demand.settings"),
-                    IOStyle.inside(setX, rowA, btnW, 14, mx, my), ClientShopData.demandEnabled, false);
-            int dExpireX = setX + btnW + btnGap;
-            addRegion(dExpireX, rowA, btnW, 14, "demand_expire", null, null);
-            drawSmallLabelButton(g, dExpireX, rowA, btnW, 14,
-                    Component.translatable("gui.module_shop.demand.expire"),
-                    IOStyle.inside(dExpireX, rowA, btnW, 14, mx, my),
-                    !"permanent".equals(ClientShopData.demandExpireMode), false);
-        } else if (stalls) {
-            int expireX = cx + 4;
-            addRegion(expireX, rowA, btnW, 14, "stall_expire", null, null);
-            drawSmallLabelButton(g, expireX, rowA, btnW, 14,
-                    Component.translatable("gui.module_shop.stall.expire"),
-                    IOStyle.inside(expireX, rowA, btnW, 14, mx, my), !"permanent".equals(ClientShopData.stallExpireMode), false);
-        } else if (mall) {
-            addRegion(genX, rowA, btnW, 14, "mall_import", null, null);
-            drawSmallLabelButton(g, genX, rowA, btnW, 14,
-                    Component.translatable("gui.module_shop.mall.import_mod"),
-                    IOStyle.inside(genX, rowA, btnW, 14, mx, my));
-            int restockX = genX + btnW + btnGap;
-            addRegion(restockX, rowA, btnW, 14, "mall_restock", null, null);
-            drawSmallLabelButton(g, restockX, rowA, btnW, 14,
-                    Component.translatable("gui.module_shop.mall.restock"),
-                    IOStyle.inside(restockX, rowA, btnW, 14, mx, my), ClientShopData.mallRestockOn, false);
-            int refreshX = restockX + btnW + btnGap;
-            addRegion(refreshX, rowA, btnW, 14, "mall_refresh", null, null);
-            drawSmallLabelButton(g, refreshX, rowA, btnW, 14,
-                    Component.translatable("gui.module_shop.mall.refresh_btn"),
-                    IOStyle.inside(refreshX, rowA, btnW, 14, mx, my),
-                    !"off".equals(ClientShopData.mallRefreshMode), false);
-        } else if (ship) {
-            addRegion(genX, rowA, btnW, 14, "shipping_limits", null, null);
-            drawSmallLabelButton(g, genX, rowA, btnW, 14,
-                    Component.translatable("gui.module_shop.shipping.daily_limits"),
-                    IOStyle.inside(genX, rowA, btnW, 14, mx, my));
+        if (signin) {
+            // 签到：所有设置都集中在这里（选择模块 → 签到）。
+            int s1 = cx + 4;
+            addRegion(s1, rowA, btnW, 14, "admin_signin_set", null, null);
+            drawSmallLabelButton(g, s1, rowA, btnW, 14,
+                    Component.translatable("gui.module_shop.signin.setting_short"),
+                    IOStyle.inside(s1, rowA, btnW, 14, mx, my), false, false);
+            int s2 = s1 + btnW + btnGap;
+            addRegion(s2, rowA, btnW, 14, "admin_signin_cumulative_toggle", null, null);
+            drawSmallLabelButton(g, s2, rowA, btnW, 14,
+                    Component.translatable("gui.module_shop.signin.cumulative"),
+                    IOStyle.inside(s2, rowA, btnW, 14, mx, my), ClientShopData.signInCumulative, false);
+            int s3 = s2 + btnW + btnGap;
+            addRegion(s3, rowA, btnW, 14, "admin_signin_auto_toggle", null, null);
+            drawSmallLabelButton(g, s3, rowA, btnW, 14,
+                    Component.translatable("gui.module_shop.signin.auto"),
+                    IOStyle.inside(s3, rowA, btnW, 14, mx, my), ClientShopData.signInAuto, false);
+            // 日程编辑也集中到这里：点它跳到签到页并进入「编辑日程」态，点日历上的日期即可新建 / 修改。
+            int s4 = s3 + btnW + btnGap;
+            addRegion(s4, rowA, btnW, 14, "admin_signin_schedule", null, null);
+            drawSmallLabelButton(g, s4, rowA, btnW, 14,
+                    Component.translatable("gui.module_shop.signin.schedule"),
+                    IOStyle.inside(s4, rowA, btnW, 14, mx, my), this.signInEdit, false);
         } else {
-            addRegion(genX, rowA, btnW, 14, "admin_gen_set", null, null);
-            drawSmallLabelButton(g, genX, rowA, btnW, 14,
-                    Component.translatable("gui.module_shop.admin_gen"), false);
+            if (!stalls && !demands) {
+                CompoundTag addExtra = new CompoundTag();
+                addExtra.putString("mode", adminMode);
+                addRegion(cx + 4, rowA, btnW, 14, "admin_add", null, addExtra);
+                drawSmallLabelButton(g, cx + 4, rowA, btnW, 14,
+                        Component.translatable("gui.module_shop.admin_add"), false);
+            }
+            int genX = cx + 4 + (btnW + btnGap);
+            if (demands) {
+                int setX = cx + 4;
+                addRegion(setX, rowA, btnW, 14, "demand_settings", null, null);
+                drawSmallLabelButton(g, setX, rowA, btnW, 14,
+                        Component.translatable("gui.module_shop.demand.settings"),
+                        IOStyle.inside(setX, rowA, btnW, 14, mx, my), ClientShopData.demandEnabled, false);
+                int dExpireX = setX + btnW + btnGap;
+                addRegion(dExpireX, rowA, btnW, 14, "demand_expire", null, null);
+                drawSmallLabelButton(g, dExpireX, rowA, btnW, 14,
+                        Component.translatable("gui.module_shop.demand.expire"),
+                        IOStyle.inside(dExpireX, rowA, btnW, 14, mx, my),
+                        !"permanent".equals(ClientShopData.demandExpireMode), false);
+            } else if (stalls) {
+                int expireX = cx + 4;
+                addRegion(expireX, rowA, btnW, 14, "stall_expire", null, null);
+                drawSmallLabelButton(g, expireX, rowA, btnW, 14,
+                        Component.translatable("gui.module_shop.stall.expire"),
+                        IOStyle.inside(expireX, rowA, btnW, 14, mx, my),
+                        !"permanent".equals(ClientShopData.stallExpireMode), false);
+            } else if (mall) {
+                addRegion(genX, rowA, btnW, 14, "mall_import", null, null);
+                drawSmallLabelButton(g, genX, rowA, btnW, 14,
+                        Component.translatable("gui.module_shop.mall.import_mod"),
+                        IOStyle.inside(genX, rowA, btnW, 14, mx, my), false, false);
+                int restockX = genX + btnW + btnGap;
+                addRegion(restockX, rowA, btnW, 14, "mall_restock", null, null);
+                drawSmallLabelButton(g, restockX, rowA, btnW, 14,
+                        Component.translatable("gui.module_shop.mall.restock"),
+                        IOStyle.inside(restockX, rowA, btnW, 14, mx, my), ClientShopData.mallRestockOn, false);
+                int refreshX = restockX + btnW + btnGap;
+                addRegion(refreshX, rowA, btnW, 14, "mall_refresh", null, null);
+                drawSmallLabelButton(g, refreshX, rowA, btnW, 14,
+                        Component.translatable("gui.module_shop.mall.refresh_btn"),
+                        IOStyle.inside(refreshX, rowA, btnW, 14, mx, my),
+                        ClientShopData.mallStockPersonal || !"off".equals(ClientShopData.mallRefreshMode), false);
+            } else if (ship) {
+                addRegion(genX, rowA, btnW, 14, "shipping_limits", null, null);
+                drawSmallLabelButton(g, genX, rowA, btnW, 14,
+                        Component.translatable("gui.module_shop.shipping.daily_limits"),
+                        IOStyle.inside(genX, rowA, btnW, 14, mx, my), false, false);
+            } else {
+                addRegion(genX, rowA, btnW, 14, "admin_gen_set", null, null);
+                drawSmallLabelButton(g, genX, rowA, btnW, 14,
+                        Component.translatable("gui.module_shop.admin_gen"), false);
+            }
         }
-        // 侧栏布局编辑（拖拽自定义左侧菜单列）。
-        int layoutX = cx + 4 + (btnW + btnGap) * (stalls ? 1 : 2);
-        boolean layoutHover = IOStyle.inside(layoutX, rowA, btnW, 14, mx, my);
-        drawSmallLabelButton(g, layoutX, rowA, btnW, 14,
-                Component.translatable("gui.module_shop.layout_edit"), layoutHover, this.layoutEdit, false);
-        addRegion(layoutX, rowA, btnW, 14, "sidebar_edit", null, null);
         // 底栏第二行：翻页 → 页码 → 当前奖励金额 → 操作提示，一律**从左往右依次排**（按实际文字宽度推进），
         // 不再使用固定坐标，所以任何语言 / 任何金额下都不会互相压字。
+        // 签到模式：内容区顶部给一行「当前设置」摘要（所有签到设置都在这个模块里）。
+        if (signin) {
+            // 签到模块没有「条目池」——这里画日历（**和签到页同一份代码**，改完两边自动同步）。
+            // 点「编辑日程」切到编辑态后，点日期就能新建 / 修改那天的日程；保存走服务端快照，两个页面一起变。
+            // 「选择模块」下拉展开时先不画日历，否则日历会盖住下拉面板（原条目列表也是这么避让的）。
+            if (!this.adminModuleOpen) {
+                drawSignInCalendar(g, cx, cy + 20, cw, this.signInEdit, false, mx, my);
+            }
+            Component line1 = Component.translatable("gui.module_shop.signin.admin_line1",
+                    ClientShopData.money(ClientShopData.signInBase),
+                    ClientShopData.money(ClientShopData.signInMakeupCost),
+                    ClientShopData.signInMakeupDays);
+            drawBarLabel(g, cx + 4, rowB + 3, cx + cw - 6,
+                    this.signInEdit ? Component.translatable("gui.module_shop.signin.edit_mode") : line1,
+                    this.signInEdit ? IOStyle.ORANGE : COLOR_GOLD);
+            return;
+        }
         int labelY = rowB + 3;
         int cursorX = cx + 4;
         if (pages > 1) {
@@ -3002,6 +3630,32 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         // 直边倒置等腰三角形（像素直边），并且是整个 render 的最后一层 —— 永远盖在内容与遮罩之上。
         int offset = (int) Math.round(Math.sin(this.tickCounter / 6.0D) * 1.5D);
         IOStyle.triangleDown(g, cx + cw / 2, bottomY - 8 + offset, 6, 5, IOStyle.BLUE);
+    }
+
+    /**
+     * 列表右侧的竖向滚动条（统一实现，避免每个列表各算一套）：
+     * 滑块高度 = 一屏占比，滑块位置按「已滚到最大值的多少」插值 ——
+     * 所以滚到最底时滑块底边**正好贴住轨道底边**，不会停在中途。
+     *
+     * @param trackX  轨道左边（宽 2px）
+     * @param trackY  轨道顶边（一般对齐列表第一行的顶边）
+     * @param trackH  轨道高度（一般 = 一屏行数 × 行高）
+     * @param first   第一行可见行号
+     * @param perScreen 一屏行数
+     * @param total   总行数
+     */
+    private void drawScrollBar(GuiGraphics g, int trackX, int trackY, int trackH, int first, int perScreen,
+            int total) {
+        if (total <= perScreen || trackH <= 0) {
+            return;
+        }
+        g.fill(trackX, trackY, trackX + 2, trackY + trackH, IOStyle.HAIR);
+        int thumbH = Math.max(14, trackH * perScreen / Math.max(1, total));
+        thumbH = Math.min(trackH, thumbH);
+        int maxFirst = Math.max(1, total - perScreen);
+        int f = Mth.clamp(first, 0, maxFirst);
+        int thumbY = trackY + (trackH - thumbH) * f / maxFirst;
+        g.fill(trackX, thumbY, trackX + 2, thumbY + thumbH, IOStyle.BLUE);
     }
 
     /** 标记「下面还有内容」，并记录列表自身的底边（渐隐提示会画在它下面 10px 的空档里）。 */
@@ -3369,7 +4023,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             return Component.translatable("gui.module_shop.mall.stock_unlimited");
         }
         if (view.soldOut()) {
-            return Component.translatable("gui.module_shop.mall.sold_out");
+            // 个人库存下「售罄」其实是「你自己这份买完了」，别让玩家以为被别人抢光。
+            return Component.translatable(ClientShopData.mallStockPersonal
+                    ? "gui.module_shop.mall.personal_sold_out" : "gui.module_shop.mall.sold_out");
         }
         return Component.translatable("gui.module_shop.mall.stock", view.stock);
     }
@@ -3518,6 +4174,11 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 }
                 Component status = Component.translatable("gui.module_shop.mall.status",
                         ClientShopData.mallPage + 1, pages, list.size());
+                if (ClientShopData.mallStockPersonal) {
+                    // 个人库存：先说清楚「这个剩余量是你自己的」，否则玩家会以为在跟别人抢同一份库存。
+                    status = Component.translatable("gui.module_shop.mall.personal_stock")
+                            .append(Component.literal("  ·  ")).append(status);
+                }
                 if (ClientShopData.mallRestockOn) {
                     // 开了定时补货：底栏前面先写清楚「每天几点补货」，玩家就知道售罄只是暂时的。
                     status = Component.translatable("gui.module_shop.mall.restock_status",
@@ -3687,7 +4348,35 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     /** 0.8 倍字号右对齐小字。 */
     private void drawSmallLabelRight(GuiGraphics g, int right, int y, Component text, int color) {
-        drawSmallLabel(g, right - (int) (this.font.width(text) * 0.8F), y, text, color);
+        drawLabelRight(g, right, y, text, color, 0.8F);
+    }
+
+    /**
+     * 右对齐的一行文字（{@code scale} = 1.0 即原尺寸）。
+     * <p>横向宽度按缩放后的实际宽度算，所以右边缘永远落在 {@code right} 上，不会因为缩放而偏移。
+     */
+    private void drawLabelRight(GuiGraphics g, int right, int y, Component text, int color, float scale) {
+        int w = Math.round(this.font.width(text) * scale);
+        g.pose().pushPose();
+        g.pose().translate(right - w, y, 0.0F);
+        if (scale != 1.0F) {
+            g.pose().scale(scale, scale, 1.0F);
+        }
+        g.drawString(this.font, text, 0, 0, color, false);
+        g.pose().popPose();
+    }
+
+    /** 按比例缩放、左对齐的一行文字（{@code scale} = 1.0 即原尺寸）。 */
+    private void drawLabel(GuiGraphics g, int x, int y, Component text, int color, float scale) {
+        if (scale == 1.0F) {
+            g.drawString(this.font, text, x, y, color, false);
+            return;
+        }
+        g.pose().pushPose();
+        g.pose().translate(x, y, 0.0F);
+        g.pose().scale(scale, scale, 1.0F);
+        g.drawString(this.font, text, 0, 0, color, false);
+        g.pose().popPose();
     }
 
     /** 最近购买的时间：MM-dd HH:mm。 */
@@ -3779,8 +4468,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             addRegion(upX, btnY, btnW, 20, "shipping_upgrade", null, null);
         }
         // ---------- 底栏提示（规则错误不再在这里刷字：管理页会把出问题的规则**标红**）----------
+        // 货币名用当前显示名（管理员改过就用改过的），不再在文案里写死「星币」。
         drawBarLabel(g, cx + 4, barTextY(cy, ch), cx + cw - 6,
-                Component.translatable("gui.module_shop.shipping.hint"), COLOR_MUTED);
+                Component.translatable("gui.module_shop.shipping.hint", ClientShopData.currencyName()), COLOR_MUTED);
     }
 
     // =========================================================== 交互
@@ -3791,6 +4481,18 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         int dir = scrollY > 0 ? -1 : 1;
+        // 交易 / 转账页：滚轮翻在线玩家列表。
+        if (scrollY != 0.0D && !this.layoutEdit
+                && ("trade".equals(currentTab) || "transfer".equals(currentTab))
+                && mouseX >= contentX() && mouseX < contentX() + contentW()
+                && mouseY >= contentY() && mouseY < contentY() + contentH()) {
+            int pages = Math.max(1, (tradePlayers().size() + TRADE_PAGE_SIZE - 1) / TRADE_PAGE_SIZE);
+            int next = Mth.clamp(this.tradePage + dir, 0, pages - 1);
+            if (next != this.tradePage) {
+                this.tradePage = next;
+                return true;
+            }
+        }
         // ① 鼠标停在左侧菜单列上 → 翻左侧模块列表（一屏固定 6 个，多余的靠滚轮）。
         if (scrollY != 0.0D && mouseX >= left() - 4 && mouseX < left() + SIDEBAR_W
                 && mouseY >= top() && mouseY <= top() + PANEL_H) {
@@ -3899,14 +4601,15 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 }
                 case "buyback" -> {
                     // 需求 8：收购条目超过一屏时，滚轮整行滚动。
-                    int max = Math.max(0, ClientShopData.dailyBuyback.size() - 1);
+                    // 上限 = 最后一条**贴到底边**的位置，不能再滚出一片空白。
+                    int max = Math.max(0, ClientShopData.dailyBuyback.size() - buybackRowsPerScreen(contentH));
                     ClientShopData.buybackListRow = Mth.clamp(ClientShopData.buybackListRow + step, 0, max);
                     return true;
                 }
                 case "daily" -> {
                     // 需求 8：牌数超过 6 张时，滚轮整行长条滚动。
                     if (ClientShopData.dailyShop.size() > 6) {
-                        int max = Math.max(0, ClientShopData.dailyShop.size() - 1);
+                        int max = Math.max(0, ClientShopData.dailyShop.size() - dailyRowsPerScreen(contentH));
                         ClientShopData.dailyListRow = Mth.clamp(ClientShopData.dailyListRow + step, 0, max);
                         return true;
                     }
@@ -3963,7 +4666,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             return true;
         }
         // 布局编辑模式：**右键页签 = 重命名模块**（只改显示名，id 不变；留空恢复原名）。
-        if (this.layoutEdit && ClientShopData.canAdmin && button == 1) {
+        if (ClientShopData.canAdmin && button == 1) {
             for (TabRect rect : this.tabRects) {
                 if (IOStyle.inside(rect.x(), rect.y(), rect.w(), rect.h(), mouseX, mouseY)) {
                     Bricks.click();
@@ -3995,6 +4698,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         // 购物城搜索框聚焦时：把按键（含数字 1-9）全部交给输入框，不要触发切页快捷键。
         if (this.mallSearchBox != null && this.mallSearchBox.isVisible() && this.mallSearchBox.isFocused()) {
+            return super.keyPressed(keyCode, scanCode, modifiers);
+        }
+        // 交易 / 转账的玩家搜索框同理：输入时别让数字键跑去切页。
+        if (this.tradeSearchBox != null && this.tradeSearchBox.isVisible() && this.tradeSearchBox.isFocused()) {
             return super.keyPressed(keyCode, scanCode, modifiers);
         }
         if (keyCode >= GLFW.GLFW_KEY_1 && keyCode <= GLFW.GLFW_KEY_9) {
@@ -4036,10 +4743,93 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             // 日夜主题切换（原版太阳 / 月亮按钮）：写入客户端主题文件，所有界面立即跟随。
             // 打开每日签到界面（需求 7）。
             case "open_signin" -> Nav.open(new SignInScreen());
+            // 签到/交易/转账 现在是左侧模块，页内按钮打开原界面;)
+            case "open_signin_screen" -> Nav.open(new SignInScreen());
+            case "open_trade_screen" -> Nav.open(new TradeSelectScreen(false));
+            case "open_transfer_screen" -> {
+                clearNotification(NotificationType.WALLET);
+                Nav.open(new TradeSelectScreen(true));
+            }
+            // 签到详细设置（原先在签到界面右下角，现在在商店设置页）
+            case "admin_signin_set" -> openSignInSettings();
+            case "admin_signin_cumulative_toggle" -> send("admin_signin_cumulative_toggle", null);
+            case "admin_signin_auto_toggle" -> send("admin_signin_auto_toggle", null);
+            // 签到（模块页，原独立界面已并入）：签到 / 补签 / 早晚翻页 / 管理员编辑日程
+            case "sign_in" -> send("sign_in", null);
+            case "signin_makeup" -> {
+                long makeupDay = extra == null ? 0L : extra.getLong("day");
+                if (makeupDay > 0L) {
+                    // 补签要花钱，先二次确认再说（和原来独立界面里的流程一致）。
+                    Nav.open(new ShopConfirmScreen(
+                            Component.translatable("gui.module_shop.signin.makeup_title"),
+                            Component.translatable("gui.module_shop.signin.makeup_tip",
+                                    ClientShopData.money(ClientShopData.signInMakeupCost),
+                                    java.time.LocalDate.ofEpochDay(makeupDay).toString()),
+                            ok -> {
+                                if (ok) {
+                                    CompoundTag tag = new CompoundTag();
+                                    tag.putLong("day", makeupDay);
+                                    send("sign_makeup", tag);
+                                }
+                            }));
+                }
+            }
+            case "signin_activity_edit" -> {
+                long editDay = extra == null ? ClientShopData.signInToday : extra.getLong("day");
+                Nav.open(new ScheduleEditScreen(editDay));
+            }
+            case "signin_activity_clear" -> send("admin_signin_day_clear", extra);
+            case "signin_edit_toggle" -> this.signInEdit = !this.signInEdit;
+            case "signin_month_prev" -> ClientShopData.signInMonth--;
+            case "signin_month_next" -> ClientShopData.signInMonth++;
+            case "signin_year_prev" -> ClientShopData.signInMonth -= 12;
+            case "signin_year_next" -> ClientShopData.signInMonth += 12;
+            // ---- 交易 / 转账（模块页）：点玩家 = 发起交易 / 进入转账金额输入 ----
+            case "trade_pick" -> {
+                String target = extra == null ? "" : extra.getString("name");
+                if (target.isEmpty()) {
+                    return;
+                }
+                if ("transfer".equals(currentTab)) {
+                    // 转账：先选玩家，再弹金额输入框（金额要手打，所以仍然是独立输入界面）。
+                    CompoundTag request = new CompoundTag();
+                    request.putString("kind", "input");
+                    request.putString("action", "do_transfer");
+                    request.putString("title", "gui.module_shop.input.transfer_amount");
+                    request.putString("target", target);
+                    ListTag fields = new ListTag();
+                    fields.add(StringTag.valueOf("amount"));
+                    request.put("fields", fields);
+                    Nav.open(new ShopInputScreen(request));
+                } else {
+                    // 交易：服务端收到请求后会推交易请求 / 交易界面，先把它们从「已关闭」名单里放出来。
+                    Nav.rearm(TradeScreen.class);
+                    Nav.rearm(TradeRequestScreen.class);
+                    CompoundTag tag = new CompoundTag();
+                    tag.putString("target", target);
+                    send("trade_request", tag);
+                }
+            }
+            case "trade_page_prev" -> tradePage = Math.max(0, tradePage - 1);
+            case "trade_page_next" -> tradePage++;
+            case "trade_requests_open" -> send("trade_requests_open", null);
+            // 商店设置 → 签到：就地切换「编辑日程」态，点下面日历上的日期即可新建 / 修改。
+            case "admin_signin_schedule" -> this.signInEdit = !this.signInEdit;
             // 需求 8：修改当前模块的刷新参数。
             case "admin_gen_set" -> openGenSet();
             // 侧栏布局：进入编辑模式（工具条里的"完成"退出，"重置布局"恢复默认）。
-            case "sidebar_edit" -> this.layoutEdit = !this.layoutEdit;
+            case "sidebar_edit" -> {
+                this.layoutEdit = !this.layoutEdit;
+                // 进入编辑 = 服务端拉一份草稿（之后拖拽 / 改名 / 改标题都只影响自己）；
+                // 点「完成」= 把草稿一次性发布给所有玩家。
+                send(this.layoutEdit ? "admin_layout_begin" : "admin_layout_commit", null);
+            }
+            // 右键标题（或侧栏页签）→ 重命名当前模块
+            case "rename_current_tab" -> openTabRename(currentTab);
+            // 左上角主标题改名
+            case "rename_shop_title" -> openShopTitleRename();
+            // 编辑布局下右键余额 → 改货币名（全服生效）
+            case "rename_currency" -> openCurrencyRename();
             // 第七轮：邮箱选中 / 星标
             case "mail_select" -> ClientShopData.mailSelected = extra == null ? "" : extra.getString("mail_id");
             case "open_redeem" -> Nav.open(new RedeemCodeScreen());
@@ -4343,6 +5133,37 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         }
     }
 
+    /** 管理员：签到详细设置（每日奖励 / 补签花费与范围 / 累计档位 / 里程奖励）。 */
+    private void openSignInSettings() {
+        net.minecraft.nbt.CompoundTag tag = new net.minecraft.nbt.CompoundTag();
+        tag.putString("kind", "input");
+        tag.putString("action", "admin_signin_set");
+        tag.putString("title", "gui.module_shop.signin.settings");
+        net.minecraft.nbt.ListTag fields = new net.minecraft.nbt.ListTag();
+        for (String f : new String[]{"base", "makeupCost", "makeupDays", "tiers", "miles"}) {
+            fields.add(net.minecraft.nbt.StringTag.valueOf(f));
+        }
+        tag.put("fields", fields);
+        tag.putString("default_base", Long.toString(ClientShopData.signInBase));
+        tag.putString("default_makeupCost", Long.toString(ClientShopData.signInMakeupCost));
+        tag.putString("default_makeupDays", Integer.toString(ClientShopData.signInMakeupDays));
+        tag.putString("default_tiers", signInPairs(ClientShopData.signInTierDays, ClientShopData.signInTierBonus));
+        tag.putString("default_miles", signInPairs(ClientShopData.signInMileDays, ClientShopData.signInMileMoney));
+        Nav.open(new ShopInputScreen(tag));
+    }
+
+    /** 把「天数:奖励」拼成 {@code 3:5,5:7,7:10}（与签到界面的格式一致）。 */
+    private static String signInPairs(int[] days, long[] values) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < days.length && i < values.length; i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            sb.append(days[i]).append(':').append(values[i]);
+        }
+        return sb.toString();
+    }
+
     /** 管理员：修改当前编辑模块（每日商店 / 每日收购）的权重、保底与条目上限。 */
     private void openGenSet() {
         boolean shop = !"buyback".equals(adminMode);
@@ -4393,9 +5214,14 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     }
 
     /** 购物城管理页：「补货设置」按钮 —— 定时补货开关 / 时间口径 / 补货时刻 / 补货数量（写回配置文件）。 */
-    /** 商店设置 → 购物城：库存周期刷新（多久整店刷新一次库存）。 */
+    /** 商店设置 → 购物城：库存设置（库存模式：全服 / 个人；以及多久整店刷新一次库存）。 */
     private void openMallRefresh() {
         CompoundTag req = new CompoundTag();
+        ListTag stockMode = new ListTag();
+        stockMode.add(StringTag.valueOf("global"));
+        stockMode.add(StringTag.valueOf("personal"));
+        req.put("choices_stock_mode", stockMode);
+        req.putString("default_stock_mode", ClientShopData.mallStockPersonal ? "personal" : "global");
         ListTag mode = new ListTag();
         mode.add(StringTag.valueOf("off"));
         mode.add(StringTag.valueOf("real"));
@@ -4403,9 +5229,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         req.put("choices_refresh_mode", mode);
         req.putString("default_refresh_mode", ClientShopData.mallRefreshMode);
         req.putString("default_refresh_amount", Integer.toString(Math.max(1, ClientShopData.mallRefreshAmount)));
-        req.putString("info", Component.translatable("gui.module_shop.mall.refresh_info").getString());
-        openInput("admin_mall_refresh", "gui.module_shop.input.mall_refresh", req,
-                "refresh_mode", "refresh_amount");
+        req.putString("info", Component.translatable("gui.module_shop.mall.stock_info").getString());
+        openInput("admin_mall_refresh", "gui.module_shop.input.mall_stock", req,
+                "stock_mode", "refresh_mode", "refresh_amount");
     }
 
     private void openMallRestock() {
@@ -4525,7 +5351,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     private void clearTabNotification(String tab) {
         switch (tab) {
-            case "daily", "buyback" -> clearNotification(NotificationType.SHOP);
+            case "daily" -> clearNotification(NotificationType.SHOP);
+            case "buyback" -> clearNotification(NotificationType.BUYBACK);
             case "auction" -> clearNotification(NotificationType.AUCTION);
             case "stall" -> clearNotification(NotificationType.STALL);
             case "mail" -> clearNotification(NotificationType.MAIL);
@@ -4661,6 +5488,11 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     @Override
     public void onClose() {
+        if (this.layoutEdit) {
+            // 编辑布局时直接关界面 = 视同完成，避免改动只在草稿里、谁都没同步到。
+            this.layoutEdit = false;
+            send("admin_layout_commit", null);
+        }
         // ESC 返回上一级界面（Nav 返回栈），没有上一级时才真正关闭。
         Nav.back();
     }

@@ -65,6 +65,44 @@ public final class ClientEvents {
         }
     }
 
+    /**
+     * 兜底：聊天里的默认货币名换成当前货币名。
+     *
+     * <p>正常情况下 {@link CurrencyNames} 已经把语言表里的「星币」换掉了，这里不会再触发。
+     * 但语言表替换依赖运行时内部结构（语言表被资源重载换掉等情况下可能没生效），
+     * 而聊天是玩家最能看见的地方，所以在消息到达时再做一次同样的替换 ——
+     * 只有在「解析出来的整句里仍然含默认货币名」时才动手，不影响任何已经正确的消息。
+     */
+    @SubscribeEvent
+    public static void onChatReceived(net.neoforged.neoforge.client.event.ClientChatReceivedEvent event) {
+        String name = ClientShopData.currencyName();
+        if (name == null || name.isEmpty() || ClientShopData.DEFAULT_CURRENCY.equals(name)) {
+            return;
+        }
+        net.minecraft.network.chat.Component message = event.getMessage();
+        // 只碰本模组的消息（其它模组 / 玩家聊天一概不动）。
+        if (!(message.getContents() instanceof net.minecraft.network.chat.contents.TranslatableContents translatable)
+                || !translatable.getKey().startsWith("msg.module_shop.")) {
+            return;
+        }
+        String plain = message.getString();
+        if (!plain.contains(ClientShopData.DEFAULT_CURRENCY)) {
+            return;
+        }
+        event.setMessage(net.minecraft.network.chat.Component
+                .literal(plain.replace(ClientShopData.DEFAULT_CURRENCY, name))
+                .withStyle(message.getStyle()));
+    }
+
+    /**
+     * 每 tick 兜一次：语言表在切语言 / 资源重载时会被整个换掉（Neo 会重新 inject），
+     * 换掉之后我们那层包装就没了。这里每帧检查一次，被换掉时立刻重新包上（代价只是两次类型判断）。
+     */
+    @SubscribeEvent
+    public static void onClientTick(net.neoforged.neoforge.client.event.ClientTickEvent.Post event) {
+        cn.autoforged.module_shop.client.CurrencyNames.apply(ClientShopData.moneySuffix);
+    }
+
     /** 退出世界时清空界面层级与「已关闭界面」记录（返回栈是纯客户端状态，不能跨存档残留）。 */
     @SubscribeEvent
     public static void onClientLogout(net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingOut event) {

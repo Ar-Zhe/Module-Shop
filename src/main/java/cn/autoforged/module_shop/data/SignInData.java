@@ -26,6 +26,14 @@ public final class SignInData {
     public final Set<Long> signedDays = new LinkedHashSet<>();
     /** 本轮连续签到已经领过的里程奖励天数（避免重复领取）。 */
     public final Set<Integer> claimedMilestones = new LinkedHashSet<>();
+    /**
+     * {@link #claimedMilestones} 属于第几轮（每 {@code SIGNIN_CYCLE_DAYS} 天一轮）。
+     *
+     * <p>里程奖励是「每轮一次」：进入新一轮时整张已领表清空，所以断签重建、
+     * 或者连续签到跨过一轮之后，3/5/7 天都能再领一次。老存档没有这个字段时读成 0，
+     * 下次签到会被当成「换了一轮」而清空一次——正好让老玩家重新开始领。
+     */
+    public int claimedRound;
 
     public boolean signedOn(long day) {
         return signedDays.contains(day);
@@ -41,6 +49,7 @@ public final class SignInData {
         tag.putLongArray("signedDays", arr);
         int[] claimed = claimedMilestones.stream().mapToInt(Integer::intValue).toArray();
         tag.putIntArray("claimedMilestones", claimed);
+        tag.putInt("claimedRound", claimedRound);
         return tag;
     }
 
@@ -55,6 +64,7 @@ public final class SignInData {
         for (int day : tag.getIntArray("claimedMilestones")) {
             data.claimedMilestones.add(day);
         }
+        data.claimedRound = tag.getInt("claimedRound");
         data.trim();
         return data;
     }

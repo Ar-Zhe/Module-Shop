@@ -33,7 +33,7 @@ import net.minecraft.world.item.ItemStack;
  *     一眼就知道该往箱子里放什么。</li>
  * </ul>
  */
-public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> {
+public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> implements JeiHoverSource {
     /** 面板宽度：左边 178（出货箱 + 背包）+ 间距 + 右边 160（可卖清单）。 */
     private static final int PANEL_W = 342;
     /** 右侧清单区域。 */
@@ -65,8 +65,13 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
     private static String ruleKey = "\u0000";
 
     private EditBox searchBox;
-    /** 列表里悬停那一行的提示：留到裁剪区之外再画（在 scissor 里画会被裁掉大半）。 */
-    private Component pendingTooltip;
+    /**
+     * 列表里悬停那一行的物品：留到裁剪区之外，按**原版物品悬浮框**画
+     *（列表用 scissor 裁过，在里面画会被切掉大半）。
+     */
+    private ItemStack pendingTooltipStack = ItemStack.EMPTY;
+    /** 鼠标下的物品（给 JEI 快捷键用：R 看怎么合成、U 看能用来做什么）。 */
+    private ItemStack jeiHover = ItemStack.EMPTY;
     private int listScroll;
     private boolean onlyOwned;
     private boolean onlyMarked;
@@ -243,6 +248,12 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         return false;
     }
 
+    /** JEI 桥接：鼠标下没有悬停物品时返回空，按键就交回给游戏（不吞键）。 */
+    @Override
+    public ItemStack jeiHoveredStack(double mouseX, double mouseY) {
+        return this.jeiHover == null ? ItemStack.EMPTY : this.jeiHover;
+    }
+
     // =========================================================== 渲染
 
     @Override
@@ -268,6 +279,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         super.render(g, mouseX, mouseY, partialTick);
         int x = this.leftPos;
         int y = this.topPos;
+        this.jeiHover = ItemStack.EMPTY;
         this.rowRects.clear();
         this.starRects.clear();
         this.sortRects.clear();
@@ -287,10 +299,17 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         highlightInventory(g, x, y);
         drawList(g, x, y, mouseX, mouseY);
         drawDropdowns(g, x, y, mouseX, mouseY);
-        // 悬停提示框放到最后：既在列表裁剪区之外，也不会被下拉面板压住。
-        if (this.pendingTooltip != null) {
-            g.renderTooltip(this.font, this.pendingTooltip, mouseX, mouseY);
-            this.pendingTooltip = null;
+        // 悬停提示框：用**原版物品悬浮框**（物品名 / 附魔 / NBT / 模组信息 / 提示都会正常显示），
+        // 不再自绘那段「单价 · 每天份数 · 背包 · 左键」的拼装文本 —— 单价列表里已经写着，
+        // 自绘框反而会盖掉物品本身的信息（而且分隔符在小字里会显示成方块）。
+        if (!this.pendingTooltipStack.isEmpty()) {
+            List<Component> tooltip = new ArrayList<>(getTooltipFromItem(this.minecraft, this.pendingTooltipStack));
+            // 最后补一行「左键：一键放入」：点一整行直接搬进箱子这个操作，不提示没人会发现。
+            tooltip.add(Component.translatable("gui.module_shop.shipping.tip_click")
+                    .withStyle(net.minecraft.ChatFormatting.DARK_GRAY));
+            g.renderTooltip(this.font, tooltip, java.util.Optional.empty(), this.pendingTooltipStack,
+                    mouseX, mouseY);
+            this.pendingTooltipStack = ItemStack.EMPTY;
         }
         // 槽位悬停提示：必须画在最后（原版 AbstractContainerScreen 先画，会被自绘面板盖住）。
         if (this.hoveredSlot != null && this.hoveredSlot.hasItem()) {
@@ -335,7 +354,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
     private void drawList(GuiGraphics g, int x, int y, int mouseX, int mouseY) {
         int sx = x + LIST_X;
         int halfW = (LIST_W - 4) / 2;
-        this.pendingTooltip = null;
+        this.pendingTooltipStack = ItemStack.EMPTY;
         // 搜索框
         IOStyle.rounded(g, sx, y + SEARCH_Y, LIST_W, CTRL_H, 0, IOStyle.FIELD_BG);
         boolean searchFocused = this.searchBox != null && this.searchBox.isFocused();
@@ -415,17 +434,10 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
             this.starRects.add(new int[]{sx + 1, ry + 2, 11, LIST_ROW_H - 4, index});
             this.rowRects.add(new int[]{sx + 14, ry, LIST_W - 18, LIST_ROW_H - 1, index});
             if (hover) {
-                // ⚠ 提示框必须**留到裁剪区之外**再画：列表用 scissor 裁过，
-                // 在里面画 tooltip 会被裁掉一大半（之前只看得见最后一行）。
-                this.pendingTooltip = Component.literal(entry.stack().getHoverName().getString())
-                        .append("\n").append(Component.translatable("gui.module_shop.shipping.tip_price",
-                                ClientShopData.money(entry.price())))
-                        .append("\n").append(entry.dailyMax() > 0
-                                ? Component.translatable("gui.module_shop.shipping.tip_daily", entry.dailyMax())
-                                : Component.translatable("gui.module_shop.shipping.tip_daily_none"))
-                        .append("\n").append(Component.translatable("gui.module_shop.shipping.tip_owned",
-                                ownedCount(entry.stack())))
-                        .append("\n").append(Component.translatable("gui.module_shop.shipping.tip_click"));
+                // 只记录「悬停的是哪件物品」：悬浮框由 render() 在裁剪区之外用原版渲染画，
+                // 列表被 scissor 裁过，在这里直接画会被截掉大半。
+                this.pendingTooltipStack = entry.stack();
+                this.jeiHover = entry.stack();
             }
         }
         g.disableScissor();

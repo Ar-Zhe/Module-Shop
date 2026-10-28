@@ -185,7 +185,7 @@ public final class GrantManager {
         CompoundTag tag = new CompoundTag();
         tag.putString("kind", "admin_grant");
         tag.put("targets", list);
-        tag.putString("currency", Config.INSTANCE.currencyName.get());
+        tag.putString("currency", ShopManager.currencyName(admin.server));
         ClientboundShopSyncPayload.send(admin, tag);
     }
 

@@ -142,6 +142,7 @@ public final class ShopManager {
         long day = currentDay(player.level());
         boolean dirty = false;
         boolean shopRefreshed = false;
+        boolean buybackRefreshed = false;
         if (account.dailyShopDay != day) {
             account.dailyShopDay = day;
             account.dailyShop.clear();
@@ -160,16 +161,22 @@ public final class ShopManager {
             account.dailyBuybackRefreshUsed = 0;
             generateDailyBuyback(player, account, data);
             dirty = true;
-            shopRefreshed = true;
+            buybackRefreshed = true;
         }
         if (dirty) {
             data.setDirty();
         }
-        // 需求 10：每日刷新时间到了给玩家一个商店提示红点。
+        // 需求 10：每日刷新时间到了给玩家一个提示红点；两个列表各自独立计数（不会一起亮）。
         if (shopRefreshed) {
             NotificationManager.notify(player.server, player.getUUID(), NotificationType.SHOP);
         }
+        if (buybackRefreshed) {
+            NotificationManager.notify(player.server, player.getUUID(), NotificationType.BUYBACK);
+        }
     }
+
+    /** 每日商店 / 每日收购 的条目数量上限（管理员可在 0 ~ 64 之间自由设置，0 = 当天不生成）。 */
+    public static final int MAX_DAILY_SLOTS = 64;
 
     private static void generateDailyShop(ServerPlayer player, PlayerAccount account, ShopSavedData data) {
         account.dailyFlipped.clear();
@@ -187,7 +194,7 @@ public final class ShopManager {
         // 各品质已出现的数量：普通档位有上限（默认最多 3 个），抽到满额时从可选品质里剔除。
         Map<Rarity, Integer> usedByRarity = new HashMap<>();
         int commonLimit = Config.INSTANCE.dailyShopCommonLimit.get();
-        int slots = Math.max(1, Math.min(12, data.shopSlotCount));
+        int slots = Math.max(0, Math.min(MAX_DAILY_SLOTS, data.shopSlotCount));
         for (int i = 0; i < slots; i++) {
             List<Rarity> usable = new ArrayList<>();
             for (Rarity rarity : available) {
@@ -225,8 +232,10 @@ public final class ShopManager {
             entry.limit = Math.max(1, picked.amountOr(picked.rarity.purchaseLimit()));
             account.dailyShop.add(entry);
         }
-        // 需求 8：保底品质不足时补足（优先替换普通项）。
-        applyShopGuarantee(random, account.dailyShop, data.shopPool, data.shopGuarantee);
+        // 需求 8：保底品质不足时补足（优先替换普通项）。条目数设成 0 = 当天不生成，保底也不补。
+        if (slots > 0) {
+            applyShopGuarantee(random, account.dailyShop, data.shopPool, data.shopGuarantee);
+        }
     }
 
     /** 按指定权重（传说/史诗/稀有/普通）抽品质；权重全为 0 时退回配置权重。 */
@@ -315,7 +324,7 @@ public final class ShopManager {
                         break;
                     }
                 }
-                if (!replaced && entries.size() < 12) {
+                if (!replaced && entries.size() < MAX_DAILY_SLOTS) {
                     entries.add(shopEntryOf(picked));
                 }
                 have++;
@@ -329,8 +338,8 @@ public final class ShopManager {
         }
         List<ConfiguredOffer> pool = new ArrayList<>(data.buybackPool);
         RandomSource random = player.getRandom();
-        // 每日最多随机 6 项收购需求：界面只渲染 6 行（没有翻页），生成端也按 6 夹取。
-        int slots = Math.min(12, Math.min(Math.max(1, data.buybackSlotCount), pool.size()));
+        // 上下限由管理员设置（0 ~ 64）：0 = 今天不生成收购需求。
+        int slots = Math.min(MAX_DAILY_SLOTS, Math.min(Math.max(0, data.buybackSlotCount), pool.size()));
         for (int i = 0; i < slots; i++) {
             // 需求 8：先按品质权重抽一个品质，再在该品质里随机取条目。
             List<Rarity> buybackRarities = raritiesOf(pool);
@@ -762,10 +771,12 @@ public final class ShopManager {
         tag.putLong("balance", account.balance);
         // 第九项：把余额上限也下发，客户端余额到顶时可显示「已满」。
         tag.putLong("maxBalance", Config.maxBalanceForClient());
-        tag.putString("currency", currencyName());
+        // 编辑布局时：货币名用草稿里的（还没发布），其他玩家仍看正式值。
+        String currencyText = currencyFor(data, player);
+        tag.putString("currency", currencyText);
         tag.putString("symbol", Config.INSTANCE.currencySymbol.get());
         // 需求 6：下发统一金钱后缀（如“星币”），客户端所有金额显示都用它。
-        tag.putString("moneySuffix", currencyName());
+        tag.putString("moneySuffix", currencyText);
         boolean snapshotAdmin = player.hasPermissions(2);
         tag.putBoolean("canAdmin", snapshotAdmin);
         // 需求 11：下发服务端当前记录的编辑模块，界面据此高亮“每日商店/每日收购”并显示当前模式。
@@ -926,14 +937,18 @@ public final class ShopManager {
         }
 
         // ---- 购物城（新增模块）：常驻货架 + 管理端同结构列表 + 最近购买记录 ----
+        // 「个人库存」模式下每件商品的 stock 字段按**这个玩家自己的剩余量**下发，
+        // 所以客户端不用区分两种模式，只认 stock 就是对的。
+        boolean personalStock = Config.mallStockPersonal();
         ListTag mallList = new ListTag();
         for (int i = 0; i < data.mallPool.size(); i++) {
             MallItem item = data.mallPool.get(i);
-            CompoundTag c = item.save(regs);
+            CompoundTag c = item.saveForView(regs, player.getUUID(), personalStock);
             c.putInt("index", i);
             mallList.add(c);
         }
         tag.put("mall", mallList);
+        tag.putBoolean("mallStockPersonal", personalStock);
         // 管理页复用 ConfiguredOffer 的结构（amount 当库存用，-1 = 无限），前端一套行渲染即可。
         if (snapshotAdmin) {
             ListTag adminMallList = new ListTag();
@@ -1011,6 +1026,8 @@ public final class ShopManager {
         tag.putLongArray("signInTierBonus", data.signInTierBonus);
         tag.putIntArray("signInMileDays", data.signInMileDays);
         tag.putLongArray("signInMileMoney", data.signInMileMoney);
+        // 里程轮次长度：客户端据此把进度条按「本轮第几天」画，而不是按总连续天数（那样到 7 天就永远满格）。
+        tag.putInt("signInCycleDays", SIGNIN_CYCLE_DAYS);
         ListTag actList = new ListTag();
         for (ActivityDay act : data.activityDays.values()) {
             CompoundTag c = new CompoundTag();
@@ -1032,7 +1049,8 @@ public final class ShopManager {
         }
         tag.put("activityDays", actList);
         // 侧栏布局：管理员拖过之后的所有玩家都用这套坐标（服务端权威 + 热同步）。
-        tag.put("sidebarLayout", data.sidebarLayout.save());
+        // 编辑布局中的管理员拿到的是**草稿**布局，其他玩家仍是已发布的那份。
+        tag.put("sidebarLayout", layoutFor(data, player.getUUID()).save());
         // 需求 8：下发刷新参数（管理员设置界面据此回填）。
         tag.putIntArray("shopWeights", data.shopWeights);
         tag.putIntArray("shopGuarantee", data.shopGuarantee);
@@ -1047,6 +1065,7 @@ public final class ShopManager {
         tag.putInt("mallRestockAmount", Config.mallRestockAmount());
         tag.putString("mallRefreshMode", Config.mallRefreshMode());
         tag.putInt("mallRefreshAmount", Config.mallRefreshAmount());
+        tag.putBoolean("mallStockPersonal", Config.mallStockPersonal());
         // 摊位下架时间（客户端据此显示每个商品的剩余时间 + 管理弹窗回填）
         tag.putString("stallExpireMode", Config.stallExpireMode());
         tag.putInt("stallExpireAmount", Config.stallExpireAmount());
@@ -1327,7 +1346,7 @@ public final class ShopManager {
         switch (action) {
             case "request_data" -> {
                 returnPending(player);
-                sendSnapshot(player, tag.getString("tab"));
+                sendSnapshotOpen(player, tag.getString("tab"));
             }
             case "create_auction" -> openDeposit(player, "auction");
             case "create_stall" -> openDeposit(player, "stall");
@@ -1353,8 +1372,15 @@ public final class ShopManager {
             // 侧栏布局：管理员拖拽排序后保存顺序 / 恢复默认。
             case "admin_sidebar_order" -> adminSidebarOrder(player, tag);
             case "admin_sidebar_reset" -> adminSidebarReset(player);
+            // 编辑布局的开关：开始 = 拉草稿（之后只改草稿）；完成 = 一次性发布给全服。
+            case "admin_layout_begin" -> adminLayoutBegin(player);
+            case "admin_layout_commit" -> adminLayoutCommit(player);
             // 编辑布局里右键页签 → 重命名模块（只改显示名，id 不变）
             case "admin_sidebar_rename" -> adminSidebarRename(player, tag);
+            // 左上角主标题改名（空 = 恢复默认「模块商店」）
+            case "admin_shop_title_set" -> adminShopTitleSet(player, tag);
+            // 编辑布局里右键余额 → 改货币名称（空 = 恢复配置默认）
+            case "admin_currency_set" -> adminCurrencySet(player, tag);
             // 商店设置 → 摊位：自动下架时间（永久 / 游戏时间 / 现实时间）
             case "admin_stall_expire" -> adminStallExpire(player, tag);
             // ---- 玩家求购（悬赏）----
@@ -1455,6 +1481,9 @@ public final class ShopManager {
             case "admin_signin_set" -> adminSignInSet(player, tag);
             case "admin_signin_day_set" -> adminActivityDaySet(player, tag);
             case "admin_signin_day_clear" -> adminActivityDayClear(player, tag);
+            case "admin_signin_draft_open" -> adminActivityDraftOpen(player, tag);
+            case "admin_signin_draft_set" -> adminActivityDraftSet(player, tag);
+            case "admin_signin_day_discard" -> adminActivityDraftDiscard(player);
             case "admin_signin_reward_open" -> adminActivityRewardOpen(player, tag);
             case "admin_signin_reward_save" -> adminActivityRewardSave(player, tag);
             case "admin_signin_reward_cancel" -> adminActivityRewardCancel(player);
@@ -1528,24 +1557,39 @@ public final class ShopManager {
         ADMIN_EDIT_TYPE.put(player.getUUID(), AdminEditType.byId(type));
     }
 
-    /** 优先使用服务端记录的编辑模块，缺省时退回消息里携带的 mode。 */
+    /**
+     * 是「每日商店」还是「每日收购」。
+     *
+     * <p>以报文里的 {@code mode} 为准（客户端每次都会带当前页面），
+     * 只有没带时才退回服务端记录的编辑模块 —— 否则管理员先开过购物城/出货箱的设置，
+     * 记录里还是 MALL，再改每日商店的刷新参数就会被当成收购写进另一份数组。
+     */
     private static boolean isShopMode(ServerPlayer player, CompoundTag tag) {
-        AdminEditType stored = ADMIN_EDIT_TYPE.get(player.getUUID());
-        if (stored != null) {
-            return stored == AdminEditType.DAILY_SHOP;
+        String mode = tag == null ? "" : tag.getString("mode").trim();
+        if ("buyback".equals(mode)) {
+            return false;
         }
-        return !"buyback".equals(tag.getString("mode"));
+        if ("daily".equals(mode) || "shop".equals(mode)) {
+            return true;
+        }
+        AdminEditType stored = ADMIN_EDIT_TYPE.get(player.getUUID());
+        return stored == null || stored == AdminEditType.DAILY_SHOP;
     }
 
     /**
-     * 管理员当前编辑的模块（购物城也走同一套）：服务端有记录就用记录，否则看报文里的 mode。
+     * 管理员当前编辑的模块（购物城也走同一套）。
+     * <p>每日商店 / 每日收购以报文 mode 为准，其余模块以服务端记录为准。
      */
     private static AdminEditType editType(ServerPlayer player, CompoundTag tag) {
-        AdminEditType stored = ADMIN_EDIT_TYPE.get(player.getUUID());
-        if (stored != null) {
-            return stored;
+        String mode = tag == null ? "" : tag.getString("mode").trim();
+        if ("buyback".equals(mode)) {
+            return AdminEditType.BUYBACK;
         }
-        return AdminEditType.byId(tag == null ? "" : tag.getString("mode"));
+        if ("daily".equals(mode) || "shop".equals(mode)) {
+            return AdminEditType.DAILY_SHOP;
+        }
+        AdminEditType stored = ADMIN_EDIT_TYPE.get(player.getUUID());
+        return stored == null ? AdminEditType.byId("") : stored;
     }
 
     /** 把悬而未决的上架物品安全退还给玩家，避免取消输入界面导致物品丢失。 */
@@ -1771,9 +1815,13 @@ public final class ShopManager {
                 return;
             }
             MallItem item = data.mallPool.get(index);
-            int available = item.available();
+            // 「个人库存」模式下 stock 是**每个玩家各自的上限**，可用量要减去这个人已经买走的。
+            boolean personal = Config.mallStockPersonal();
+            int available = personal && !item.unlimited() ? item.remainingFor(player.getUUID()) : item.available();
             if (available <= 0) {
-                notifyPlayer(player, Component.translatable("msg.module_shop.mall_sold_out",
+                // 个人库存里的「售罄」其实是「你自己这份已经买完」，文案要和全服库存区分开。
+                notifyPlayer(player, Component.translatable(personal
+                                ? "msg.module_shop.mall_personal_sold_out" : "msg.module_shop.mall_sold_out",
                         item.stack.getHoverName()).withStyle(ChatFormatting.RED));
                 return;
             }
@@ -1792,7 +1840,12 @@ public final class ShopManager {
             }
             if (debit(account, total, "purchase") < 0L) { return; }
             if (!item.unlimited()) {
-                item.stock = Math.max(0, item.stock - buyCount);
+                if (personal) {
+                    // 个人库存：只记「这个人买了多少」，全服货架的 stock 不动。
+                    item.addPersonalUsed(player.getUUID(), buyCount);
+                } else {
+                    item.stock = Math.max(0, item.stock - buyCount);
+                }
             }
             data.addMallRecent(new MallPurchase(player.getGameProfile().getName(), item.stack, buyCount,
                     item.price, System.currentTimeMillis()));
@@ -2145,11 +2198,14 @@ public final class ShopManager {
         }
     }
 
-    /** 管理员：购物城库存周期刷新设置（关闭 / 现实小时 / 游戏天数）。 */
+    /** 管理员：购物城库存设置（库存模式：全服 / 个人；刷新方式：关闭 / 现实小时 / 游戏天数）。 */
     private static void adminMallRefresh(ServerPlayer player, CompoundTag tag) {
         if (!player.hasPermissions(2)) {
             return;
         }
+        String stockText = tag.getString("stock_mode").trim().toLowerCase(java.util.Locale.ROOT);
+        String stockMode = "personal".equals(stockText) ? "personal" : "global";
+        boolean wasPersonal = Config.mallStockPersonal();
         String modeText = tag.getString("refresh_mode").trim().toLowerCase(java.util.Locale.ROOT);
         String mode = ("real".equals(modeText) || "game".equals(modeText)) ? modeText : "off";
         int amount;
@@ -2165,15 +2221,30 @@ public final class ShopManager {
                     .withStyle(ChatFormatting.RED));
             return;
         }
+        Config.INSTANCE.mallStockMode.set(stockMode);
         Config.INSTANCE.mallRefreshMode.set(mode);
         Config.INSTANCE.mallRefreshAmount.set(amount);
         Config.SPEC.save();
+        // 切换库存模式 = 一次「重新上架」：全服库存回到管理员设定的上限、个人已买记录清空。
+        // 否则从全服切到个人时，每人的上限会被以前的全局销量吃掉一部分（管理员设 10 件，玩家却只能买 3 件）。
+        if (!stockMode.equals(wasPersonal ? "personal" : "global")) {
+            ShopSavedData data = data(player.server);
+            for (MallItem item : data.mallPool) {
+                if (item.stockMax >= 0) {
+                    item.stock = item.stockMax;
+                }
+                item.clearPersonalUsed();
+            }
+            data.setDirty();
+        }
         Component desc = "off".equals(mode)
                 ? Component.translatable("gui.module_shop.choice.refresh_mode.off")
                 : Component.translatable("gui.module_shop.mall.refresh_value",
                         Component.translatable("gui.module_shop.choice.refresh_mode." + mode), amount);
-        notifyPlayer(player, Component.translatable("msg.module_shop.mall_refresh_saved", desc)
+        notifyPlayer(player, Component.translatable("msg.module_shop.mall_stock_saved",
+                Component.translatable("gui.module_shop.choice.stock_mode." + stockMode), desc)
                 .withStyle(ChatFormatting.GREEN));
+        // 个人 / 全服切换后每件商品的「剩余」含义就变了，立刻给所有人推一份新快照。
         broadcastSnapshots(player.server);
     }
     public static void tickMallRestock(MinecraftServer server) {
@@ -2227,15 +2298,24 @@ public final class ShopManager {
     /** 把货架上卖掉的库存补回目标数量，返回补过的商品件数（{@link #tickMallRestock} 用）。 */
     private static int restockMall(ShopSavedData data) {
         int unified = Config.mallRestockAmount();
+        boolean personal = Config.mallStockPersonal();
         int restored = 0;
         for (MallItem item : data.mallPool) {
             // 0 = 补回各自原量（补货目标）；>0 = 全部统一补到该数量。
             int target = unified > 0 ? unified : item.stockMax;
-            if (target < 0 || item.stock >= target) {
-                continue;
+            boolean changed = false;
+            if (target >= 0 && item.stock < target) {
+                item.stock = target;
+                changed = true;
             }
-            item.stock = target;
-            restored++;
+            // 个人库存：清空「每人已买多少」= 每个玩家都补回自己那份。
+            if (personal && !item.personalUsed.isEmpty()) {
+                item.clearPersonalUsed();
+                changed = true;
+            }
+            if (changed) {
+                restored++;
+            }
         }
         return restored;
     }
@@ -3859,7 +3939,7 @@ public final class ShopManager {
                 return;
             }
             notifyPlayer(player, Component.translatable("msg.module_shop.shipping_rule_added",
-                    stack.getHoverName(), price + currencyName()).withStyle(ChatFormatting.GREEN));
+                    stack.getHoverName(), price + currencyName(player.server)).withStyle(ChatFormatting.GREEN));
         } else if (type == AdminEditType.DAILY_SHOP) {
             ConfiguredOffer offer = new ConfiguredOffer(stack, price, rarity);
             offer.amount = parseInt(tag.getString("quantity"));
@@ -4022,7 +4102,7 @@ public final class ShopManager {
         extra.putString("default_quantity", Integer.toString(owned));
         // 标题里带上真实货币名（客户端会用本地语言渲染，如「兑换数量（银币 → 星币）」）。
         openInput(player, "exchange_deposit", "gui.module_shop.input.exchange_deposit", extra,
-                new String[]{entry.stack.getHoverName().getString(), Config.INSTANCE.currencyName.get()},
+                new String[]{entry.stack.getHoverName().getString(), currencyName(player.server)},
                 "quantity");
     }
 
@@ -4051,7 +4131,7 @@ public final class ShopManager {
         extra.putLong("unit_price", entry.value);
         extra.putString("total_key", "gui.module_shop.exchange.total");
         openInput(player, "exchange_withdraw", "gui.module_shop.input.exchange_withdraw", extra,
-                new String[]{Config.INSTANCE.currencyName.get(), entry.stack.getHoverName().getString()},
+                new String[]{currencyName(player.server), entry.stack.getHoverName().getString()},
                 "quantity");
     }
 
@@ -4218,6 +4298,22 @@ public final class ShopManager {
         return java.time.LocalDate.now().toEpochDay();
     }
 
+    /**
+     * 签到里程碑的轮次长度：每连续签满这么多天算一轮，本轮里程奖励（3/5/7 天那些档位）
+     * 在新一轮里可以**重新领一次**，所以不会出现「领完就没了」。
+     */
+    public static final int SIGNIN_CYCLE_DAYS = 7;
+
+    /** 连续签到第 {@code streak} 天属于第几轮（从 1 开始；没签过返回第 1 轮）。 */
+    public static int signInRound(int streak) {
+        return streak <= 0 ? 1 : (streak - 1) / SIGNIN_CYCLE_DAYS + 1;
+    }
+
+    /** 连续签到第 {@code streak} 天是**本轮**的第几天（1..{@link #SIGNIN_CYCLE_DAYS}；没签过返回 0）。 */
+    public static int signInRoundDay(int streak) {
+        return streak <= 0 ? 0 : (streak - 1) % SIGNIN_CYCLE_DAYS + 1;
+    }
+
     /** 连续签到到某天数时，每天额外多拿多少星币（累计加成，关闭时返回 0）。 */
     private static long cumulativeBonus(ShopSavedData data, int streak) {
         if (!data.signInCumulative) {
@@ -4248,6 +4344,13 @@ public final class ShopManager {
                 return;
             }
             sign.streak = sign.lastSignDay == today - 1L ? sign.streak + 1 : 1;
+            // 里程奖励改成「每轮一次」：断签回到第 1 轮，连续签满一轮进入下一轮，
+            // 两种情况都把「本轮已领」清空，于是 3/5/7 天在新一轮里能再领一次（不再是一辈子一次）。
+            int round = signInRound(sign.streak);
+            if (sign.lastSignDay != today - 1L || sign.claimedRound != round) {
+                sign.claimedRound = round;
+                sign.claimedMilestones.clear();
+            }
             sign.lastSignDay = today;
             sign.signedDays.add(today);
             if (sign.streak > sign.bestStreak) {
@@ -4257,11 +4360,16 @@ public final class ShopManager {
             long max = Config.maxBalanceLimit();
             long reward = Math.max(0L, data.signInBaseDaily) + cumulativeBonus(data, sign.streak);
             long added = credit(account, reward, max);
-            // 里程奖励：连续签到达到配置天数时额外发一次（同一轮只发一次）。
+            // 里程奖励：**每轮**连续签到达到配置天数时发一次（同一轮只发一次，下一轮可再领）。
+            int roundDay = signInRoundDay(sign.streak);
             long milestone = 0L;
             for (int i = 0; i < data.signInMileDays.length && i < data.signInMileMoney.length; i++) {
                 int need = data.signInMileDays[i];
-                if (sign.streak >= need && !sign.claimedMilestones.contains(need)) {
+                // 档位天数不能超过一轮的长度，否则永远到不了（例如每轮 7 天却配了 14 天档）。
+                if (need <= 0 || need > SIGNIN_CYCLE_DAYS) {
+                    continue;
+                }
+                if (roundDay >= need && !sign.claimedMilestones.contains(need)) {
                     sign.claimedMilestones.add(need);
                     milestone += Math.max(0L, data.signInMileMoney[i]);
                 }
@@ -4478,13 +4586,24 @@ public final class ShopManager {
                 ? ("true".equalsIgnoreCase(tag.getString("offline").trim())
                         || "1".equals(tag.getString("offline").trim()))
                 : existing != null && existing.forOffline;
-        boolean hasItems = existing != null && !existing.rewardStacks().isEmpty();
+        // 判断「这条日程是不是空的」要把**草稿**也算上：标题留空但草稿里配了奖励，仍然是一条有效日程。
+        ActivityDraft pending = ACTIVITY_DRAFTS.get(player.getUUID());
+        boolean draftMatch = pending != null && pending.day == day;
+        boolean hasItems = (existing != null && !existing.rewardStacks().isEmpty())
+                || (draftMatch && !pending.items.isEmpty());
+        if (draftMatch) {
+            money = pending.money;
+            offline = pending.offline;
+        }
         // 清空条件：界面明确提交了空标题，且没有金额、没有物品奖励。
         if (tag.contains("title") && title.isEmpty() && money <= 0L && !hasItems) {
             data.activityDays.remove(day);
+            ACTIVITY_DRAFTS.remove(player.getUUID());
             data.setDirty();
             notifyPlayer(player, Component.translatable("msg.module_shop.activity_cleared")
                     .withStyle(ChatFormatting.YELLOW));
+            // 发布后草稿已清空：让客户端的草稿视图也跟着清掉。
+            sendActivityDraft(player);
         } else {
             ActivityDay act = data.setActivityDay(day);
             if (tag.contains("title")) {
@@ -4519,10 +4638,32 @@ public final class ShopManager {
                 act.stack = itemStack.isEmpty() ? ItemStack.EMPTY : itemStack;
                 act.itemGranted.clear();
             }
+            // 草稿里的「发放规则 + 奖励物品」在这里一并发布 —— 这是整个日程编辑流程里**唯一**的落库点。
+            ActivityDraft draft = ACTIVITY_DRAFTS.remove(player.getUUID());
+            if (draft != null && draft.day == day) {
+                act.hour = draft.hour;
+                act.forOffline = draft.offline;
+                act.catchUp = draft.catchUp;
+                act.money = draft.money;
+                if (!sameRewards(act.rewards, draft.items)) {
+                    act.rewards.clear();
+                    act.rewards.addAll(draft.items);
+                    // 奖励换了：之前「已领过物品」的记录清空，新奖励应该重新发一次。
+                    act.rewardsGranted.clear();
+                    act.itemGranted.clear();
+                    act.giftGranted.clear();
+                    act.stack = ItemStack.EMPTY;
+                    act.gift = ItemStack.EMPTY;
+                }
+            }
             data.setDirty();
             notifyPlayer(player, Component.translatable("msg.module_shop.activity_set", day)
                     .withStyle(ChatFormatting.GREEN));
+            // 草稿已合并进正式日程：清掉客户端的草稿视图。
+            sendActivityDraft(player);
         }
+        // 「保存」= 发布：这次要推给**所有在线玩家**（以前只推给操作的管理员，别人得等下一次快照）。
+        broadcastSnapshots(player.server);
         sendSnapshot(player, "signin");
     }
 
@@ -4546,6 +4687,11 @@ public final class ShopManager {
     private static void adminActivityDayClear(ServerPlayer player, CompoundTag tag) {
         ShopSavedData data = data(player.server);
         data.activityDays.remove(tag.getLong("day"));
+        // 删了日程就别留着对应日期的草稿，否则下次编辑会被旧草稿带偏。
+        ActivityDraft draft = ACTIVITY_DRAFTS.get(player.getUUID());
+        if (draft != null && draft.day == tag.getLong("day")) {
+            ACTIVITY_DRAFTS.remove(player.getUUID());
+        }
         data.setDirty();
         sendSnapshot(player, "signin");
         notifyPlayer(player, Component.translatable("msg.module_shop.activity_cleared")
@@ -4559,6 +4705,131 @@ public final class ShopManager {
     }
 
     private static final Map<UUID, RewardEdit> REWARD_EDIT = new java.util.concurrent.ConcurrentHashMap<>();
+
+    // =========================================================== 日程编辑草稿
+    //
+    // 日程编辑分成三个界面：编辑界面（标题/正文/颜色）、奖励设置（发放规则）、奖励容器（物品+金额）。
+    // 以前每个界面点「保存」都直接写正式日程 = 每步都在发布，于是「进一下奖励界面再返回」
+    // 玩家就已经能看到这个日程了。现在这些操作只改**草稿**，只有编辑界面点「保存」才落库并广播。
+
+    /** 管理员正在编辑的日程草稿（每个管理员一份）。 */
+    private static final class ActivityDraft {
+        long day;
+        String title = "";
+        String note = "";
+        int color;
+        int hour = -1;
+        boolean offline;
+        boolean catchUp = true;
+        long money;
+        final List<ItemStack> items = new ArrayList<>();
+    }
+
+    private static final Map<UUID, ActivityDraft> ACTIVITY_DRAFTS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 取该管理员的草稿；没有（或换了日期）就从正式日程复制一份新的。 */
+    private static ActivityDraft draftOf(ShopSavedData data, ServerPlayer player, long day) {
+        ActivityDraft draft = ACTIVITY_DRAFTS.get(player.getUUID());
+        if (draft != null && draft.day == day) {
+            return draft;
+        }
+        draft = new ActivityDraft();
+        draft.day = day;
+        ActivityDay act = data.activityDay(day);
+        if (act != null) {
+            draft.title = act.title == null ? "" : act.title;
+            draft.note = act.note == null ? "" : act.note;
+            draft.color = act.color;
+            draft.hour = act.hour;
+            draft.offline = act.forOffline;
+            draft.catchUp = act.catchUp;
+            draft.money = act.money;
+            for (ItemStack stack : act.rewardStacks()) {
+                draft.items.add(stack.copy());
+            }
+        }
+        ACTIVITY_DRAFTS.put(player.getUUID(), draft);
+        return draft;
+    }
+
+    /** 把草稿推给该管理员（只有他自己能收到；别的玩家看到的仍是正式日程）。 */
+    private static void sendActivityDraft(ServerPlayer player) {
+        CompoundTag tag = new CompoundTag();
+        tag.putString("kind", "activity_draft");
+        ActivityDraft draft = ACTIVITY_DRAFTS.get(player.getUUID());
+        if (draft == null) {
+            tag.putLong("day", -1L);
+        } else {
+            tag.putLong("day", draft.day);
+            tag.putString("title", draft.title);
+            tag.putString("note", draft.note);
+            tag.putLong("money", draft.money);
+            tag.putBoolean("forOffline", draft.offline);
+            tag.putBoolean("catchUp", draft.catchUp);
+            tag.putString("item", MailTemplates.itemsText(draft.items));
+            tag.putString("itemIds", rewardIdsText(draft.items));
+            tag.putInt("color", draft.color);
+            tag.putInt("hour", draft.hour);
+        }
+        ClientboundShopSyncPayload.send(player, tag);
+    }
+
+    /** 奖励列表内容是否相同（用于判断要不要清空「已领过」记录）。 */
+    private static boolean sameRewards(List<ItemStack> a, List<ItemStack> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (int i = 0; i < a.size(); i++) {
+            if (!ItemStack.matches(a.get(i), b.get(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 打开日程编辑：建一份草稿（从正式日程复制）并推回客户端。 */
+    private static void adminActivityDraftOpen(ServerPlayer player, CompoundTag tag) {
+        if (!player.hasPermissions(2)) {
+            return;
+        }
+        long day = tag.getLong("day");
+        if (day <= 0L) {
+            day = realDay();
+        }
+        // 重新打开 = 从头开始编辑：丢掉上一次没收尾的草稿。
+        ACTIVITY_DRAFTS.remove(player.getUUID());
+        draftOf(data(player.server), player, day);
+        sendActivityDraft(player);
+    }
+
+    /** 日程奖励界面「保存」：只改草稿里的发放规则，**不发布**。 */
+    private static void adminActivityDraftSet(ServerPlayer player, CompoundTag tag) {
+        if (!player.hasPermissions(2)) {
+            return;
+        }
+        long day = tag.getLong("day");
+        if (day <= 0L) {
+            day = realDay();
+        }
+        ActivityDraft draft = draftOf(data(player.server), player, day);
+        if (tag.contains("hour")) {
+            draft.hour = parseHour(tag.getString("hour"));
+        }
+        if (tag.contains("offline")) {
+            String raw = tag.getString("offline").trim();
+            draft.offline = "true".equalsIgnoreCase(raw) || "1".equals(raw);
+        }
+        if (tag.contains("catchUp")) {
+            draft.catchUp = !"false".equalsIgnoreCase(tag.getString("catchUp").trim());
+        }
+        sendActivityDraft(player);
+    }
+
+    /** 编辑界面「取消」：丢掉草稿，正式日程保持不变。 */
+    private static void adminActivityDraftDiscard(ServerPlayer player) {
+        ACTIVITY_DRAFTS.remove(player.getUUID());
+        sendActivityDraft(player);
+    }
 
     /**
      * 管理员：打开某天的「日程奖励」界面。
@@ -4576,17 +4847,14 @@ public final class ShopManager {
         if (day <= 0L) {
             day = realDay();
         }
-        // 先推一次快照：界面右侧的「当前奖励」直接读客户端缓存，保证是最新值。
-        sendSnapshot(player, "signin");
+        // 从**草稿**预填（草稿不存在时 draftOf 会从正式日程复制一份），编辑过程不碰正式日程。
+        ActivityDraft draft = draftOf(data(player.server), player, day);
         List<ItemStack> prefill = new ArrayList<>();
-        ActivityDay act = data(player.server).activityDay(day);
-        if (act != null) {
-            for (ItemStack stack : act.rewardStacks()) {
-                if (prefill.size() >= GrantMenu.GRANT_SLOTS) {
-                    break;
-                }
-                prefill.add(stack.copy());
+        for (ItemStack stack : draft.items) {
+            if (prefill.size() >= GrantMenu.GRANT_SLOTS) {
+                break;
             }
+            prefill.add(stack.copy());
         }
         while (prefill.size() < GrantMenu.GRANT_SLOTS) {
             prefill.add(ItemStack.EMPTY);
@@ -4630,33 +4898,26 @@ public final class ShopManager {
         long money = Math.min(parsePositive(tag.getString("money")), Config.maxBalanceLimit());
         ShopSavedData data = data(player.server);
         synchronized (LOCK) {
-            ActivityDay act = data.activityDay(day);
-            if (act == null && items.isEmpty() && money <= 0L) {
+            ActivityDraft draft = draftOf(data, player, day);
+            if (draft.items.isEmpty() && items.isEmpty() && money <= 0L) {
                 // 既没有物品也没有金额：不要凭空建出一个空日程。
                 clearContainer(container);
                 notifyPlayer(player, Component.translatable("msg.module_shop.grant_nothing")
                         .withStyle(ChatFormatting.RED));
-                sendSnapshot(player, "signin");
+                sendActivityDraft(player);
                 return;
             }
-            act = data.setActivityDay(day);
-            // 先清空槽位再落库：物品已经写进日程，绝不能再被 removed() 退还给管理员（否则等于复制物品）。
+            // 先清空槽位再记录：物品已经记进草稿，绝不能再被 removed() 退还给管理员（否则等于复制物品）。
             clearContainer(container);
-            act.rewards.clear();
-            act.rewards.addAll(items);
-            act.money = money;
-            // 奖励改了，之前“已领过物品”的记录一并清空：新的奖励应该重新发一次。
-            act.rewardsGranted.clear();
-            act.itemGranted.clear();
-            act.giftGranted.clear();
-            act.stack = ItemStack.EMPTY;
-            act.gift = ItemStack.EMPTY;
-            data.setDirty();
+            // 只写草稿：正式日程要等编辑界面点「保存」才更新（否则一进奖励界面玩家就看到了）。
+            draft.items.clear();
+            draft.items.addAll(items);
+            draft.money = money;
+            sendActivityDraft(player);
         }
         notifyPlayer(player, Component.translatable("msg.module_shop.activity_reward_set",
                 LocalDate.ofEpochDay(day).toString(), items.size(),
-                money + currencyName()).withStyle(ChatFormatting.GREEN));
-        sendSnapshot(player, "signin");
+                money + currencyName(player.server)).withStyle(ChatFormatting.GREEN));
     }
 
     /**
@@ -4908,7 +5169,7 @@ public final class ShopManager {
                 ? Component.translatable("msg.module_shop.redeem_all_players")
                 : Component.literal(Integer.toString(players.size()));
         notifyPlayer(player, Component.translatable("msg.module_shop.redeem_reward_set",
-                items.size(), money + currencyName(), scope)
+                items.size(), money + currencyName(player.server), scope)
                 .withStyle(ChatFormatting.GREEN));
         sendRedeemDraft(player);
     }
@@ -4974,18 +5235,21 @@ public final class ShopManager {
         int[] guarantee = shop ? data.shopGuarantee : data.buybackGuarantee;
         int[] newWeights = parseInts(tag.getString("weights"), weights);
         int[] newGuarantee = parseInts(tag.getString("guarantee"), guarantee);
-        int slots = parseInt(tag.getString("slots"));
         System.arraycopy(newWeights, 0, weights, 0, weights.length);
         System.arraycopy(newGuarantee, 0, guarantee, 0, guarantee.length);
-        if (slots > 0) {
+        // 条目数量：允许 0 ~ 64（0 = 当天不生成；留空则保持原值）。
+        String slotsText = tag.getString("slots").trim();
+        if (!slotsText.isEmpty()) {
+            int slots = Math.max(0, Math.min(MAX_DAILY_SLOTS, parseInt(slotsText)));
             if (shop) {
-                data.shopSlotCount = Math.min(12, slots);
+                data.shopSlotCount = slots;
             } else {
-                data.buybackSlotCount = Math.min(12, slots);
+                data.buybackSlotCount = slots;
             }
         }
         data.setDirty();
-        refreshDaily(player);
+        // 只重抽当前正在设置的那个列表（改商店参数不动收购，反之亦然）。
+        refreshDaily(player, shop);
         sendSnapshot(player, "admin");
         notifyPlayer(player, Component.translatable("msg.module_shop.gen_set_ok")
                 .withStyle(ChatFormatting.GREEN));
@@ -5698,7 +5962,7 @@ public final class ShopManager {
         TransactionLog.record(target.server, target.getUUID(), TransactionLog.ADMIN_MONEY,
                 "管理员设置余额", delta, value, operator == null ? "" : operator);
         notifyPlayer(target, Component.translatable("msg.module_shop.admin_set_balance",
-                value + currencyName()).withStyle(ChatFormatting.GREEN));
+                value + currencyName(target.server)).withStyle(ChatFormatting.GREEN));
         // 在线目标立即刷新界面上的余额（快照里带 balance，客户端顶栏会跟着闪一下）。
         sendSnapshot(target, null, true);
     }
@@ -5723,7 +5987,7 @@ public final class ShopManager {
         ServerPlayer online = server.getPlayerList().getPlayer(id);
         if (online != null) {
             notifyPlayer(online, Component.translatable("msg.module_shop.admin_set_balance",
-                    value + currencyName()).withStyle(ChatFormatting.GREEN));
+                    value + currencyName(server)).withStyle(ChatFormatting.GREEN));
             sendSnapshot(online, null, true);
         }
         return true;
@@ -5776,6 +6040,25 @@ public final class ShopManager {
         sendSnapshot(target, "daily", true);
     }
 
+    /**
+     * 只刷新其中一个列表：{@code shop=true} 只重抽**每日商店**，{@code false} 只重抽**每日收购**。
+     *
+     * <p>以前「商店设置 → 刷新参数」保存后调的是 {@link #refreshDaily(ServerPlayer)}，
+     * 那个会把两个列表都标记成"今天没生成"，于是改商店的参数、收购也跟着重抽（反之亦然）。
+     */
+    public static void refreshDaily(ServerPlayer target, boolean shop) {
+        PlayerAccount account = account(target);
+        if (shop) {
+            account.dailyShopDay = Long.MIN_VALUE;
+            account.dailyFlipped.clear();
+        } else {
+            account.dailyBuybackDay = Long.MIN_VALUE;
+        }
+        data(target.server).setDirty();
+        ensureDaily(target, account, data(target.server));
+        sendSnapshot(target, "daily", true);
+    }
+
     public static void onLogout(ServerPlayer player) {
         returnPending(player);
         TradeManager.onLogout(player);
@@ -5783,6 +6066,9 @@ public final class ShopManager {
         ADMIN_EDIT_TYPE.remove(player.getUUID());
         ADMIN_TEMPLATE.remove(player.getUUID());
         BATCH_TEMPLATE.remove(player.getUUID());
+        // 编辑到一半掉线：草稿直接丢掉（正式数据本来就没被改过，安全）。
+        LAYOUT_DRAFTS.remove(player.getUUID());
+        ACTIVITY_DRAFTS.remove(player.getUUID());
     }
 
     // =========================================================== 侧栏布局（拖拽排序）
@@ -5791,6 +6077,97 @@ public final class ShopManager {
      * 管理员：保存侧栏页签的**顺序列表**（面板里是固定网格，坐标由客户端按顺序算，所以只存顺序）。
      * 服务端只接受合法 id 并去重，防止客户端塞垃圾进存档。
      */
+    /**
+     * 「编辑布局」草稿：拖拽 / 改名 / 改标题 / 改货币名都只写这里，
+     * **只有点「完成」**才写进正式存档并广播给所有在线玩家。
+     *
+     * <p>为什么必须是真的草稿：如果只是「先存进存档、推迟广播」，别人下一条快照
+     * （买东西、开界面、登录）就会把半成品布局读走 —— 等于还是提前同步了。
+     */
+    private static final class LayoutDraft {
+        final SidebarLayout layout;
+        /** 草稿里的货币名；null = 这次没改。 */
+        String currency;
+
+        LayoutDraft(SidebarLayout layout, String currency) {
+            this.layout = layout;
+            this.currency = currency;
+        }
+    }
+
+    private static final Map<UUID, LayoutDraft> LAYOUT_DRAFTS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static boolean layoutEditing(ServerPlayer player) {
+        return player != null && LAYOUT_DRAFTS.containsKey(player.getUUID());
+    }
+
+    /** 该管理员当前应该看到的布局：编辑中看草稿，否则看正式存档。 */
+    private static SidebarLayout layoutFor(ShopSavedData data, UUID playerId) {
+        LayoutDraft draft = playerId == null ? null : LAYOUT_DRAFTS.get(playerId);
+        return draft == null ? data.sidebarLayout : draft.layout;
+    }
+
+    /** 取（或从正式存档复制一份）布局草稿。 */
+    private static LayoutDraft layoutDraft(ShopSavedData data, ServerPlayer player) {
+        return LAYOUT_DRAFTS.computeIfAbsent(player.getUUID(),
+                key -> new LayoutDraft(SidebarLayout.load(data.sidebarLayout.save()), data.shopCurrency));
+    }
+
+    /** 该玩家看到的货币名：编辑布局时用草稿里的（还没发布），否则用正式存档里的名字。 */
+    private static String currencyFor(ShopSavedData data, ServerPlayer player) {
+        LayoutDraft draft = player == null ? null : LAYOUT_DRAFTS.get(player.getUUID());
+        if (draft != null && draft.currency != null) {
+            String text = draft.currency.trim();
+            return text.isEmpty() ? currencyName() : text;
+        }
+        return currencyName(player.server);
+    }
+
+    /** 布局类改动推送：编辑中只推给操作者本人（他立刻看到预览），否则广播给所有在线玩家。 */
+    private static void pushLayoutTo(ServerPlayer player) {
+        if (player == null) {
+            return;
+        }
+        if (layoutEditing(player)) {
+            sendSnapshot(player, null, true);
+        } else {
+            broadcastSidebarLayout(player.server);
+        }
+    }
+
+    /** 管理员：开始编辑布局（拉一份草稿，之后只改草稿）。 */
+    private static void adminLayoutBegin(ServerPlayer player) {
+        ShopSavedData data = data(player.server);
+        LAYOUT_DRAFTS.remove(player.getUUID());
+        layoutDraft(data, player);
+    }
+
+    /** 管理员：点「完成」→ 把草稿一次性写进正式存档并广播给所有人。 */
+    private static void adminLayoutCommit(ServerPlayer player) {
+        LayoutDraft draft = LAYOUT_DRAFTS.remove(player.getUUID());
+        if (draft == null) {
+            return;
+        }
+        ShopSavedData data = data(player.server);
+        SidebarLayout src = draft.layout;
+        data.sidebarLayout.setOrder(new ArrayList<>(src.order()));
+        data.sidebarLayout.setHidden(new ArrayList<>(src.hidden()));
+        for (String id : new ArrayList<>(data.sidebarLayout.names().keySet())) {
+            data.sidebarLayout.setName(id, null);
+        }
+        for (Map.Entry<String, String> entry : src.names().entrySet()) {
+            data.sidebarLayout.setName(entry.getKey(), entry.getValue());
+        }
+        data.sidebarLayout.setShopTitle(src.shopTitle());
+        if (draft.currency != null) {
+            data.shopCurrency = draft.currency;
+        }
+        data.setDirty();
+        broadcastSidebarLayout(player.server);
+        notifyPlayer(player, Component.translatable("msg.module_shop.sidebar_saved")
+                .withStyle(ChatFormatting.GREEN));
+    }
+
     private static void adminSidebarOrder(ServerPlayer player, CompoundTag tag) {
         ListTag list = tag.getList("order", 8);
         List<String> ids = new ArrayList<>();
@@ -5816,12 +6193,19 @@ public final class ShopManager {
             return;
         }
         ShopSavedData data = data(player.server);
-        data.sidebarLayout.setOrder(ids);
-        data.sidebarLayout.setHidden(hidden);
-        data.setDirty();
-        broadcastSidebarLayout(player.server);
-        notifyPlayer(player, Component.translatable("msg.module_shop.sidebar_saved")
-                .withStyle(ChatFormatting.GREEN));
+        boolean editing = layoutEditing(player);
+        // 编辑中只改草稿：正式存档要等「完成」才动，否则别人下一条快照就看到了。
+        SidebarLayout target = editing ? layoutDraft(data, player).layout : data.sidebarLayout;
+        target.setOrder(ids);
+        target.setHidden(hidden);
+        if (!editing) {
+            data.setDirty();
+        }
+        pushLayoutTo(player);
+        if (!editing) {
+            notifyPlayer(player, Component.translatable("msg.module_shop.sidebar_saved")
+                    .withStyle(ChatFormatting.GREEN));
+        }
     }
 
     /**
@@ -5829,7 +6213,8 @@ public final class ShopManager {
      * <p>改名只允许改**显示名**，id 永不改变（存档 / 配置文件 / 动作包都按 id 走）。
      */
     private static final List<String> MODULE_IDS = List.of(
-            "daily", "buyback", "mall", "shipping", "auction", "stall", "mail", "exchange");
+            "daily", "buyback", "mall", "shipping", "auction", "stall", "demand", "mail", "exchange",
+            "signin", "trade", "transfer");
 
     /**
      * 管理员：**重命名模块**（编辑布局里右键页签）。
@@ -5848,24 +6233,30 @@ public final class ShopManager {
             return;
         }
         ShopSavedData data = data(player.server);
+        boolean editing = layoutEditing(player);
+        SidebarLayout target = editing ? layoutDraft(data, player).layout : data.sidebarLayout;
         String raw = tag.getString("name");
         String clean = SidebarLayout.sanitize(raw);
         boolean truncated = SidebarLayout.sanitizeFull(raw).length() > SidebarLayout.MAX_NAME;
-        String previousName = data.sidebarLayout.nameOf(id);
+        String previousName = target.nameOf(id);
         if (clean.isEmpty()) {
             if (previousName == null) {
                 return;   // 本来就是默认名，什么都不用做
             }
-            data.sidebarLayout.setName(id, null);
-            data.setDirty();
-            broadcastSidebarLayout(player.server);
+            target.setName(id, null);
+            if (!editing) {
+                data.setDirty();
+            }
+            pushLayoutTo(player);
             notifyPlayer(player, Component.translatable("msg.module_shop.sidebar_rename_reset")
                     .withStyle(ChatFormatting.YELLOW));
             return;
         }
-        if (data.sidebarLayout.setName(id, clean)) {
-            data.setDirty();
-            broadcastSidebarLayout(player.server);
+        if (target.setName(id, clean)) {
+            if (!editing) {
+                data.setDirty();
+            }
+            pushLayoutTo(player);
             notifyPlayer(player, Component.translatable("msg.module_shop.sidebar_renamed", clean)
                     .withStyle(ChatFormatting.GREEN));
         }
@@ -5913,16 +6304,92 @@ public final class ShopManager {
         broadcastSnapshots(player.server);
     }
 
-    /** 管理员：把所有页签位置恢复默认。 */    private static void adminSidebarReset(ServerPlayer player) {
+    /** 管理员：把所有页签位置恢复默认（编辑中同样只改草稿，点「完成」才广播）。 */
+    private static void adminSidebarReset(ServerPlayer player) {
         ShopSavedData data = data(player.server);
-        data.sidebarLayout.clear();
-        data.setDirty();
-        broadcastSidebarLayout(player.server);
+        boolean editing = layoutEditing(player);
+        SidebarLayout target = editing ? layoutDraft(data, player).layout : data.sidebarLayout;
+        target.clear();
+        if (!editing) {
+            data.setDirty();
+        }
+        pushLayoutTo(player);
         notifyPlayer(player, Component.translatable("msg.module_shop.sidebar_reset")
                 .withStyle(ChatFormatting.YELLOW));
     }
 
     /** 布局变了：给所有在线玩家推一份静默快照（只更新缓存、不打断他们的界面）。 */
+    /**
+     * 管理员：**改商店主标题**（左上角那个名字，全服生效）。
+     *
+     * <p>只改显示名：空字符串 = 恢复 lang 默认（模块商店）。最多 {@link SidebarLayout#MAX_TITLE} 个字。
+     */
+    private static void adminShopTitleSet(ServerPlayer player, CompoundTag tag) {
+        if (!player.hasPermissions(2)) {
+            return;
+        }
+        ShopSavedData data = data(player.server);
+        boolean editing = layoutEditing(player);
+        SidebarLayout target = editing ? layoutDraft(data, player).layout : data.sidebarLayout;
+        String raw = tag.getString("name");
+        boolean truncated = SidebarLayout.sanitizeFull(raw).length() > SidebarLayout.MAX_TITLE;
+        String previous = target.shopTitle();
+        if (target.setShopTitle(raw)) {
+            if (!editing) {
+                data.setDirty();
+            }
+            pushLayoutTo(player);
+            String now = data.sidebarLayout.shopTitle();
+            if (now == null) {
+                notifyPlayer(player, Component.translatable("msg.module_shop.shop_title_reset")
+                        .withStyle(ChatFormatting.YELLOW));
+            } else {
+                notifyPlayer(player, Component.translatable("msg.module_shop.shop_title_renamed", now)
+                        .withStyle(ChatFormatting.GREEN));
+            }
+        } else if (truncated && previous != null) {
+            notifyPlayer(player, Component.translatable("msg.module_shop.shop_title_too_long",
+                    Integer.toString(SidebarLayout.MAX_TITLE)).withStyle(ChatFormatting.YELLOW));
+        }
+    }
+    /** 货币名称最大长度。 */
+    public static final int CURRENCY_NAME_MAX = 8;
+
+    /** 管理员：改**货币名称**（全服生效；空 = 恢复 config 默认值）。 */
+    private static void adminCurrencySet(ServerPlayer player, CompoundTag tag) {
+        if (!player.hasPermissions(2)) {
+            return;
+        }
+        ShopSavedData data = data(player.server);
+        boolean editing = layoutEditing(player);
+        String raw = tag.getString("name");
+        String clean = SidebarLayout.sanitizeFull(raw);
+        if (clean.length() > CURRENCY_NAME_MAX) {
+            clean = clean.substring(0, CURRENCY_NAME_MAX);
+        }
+        String previous = editing
+                ? (layoutDraft(data, player).currency == null ? null : layoutDraft(data, player).currency)
+                : data.shopCurrency;
+        if (clean.equals(previous == null ? "" : previous)) {
+            return;
+        }
+        if (editing) {
+            // 只写草稿：货币名要等「完成」才广播，否则别人已经换名字了。
+            layoutDraft(data, player).currency = clean;
+        } else {
+            data.shopCurrency = clean;
+            data.setDirty();
+        }
+        // 货币名在快照里下发；编辑布局期间只推给操作者本人，「完成」时才广播给所有人。
+        pushLayoutTo(player);
+        if (clean.isBlank()) {
+            notifyPlayer(player, Component.translatable("msg.module_shop.currency_reset")
+                    .withStyle(ChatFormatting.YELLOW));
+        } else {
+            notifyPlayer(player, Component.translatable("msg.module_shop.currency_renamed", clean)
+                    .withStyle(ChatFormatting.GREEN));
+        }
+    }
     private static void broadcastSidebarLayout(MinecraftServer server) {
         if (server == null) {
             return;
@@ -6168,6 +6635,27 @@ public final class ShopManager {
      * 这里把「金币」与留空都当作旧默认值统一迁移成「星币」，服主自定义的其它名字原样返回。
      * 只影响显示名：配置键名、余额数值与对外接口都不变，ModuleShopVaultBridge / Vault /
      * 领地插件（Residence 等）的联动不受影响。
+     */
+    /**
+     * 当前货币名（**全服权威**）：优先用存档里管理员改过的名字，没改过才用配置值。
+     * <p>
+     * 「编辑布局 → 右键余额改名」把新名字存进 {@code ShopSavedData.shopCurrency}，
+     * 但显示全走快照里的 {@code currency / moneySuffix}。以前这里只读配置，
+     * 于是改名保存成功、界面上却还是默认名 —— 凡是能拿到 server 的地方都要走这个重载。
+     */
+    public static String currencyName(@Nullable MinecraftServer server) {
+        if (server != null) {
+            String custom = data(server).shopCurrency;
+            if (custom != null && !custom.isBlank()) {
+                return custom.trim();
+            }
+        }
+        return currencyName();
+    }
+
+    /**
+     * 配置里的货币名（**不读存档**）。只给拿不到 server 上下文的场合兜底；
+     * 有 server 时请用 {@link #currencyName(MinecraftServer)}，否则管理员改过的名字不会生效。
      */
     public static String currencyName() {
         String name = Config.INSTANCE.currencyName.get();

@@ -40,6 +40,9 @@ public final class ShopSavedData extends SavedData {
      * <p>只追加、不改变其它字段；老存档没有这个键时读成空集合。最多保留 {@link #API_REQUESTS_MAX} 条（丢最旧）。
      */
     public final java.util.LinkedHashSet<String> apiRequests = new java.util.LinkedHashSet<>();
+    /** 商店**自定义货币名称**（空 = 用 config 里的 currencyName）。管理员在编辑布局里右键余额修改。 */
+    public String shopCurrency = "";
+
     /** 幂等键保留上限（防无限增长）。 */
     public static final int API_REQUESTS_MAX = 4000;
 
@@ -220,6 +223,8 @@ public final class ShopSavedData extends SavedData {
             apiRequestList.add(StringTag.valueOf(key));
         }
         tag.put("apiRequests", apiRequestList);
+        // 自定义货币名（追加字段，老存档没有就是空 = 用配置值）
+        tag.putString("shopCurrency", shopCurrency == null ? "" : shopCurrency);
         ListTag exchangeList = new ListTag();
         for (ExchangeEntry entry : exchangePool) {
             exchangeList.add(entry.save(registries));
@@ -305,6 +310,7 @@ public final class ShopSavedData extends SavedData {
             data.demands.add(DemandEntry.load(demandList.getCompound(i), registries));
         }
         data.demandCounter = Math.max(1L, tag.getLong("demandCounter"));
+        data.shopCurrency = tag.getString("shopCurrency");
         ListTag apiRequestList = tag.getList("apiRequests", Tag.TAG_STRING);
         for (int i = 0; i < apiRequestList.size(); i++) {
             data.apiRequests.add(apiRequestList.getString(i));

@@ -135,7 +135,7 @@ public final class ShopCommands {
                             ctx.getSource().sendSuccess(() -> Component.translatable(
                                     "msg.module_shop.balance",
                                     ShopManager.balanceOf(player),
-                                    Config.INSTANCE.currencyName.get()), false);
+                                    ShopManager.currencyName(ctx.getSource().getServer())), false);
                             return 1;
                         }))
                         .then(Commands.literal("pay")

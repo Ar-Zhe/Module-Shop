@@ -51,7 +51,12 @@ public class ScheduleRewardScreen extends Screen {
         this.hour = act == null ? -1 : act.hour;
     }
 
+    /** 优先读草稿（正在编辑的值），没有草稿才读正式日程。 */
     private static ClientShopData.ActivityView find(long day) {
+        ClientShopData.ActivityView draft = ClientShopData.activityDraft;
+        if (draft != null && draft.day == day) {
+            return draft;
+        }
         for (ClientShopData.ActivityView view : ClientShopData.activityDays) {
             if (view.day == day) {
                 return view;
@@ -285,10 +290,9 @@ public class ScheduleRewardScreen extends Screen {
     }
 
     /**
-     * 保存：只写**本界面负责的字段**（定时发放 / 补发离线 / 错过即补发）。
+     * 保存：**只改草稿**（定时发放 / 补发离线 / 错过即补发），不发布日程。
      * <p>
-     * 标题、正文、颜色由「日程编辑」界面写，星币与物品由「日程奖励」容器界面写 ——
-     * 每个界面只提交自己的键，服务端对未携带的字段保持原值，谁都不会把别人的编辑覆盖掉。
+     * 真正写进日程并广播给所有玩家的是「日程编辑」界面的「保存」，这里只是把规则记进草稿。
      */
     private void save() {
         CompoundTag tag = new CompoundTag();
@@ -296,7 +300,7 @@ public class ScheduleRewardScreen extends Screen {
         tag.putString("hour", this.hour < 0 ? "" : Integer.toString(this.hour));
         tag.putString("offline", this.offline ? "true" : "false");
         tag.putString("catchUp", this.catchUp ? "true" : "false");
-        tag.putString("action", "admin_signin_day_set");
+        tag.putString("action", "admin_signin_draft_set");
         ServerboundShopActionPayload.send(tag);
         Nav.back();
     }

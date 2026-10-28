@@ -111,7 +111,8 @@ public final class ApiImpl {
                 return null;
             }
             long max = Config.maxBalanceLimit();
-            return new BalanceView(account.balance, max == Long.MAX_VALUE ? 0L : max, ShopManager.currencyName());
+            return new BalanceView(account.balance, max == Long.MAX_VALUE ? 0L : max,
+                    ShopManager.currencyName(server));
         }
 
         @Override

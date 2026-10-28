@@ -8,7 +8,10 @@ public enum NotificationType {
     MAIL("mail"),
     AUCTION("auction"),
     STALL("stall"),
+    /** 每日商店：新的一天刷新了货架。 */
     SHOP("shop"),
+    /** 每日收购：新的一天刷新了收购清单（和每日商店分开计数，红点不会一起亮）。 */
+    BUYBACK("buyback"),
     WALLET("wallet"),
     TRADE("trade");
 

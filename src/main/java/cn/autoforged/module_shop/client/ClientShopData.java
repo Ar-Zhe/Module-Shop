@@ -132,6 +132,8 @@ public final class ClientShopData {
     /** 购物城库存周期刷新：off / real / game + 周期（real=小时、game=天）。 */
     public static String mallRefreshMode = "off";
     public static int mallRefreshAmount = 24;
+    /** 购物城库存是不是「个人库存」（服务端下发；个人库存时每件商品的 stock 是**自己**的剩余量）。 */
+    public static boolean mallStockPersonal;
     /**
      * 摊位自动下架方式（服务端配置下发）：{@code permanent} / {@code game} / {@code real}。
      * <p>摊位页据此显示每件商品的剩余时间；{@code permanent} 时不显示。
@@ -219,8 +221,18 @@ public final class ClientShopData {
     public static long[] signInTierBonus = {5L, 7L, 10L};
     public static int[] signInMileDays = {3, 5, 7};
     public static long[] signInMileMoney = {100L, 300L, 800L};
+    /** 里程轮次长度（默认 7 天一轮）：进度条按「本轮第几天」画，满一轮就重新从 0 开始。 */
+    public static int signInCycleDays = 7;
     /** 活动日（需求 7）：日期 epochDay → {标题, 公告, 金额, 是否已领}。 */
     public static List<ActivityView> activityDays = new ArrayList<>();
+    /**
+     * 管理员正在编辑的日程**草稿**（服务端只发给正在编辑的那个管理员）。
+     *
+     * <p>日程编辑的三个界面（编辑 / 奖励设置 / 奖励容器）都只改这份草稿，
+     * 只有编辑界面点「保存」才真正写进 {@link #activityDays} 并广播给所有玩家。
+     * {@code null} = 当前没有草稿。
+     */
+    public static ActivityView activityDraft;
     /**
      * 侧栏自定义顺序（页签 id 列表）。服务端权威：管理员拖拽排序后保存并热同步给所有玩家。
      * <p>
@@ -235,6 +247,8 @@ public final class ClientShopData {
      * <p>没改过的模块不在这个表里，界面退回 lang 里的默认翻译名。
      */
     public static java.util.Map<String, String> sidebarNames = new java.util.LinkedHashMap<>();
+    /** 商店主标题（左上角）；空 = 用默认「模块商店」。 */
+    public static String shopTitle = "";
 
     /** 某个模块的自定义名；没改过返回 {@code null}。 */
     public static String sidebarNameOf(String id) {
@@ -327,6 +341,28 @@ public final class ClientShopData {
         billUpdatedAt = System.currentTimeMillis();
     }
 
+    /** 解析服务端下发的日程编辑草稿（kind=activity_draft；day<=0 表示草稿已清空）。 */
+    private static void applyActivityDraft(CompoundTag c) {
+        long day = c.getLong("day");
+        if (day <= 0L) {
+            activityDraft = null;
+            return;
+        }
+        ActivityView view = new ActivityView();
+        view.day = day;
+        view.title = c.getString("title");
+        view.note = c.getString("note");
+        view.money = c.getLong("money");
+        view.forOffline = c.getBoolean("forOffline");
+        view.granted = false;
+        view.catchUp = !c.contains("catchUp") || c.getBoolean("catchUp");
+        view.itemText = c.getString("item");
+        view.itemIds = c.getString("itemIds");
+        view.color = c.getInt("color");
+        view.hour = c.contains("hour") ? c.getInt("hour") : -1;
+        activityDraft = view;
+    }
+
     private ClientShopData() {
     }
 
@@ -340,12 +376,19 @@ public final class ClientShopData {
             applyRedeemDraft(tag);
             return;
         }
+        // 日程编辑草稿：同样是小包（只有管理员会收到），只影响编辑界面看到的数值。
+        if ("activity_draft".equals(tag.getString("kind"))) {
+            applyActivityDraft(tag);
+            return;
+        }
         balance = tag.getLong("balance");
         maxBalance = tag.contains("maxBalance") ? tag.getLong("maxBalance") : 0L;
         currency = tag.getString("currency");
         symbol = tag.getString("symbol");
         // 需求 6：统一金钱后缀（如“星币”）。
         moneySuffix = tag.contains("moneySuffix") ? tag.getString("moneySuffix") : currency;
+        // 管理员改过货币名时，把语言表里写死的「星币」统一换掉（聊天与界面文案一起生效）。
+        CurrencyNames.apply(moneySuffix);
         canAdmin = tag.getBoolean("canAdmin");
         defaultTab = tag.getString("defaultTab");
         playerName = tag.getString("playerName");
@@ -410,6 +453,7 @@ public final class ClientShopData {
         }
         // 模块自定义名（改名后所有界面都用它显示）
         sidebarNames = new java.util.LinkedHashMap<>();
+        shopTitle = tag.getCompound("sidebarLayout").getString("title");
         CompoundTag nameTag = tag.getCompound("sidebarLayout").getCompound("names");
         for (String key : nameTag.getAllKeys()) {
             String value = nameTag.getString(key);
@@ -445,6 +489,7 @@ public final class ClientShopData {
         if (md.length > 0) { signInMileDays = md; }
         long[] mm = tag.getLongArray("signInMileMoney");
         if (mm.length > 0) { signInMileMoney = mm; }
+        signInCycleDays = tag.contains("signInCycleDays") ? Math.max(1, tag.getInt("signInCycleDays")) : 7;
         buybackBonusDone = tag.getBoolean("buybackBonusDone");
         buybackLeft = tag.getInt("buybackLeft");
 
@@ -532,7 +577,11 @@ public final class ClientShopData {
         List<MailEntry> newMail = new ArrayList<>();
         ListTag mailTag = tag.getList("mail", Tag.TAG_COMPOUND);
         for (int i = 0; i < mailTag.size(); i++) {
-            newMail.add(MailEntry.load(mailTag.getCompound(i), registries));
+            MailEntry entry = MailEntry.load(mailTag.getCompound(i), registries);
+            // 邮件标题/正文是服务端拼好的**纯文本**（不走语言表），所以这里单独替换货币名。
+            entry.title = CurrencyNames.text(entry.title);
+            entry.content = CurrencyNames.text(entry.content);
+            newMail.add(entry);
         }
         mail = newMail;
 
@@ -607,6 +656,7 @@ public final class ClientShopData {
         mallRestockAmount = tag.getInt("mallRestockAmount");
         mallRefreshMode = tag.contains("mallRefreshMode") ? tag.getString("mallRefreshMode") : "off";
         mallRefreshAmount = tag.contains("mallRefreshAmount") ? tag.getInt("mallRefreshAmount") : 24;
+        mallStockPersonal = tag.getBoolean("mallStockPersonal");
         stallExpireMode = tag.contains("stallExpireMode") ? tag.getString("stallExpireMode") : "permanent";
         stallExpireAmount = tag.contains("stallExpireAmount") ? tag.getInt("stallExpireAmount") : 7;
         // 玩家求购

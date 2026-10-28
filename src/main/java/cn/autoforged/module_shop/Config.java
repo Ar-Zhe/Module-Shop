@@ -73,6 +73,8 @@ public final class Config {
     /** 购物城：库存刷新方式（off / real / game）与周期（real=小时、game=天）。 */
     public final ModConfigSpec.ConfigValue<String> mallRefreshMode;
     public final ModConfigSpec.IntValue mallRefreshAmount;
+    /** 购物城库存模式：global = 全服共用一份库存 / personal = 每个玩家各自一份库存。 */
+    public final ModConfigSpec.ConfigValue<String> mallStockMode;
     public final ModConfigSpec.ConfigValue<String> stallExpireMode;
     /** 限时时长：game 按游戏天数，real 按现实小时（0 = 永不自动下架）。 */
     public final ModConfigSpec.IntValue stallExpireAmount;
@@ -299,6 +301,9 @@ public final class Config {
                 .define("mallRefreshMode", "off");
         mallRefreshAmount = builder.comment("库存刷新周期：real 按小时、game 按游戏天数（默认 24 小时 / 1 天）")
                 .defineInRange("mallRefreshAmount", 24, 1, 100000);
+        mallStockMode = builder.comment("购物城库存模式：global = 全服共用一份库存（谁先买谁先得）"
+                        + " / personal = 每个玩家各自一份库存（互不影响，刷新或补货时每人恢复）")
+                .define("mallStockMode", "global");
         mallRestockAmount = builder.comment("补货数量：0 = 每件商品补回各自原量；>0 = 所有商品统一补到该数量")
                 .defineInRange("mallRestockAmount", 0, 0, 1000000);
         builder.pop();
@@ -492,6 +497,15 @@ public final class Config {
 
     public static boolean mallRefreshActive() {
         return !"off".equals(mallRefreshMode());
+    }
+
+    /** 购物城库存是不是「个人库存」（每个玩家各自一份；全服共用时返回 false）。 */
+    public static boolean mallStockPersonal() {
+        String mode = INSTANCE.mallStockMode.get();
+        if (mode == null) {
+            return false;
+        }
+        return "personal".equals(mode.trim().toLowerCase(java.util.Locale.ROOT));
     }
 
     /** 现实时间周期（毫秒）。 */

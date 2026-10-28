@@ -51,6 +51,26 @@ public final class SidebarLayout {
     /** 自定义名称的最大长度（侧栏一行放得下；再长会省略号截断）。 */
     public static final int MAX_NAME = 12;
 
+    /** 商店**主标题**（左上角那个名字）的自定义值；空 = 用 lang 默认「模块商店」。 */
+    private String shopTitle = "";
+
+    /** 主标题最大长度（标题行比页签宽，可放 16 个字）。 */
+    public static final int MAX_TITLE = 16;
+
+    /** 自定义主标题；没设置返回 {@code null}。 */
+    public String shopTitle() {
+        return this.shopTitle == null || this.shopTitle.isBlank() ? null : this.shopTitle;
+    }
+
+    /** 设置主标题；空白 = 恢复默认。返回是否真的改了。 */
+    public boolean setShopTitle(String raw) {
+        String text = sanitizeFull(raw);
+        String clean = text.length() > MAX_TITLE ? text.substring(0, MAX_TITLE) : text;
+        String previous = this.shopTitle == null ? "" : this.shopTitle;
+        this.shopTitle = clean;
+        return !clean.equals(previous);
+    }
+
     public List<String> order() {
         return this.order;
     }
@@ -112,7 +132,7 @@ public final class SidebarLayout {
     }
 
     public boolean isEmpty() {
-        return this.order.isEmpty() && this.hidden.isEmpty() && this.names.isEmpty();
+        return this.order.isEmpty() && this.hidden.isEmpty() && this.names.isEmpty() && this.shopTitle.isBlank();
     }
 
     public void clear() {
@@ -183,6 +203,7 @@ public final class SidebarLayout {
             }
         }
         tag.put("names", nameTag);
+        tag.putString("title", this.shopTitle == null ? "" : this.shopTitle);
         return tag;
     }
 
@@ -207,6 +228,7 @@ public final class SidebarLayout {
         for (String id : nameTag.getAllKeys()) {
             layout.setName(id, nameTag.getString(id));
         }
+        layout.setShopTitle(tag.getString("title"));
         return layout;
     }
 }

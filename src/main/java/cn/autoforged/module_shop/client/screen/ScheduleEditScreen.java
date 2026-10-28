@@ -45,11 +45,32 @@ public class ScheduleEditScreen extends Screen {
         super(Component.translatable("gui.module_shop.signin.activity"));
         this.day = day;
         ClientShopData.ActivityView act = find(day);
-        this.existed = act != null;
         this.color = act == null || act.color == 0 ? PALETTE[0] : act.color;
+        // 「删除该日程」只看**正式日程**是否存在（草稿是新拉的，新日期也有草稿）。
+        this.existed = published(day) != null;
+        // 让服务端为本管理员建一份草稿：之后所有界面都只改草稿，点「保存」才发布。
+        CompoundTag open = new CompoundTag();
+        open.putLong("day", day);
+        open.putString("action", "admin_signin_draft_open");
+        ServerboundShopActionPayload.send(open);
     }
 
+    /** 正式（已发布）日程里有没有这一天。 */
+    private static ClientShopData.ActivityView published(long day) {
+        for (ClientShopData.ActivityView view : ClientShopData.activityDays) {
+            if (view.day == day) {
+                return view;
+            }
+        }
+        return null;
+    }
+
+    /** 优先读草稿（正在编辑的值），没有草稿才读正式日程。 */
     private static ClientShopData.ActivityView find(long day) {
+        ClientShopData.ActivityView draft = ClientShopData.activityDraft;
+        if (draft != null && draft.day == day) {
+            return draft;
+        }
         for (ClientShopData.ActivityView view : ClientShopData.activityDays) {
             if (view.day == day) {
                 return view;
@@ -237,12 +258,16 @@ public class ScheduleEditScreen extends Screen {
                 ServerboundShopActionPayload.send(tag);
                 Nav.back();
             }
-            case "cancel" -> onClose();
+            case "cancel" -> {
+                // 取消 = 丢掉草稿，正式日程保持不变（以前这里是「什么都不做」，草稿会残留）。
+                CompoundTag discard = new CompoundTag();
+                discard.putLong("day", this.day);
+                discard.putString("action", "admin_signin_day_discard");
+                ServerboundShopActionPayload.send(discard);
+                Nav.back();
+            }
             case "reward" -> {
-                // 进奖励界面之前先把标题/正文/颜色存下来（标题为空时不提交，避免把已有标题清掉）。
-                if (ready()) {
-                    sendDay();
-                }
+                // 进奖励界面**不再**提交标题/正文/颜色：那些等本界面点「保存」时才发布。
                 Nav.open(new ScheduleRewardScreen(this.day, this.color, this.titleBox.getValue(),
                         this.bodyBox.getValue()));
             }

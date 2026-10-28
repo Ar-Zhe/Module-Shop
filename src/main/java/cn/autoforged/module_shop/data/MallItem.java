@@ -2,6 +2,8 @@ package cn.autoforged.module_shop.data;
 
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.world.item.ItemStack;
 
 /**
@@ -29,6 +31,15 @@ public final class MallItem {
     public int stockMax = -1;
     /** 上架顺序（用于"默认排序"，同一次整模组导入保持注册表顺序）。 */
     public int sort = 0;
+    /**
+     * 「个人库存」模式下**每个玩家已经买走的件数**（玩家 → 已买）。
+     *
+     * <p>个人库存时 {@link #stock} 表示「每个玩家各自的上限」，不再被购买直接扣减；
+     * 某玩家还剩几件 = {@code stock - 已买}（见 {@link #remainingFor}）。
+     * 全服库存模式完全不看这张表，它只是留在存档里，切回个人库存时继续生效。
+     * 刷新 / 补货（{@link #clearPersonalUsed}）时整张表清空 = 每个人的库存都恢复。
+     */
+    public final java.util.Map<java.util.UUID, Integer> personalUsed = new java.util.LinkedHashMap<>();
 
     public MallItem() {
     }
@@ -59,6 +70,31 @@ public final class MallItem {
         return stock < 0 ? Integer.MAX_VALUE : Math.max(0, stock);
     }
 
+    /**
+     * 「个人库存」模式下某个玩家还剩几件：无限库存返回 {@code -1}；
+     * 其余返回 {@code [0, stock]}（管理员事后把库存调小时不会出现负数）。
+     */
+    public int remainingFor(java.util.UUID playerId) {
+        if (stock < 0) {
+            return -1;
+        }
+        int used = playerId == null ? 0 : this.personalUsed.getOrDefault(playerId, 0);
+        return Math.max(0, stock - used);
+    }
+
+    /** 记某个玩家在「个人库存」模式下买走了 {@code count} 件。 */
+    public void addPersonalUsed(java.util.UUID playerId, int count) {
+        if (playerId == null || count <= 0) {
+            return;
+        }
+        this.personalUsed.merge(playerId, count, Integer::sum);
+    }
+
+    /** 清空所有玩家的已买记录（刷新 / 补货时调用 = 每个人的库存都补回原量）。 */
+    public void clearPersonalUsed() {
+        this.personalUsed.clear();
+    }
+
     public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
         tag.putLong("price", price);
@@ -66,6 +102,39 @@ public final class MallItem {
         tag.putInt("stock", stock);
         tag.putInt("stockMax", stockMax);
         tag.putInt("sort", sort);
+        // 个人库存：每个玩家买了多少（空表不写，全服库存模式下这一段永远是空的）
+        if (!personalUsed.isEmpty()) {
+            ListTag usedList = new ListTag();
+            for (java.util.Map.Entry<java.util.UUID, Integer> entry : personalUsed.entrySet()) {
+                if (entry.getKey() == null || entry.getValue() == null || entry.getValue() <= 0) {
+                    continue;
+                }
+                CompoundTag used = new CompoundTag();
+                used.putUUID("player", entry.getKey());
+                used.putInt("used", entry.getValue());
+                usedList.add(used);
+            }
+            if (!usedList.isEmpty()) {
+                tag.put("personalUsed", usedList);
+            }
+        }
+        return tag;
+    }
+
+    /**
+     * 下发给**某个玩家**的货架数据：与 {@link #save} 相同，但
+     * <ul>
+     *     <li>永远不带 {@code personalUsed}（别人买走了多少既没必要下发，也能省流量）；</li>
+     *     <li>「个人库存」模式时把 {@code stock} 换成**该玩家自己的剩余量**。</li>
+     * </ul>
+     * 客户端只认 {@code stock} 字段，所以界面代码不需要区分两种模式。
+     */
+    public CompoundTag saveForView(HolderLookup.Provider registries, java.util.UUID viewer, boolean personal) {
+        CompoundTag tag = save(registries);
+        tag.remove("personalUsed");
+        if (personal) {
+            tag.putInt("stock", remainingFor(viewer));
+        }
         return tag;
     }
 
@@ -79,6 +148,18 @@ public final class MallItem {
         // 老存档没有 stockMax：把当前库存当成补货目标（第一次补货时补回这个数）。
         item.stockMax = tag.contains("stockMax") ? tag.getInt("stockMax") : item.stock;
         item.sort = tag.getInt("sort");
+        // 个人库存的已买记录（老存档没有这一段 = 还没人买过）
+        ListTag usedList = tag.getList("personalUsed", Tag.TAG_COMPOUND);
+        for (int i = 0; i < usedList.size(); i++) {
+            CompoundTag used = usedList.getCompound(i);
+            if (!used.hasUUID("player")) {
+                continue;
+            }
+            int count = used.getInt("used");
+            if (count > 0) {
+                item.personalUsed.merge(used.getUUID("player"), count, Integer::sum);
+            }
+        }
         return item;
     }
 }
