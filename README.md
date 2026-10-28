@@ -7,12 +7,12 @@ per-IP alt-account control and a day/dark GUI theme.
 Fully server-authoritative, bilingual GUI (English / 简体中文).
 → **Full description: [DESCRIPTION.md](DESCRIPTION.md)**
 
-**中文** — 一个面向 **NeoForge 1.21.1 / Arclight 服务端** 的完整经济系统模组：每日商店（含付费刷新）、
+**中文** — 一个面向 **NeoForge 1.21.1 ** 的完整经济系统模组：每日商店（含付费刷新）、
 每日收购（含全清奖励）、拍卖行、玩家摊位、玩家交易与转账、邮箱、**货币兑换（物品 ⇄ 星币）**、
 管理员发放（图形界面）、交易流水、同 IP 多账号管控、日间/暗色界面主题。数值全部服务端权威，界面中英双语。
 → **完整描述见 [DESCRIPTION.md](DESCRIPTION.md)**
 
-> 本模组即 **Module-Shop（模块商店）**。项目早期曾用过其它 modid 的旧版本，旧存档请继续使用旧版本。
+> 本模组大量使用AI代码，前身为 **Module-Shop（模块商店）**。项目早期曾用过其它 modid 的旧版本，旧存档请继续使用旧版本。
 
 [![Build](https://github.com/Ar-Zhe/Module-Shop/actions/workflows/build.yml/badge.svg)](https://github.com/Ar-Zhe/Module-Shop/actions/workflows/build.yml)
 
