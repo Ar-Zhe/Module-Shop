@@ -24,6 +24,12 @@ public class RedeemEditScreen extends Screen {
 
     private final CompoundTag data;
     private final String code;
+    /**
+     * 输入框内容的**本地草稿**（纯界面状态，不进存档）。去「奖励配置」容器界面再回来时，
+     * 本界面会被重新 {@code init()}、输入框全部重建，靠它把刚改的内容填回去。
+     */
+    private static CompoundTag inputStash;
+    private static String inputStashCode = "";
     private final List<Region> regions = new ArrayList<>();
     private EditBox perPlayerBox;
     private EditBox totalBox;
@@ -65,6 +71,10 @@ public class RedeemEditScreen extends Screen {
 
     @Override
     public void onClose() {
+        // 取消/关闭 = 放弃这次编辑：本地草稿丢掉，也通知服务端丢掉草稿（兑换码本身不动）。
+        inputStash = null;
+        inputStashCode = "";
+        send("admin_redeem_draft_discard", null);
         Nav.back();
     }
 
@@ -81,6 +91,8 @@ public class RedeemEditScreen extends Screen {
         this.totalBox.setValue(Integer.toString(Math.max(0, this.data.getInt("total"))));
         this.titleBox.setValue(this.data.getString("title"));
         this.noteBox.setValue(this.data.getString("note"));
+        // 从「奖励配置」回来时，界面会被重建：用本地草稿把刚才改的内容填回去。
+        restoreInputStash();
         this.setInitialFocus(this.titleBox);
         // 拉一次奖励内容：编辑界面上的摘要显示的是这个兑换码当前的物品 / 星币 / 玩家。
         CompoundTag request = new CompoundTag();
@@ -229,10 +241,45 @@ public class RedeemEditScreen extends Screen {
 
     /** 进「奖励配置」界面：带上 code，服务端就知道是在改这个兑换码而不是在配新码。 */
     private void openRewardEditor() {
+        saveInputStash();
         RedeemRewardEditorScreen.setReturnTo(this);
         CompoundTag tag = new CompoundTag();
         tag.putString("code", this.code);
         send("admin_redeem_reward_open", tag);
+    }
+
+    /** 把输入框内容存进本地草稿（只是界面状态，不发布、不落库）。 */
+    private void saveInputStash() {
+        CompoundTag tag = new CompoundTag();
+        tag.putString("days", Integer.toString(this.days));
+        tag.putString("perPlayer", this.perPlayerBox.getValue());
+        tag.putString("total", this.totalBox.getValue());
+        tag.putString("title", this.titleBox.getValue());
+        tag.putString("note", this.noteBox.getValue());
+        inputStash = tag;
+        inputStashCode = this.code;
+    }
+
+    /** 从本地草稿回填输入框（只回填同一个兑换码的草稿）。 */
+    private void restoreInputStash() {
+        if (inputStash == null || !this.code.equals(inputStashCode)) {
+            return;
+        }
+        try {
+            this.days = Integer.parseInt(inputStash.getString("days"));
+        } catch (NumberFormatException ignored) {
+            // 草稿里的天数坏了就保持原值
+        }
+        String perPlayer = inputStash.getString("perPlayer");
+        String total = inputStash.getString("total");
+        if (!perPlayer.isEmpty()) {
+            this.perPlayerBox.setValue(perPlayer);
+        }
+        if (!total.isEmpty()) {
+            this.totalBox.setValue(total);
+        }
+        this.titleBox.setValue(inputStash.getString("title"));
+        this.noteBox.setValue(inputStash.getString("note"));
     }
 
     private void save() {
@@ -244,6 +291,9 @@ public class RedeemEditScreen extends Screen {
         tag.putString("title", this.titleBox.getValue().trim());
         tag.putString("note", this.noteBox.getValue().trim());
         send("admin_redeem_update", tag);
+        // 保存 = 已发布，本地草稿丢弃。
+        inputStash = null;
+        inputStashCode = "";
         // 保存后回到列表（列表会自动刷新成新数据；服务端也会发一条聊天提示）。
         Nav.back();
     }

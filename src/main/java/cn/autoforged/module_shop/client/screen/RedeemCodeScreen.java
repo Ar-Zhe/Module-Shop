@@ -30,6 +30,11 @@ public class RedeemCodeScreen extends Screen {
     private int shakeTicks;
     /** 粘贴按钮命中区（输入框右侧的小图标）。 */
     private final int[] pasteRect = new int[4];
+    /**
+     * 已输入的兑换码（纯界面状态）：从这里点「生成器 / 列表」再回来时本界面会被重新 init()，
+     * 不存一份刚敲的码就没了。
+     */
+    private static String codeStash;
 
     public RedeemCodeScreen() {
         super(Component.translatable("gui.module_shop.redeem.title"));
@@ -47,6 +52,9 @@ public class RedeemCodeScreen extends Screen {
         this.box.setMaxLength(48);
         this.box.setHint(Component.translatable("gui.module_shop.redeem.hint"));
         this.box.setBordered(false);
+        if (codeStash != null && !codeStash.isEmpty()) {
+            this.box.setValue(codeStash);   // 从生成器/列表返回：把刚输入的码填回去
+        }
         this.addRenderableWidget(this.box);
         this.setInitialFocus(this.box);
     }
@@ -59,6 +67,7 @@ public class RedeemCodeScreen extends Screen {
     @Override
     public void onClose() {
         open = null;
+        codeStash = null;   // 真正离开这个界面：下次进来是干净的
         Nav.back();
     }
 
@@ -216,6 +225,7 @@ public class RedeemCodeScreen extends Screen {
             }
             if (button == 0 && "open_generator".equals(region.action)) {
                 Bricks.click();
+                codeStash = this.box.getValue();
                 Nav.open(new RedeemGeneratorScreen());
                 return true;
             }

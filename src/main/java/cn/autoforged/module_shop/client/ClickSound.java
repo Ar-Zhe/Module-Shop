@@ -24,7 +24,8 @@ public final class ClickSound {
 
     /** 可选音效列表（第一个是模组自带音效）。 */
     public static final Option[] OPTIONS = {
-            new Option("custom", "custom", 1.0F, 1.0F),
+            // 自带点击音本身已经比较"满"，音量给 0.55 就够：满音量叠上界面其它声音会削波（听起来就是破音）。
+            new Option("custom", "custom", 0.55F, 1.0F),
             new Option("wooden", "minecraft:block.wooden_button.click_on", 0.45F, 1.35F),
             new Option("ui", "minecraft:ui.button.click", 0.40F, 1.20F),
             new Option("stone", "minecraft:block.stone_button.click_on", 0.35F, 1.55F),
@@ -35,6 +36,12 @@ public final class ClickSound {
             new Option("orb", "minecraft:entity.experience_orb.pickup", 0.30F, 1.60F),
             new Option("book", "minecraft:item.book.page_turn", 0.45F, 1.25F),
     };
+
+    /** 两个点击音之间至少隔这么久：一次点击可能被区域和按钮各触发一次，叠在一起就会破音。 */
+    private static final long MIN_GAP_MS = 50L;
+    /** 播放音量上限：留足余量，避免和界面里别的声音叠加后削波。 */
+    private static final float MAX_VOLUME = 0.8F;
+    private static long lastPlayMs;
 
     private static final String FILE_NAME = "module_shop_click_sound.txt";
     /** 配置版本：改动默认点击音效时 +1，老配置会自动切回新默认音。 */
@@ -128,6 +135,13 @@ public final class ClickSound {
     /** 播放当前点击音效。 */
     public static void play() {
         ensureLoaded();
+        // 同一次点击可能先命中区域、又命中按钮（或连点两下）：50ms 内只响一次，
+        // 否则两个相同的声音会叠在一起把波形推爆，听起来就是"破音"。
+        long now = System.currentTimeMillis();
+        if (now - lastPlayMs < MIN_GAP_MS) {
+            return;
+        }
+        lastPlayMs = now;
         Option option = current();
         try {
             SoundEvent event;
@@ -141,7 +155,7 @@ public final class ClickSound {
                 return;
             }
             Minecraft.getInstance().getSoundManager().play(
-                    SimpleSoundInstance.forUI(event, option.pitch(), option.volume()));
+                    SimpleSoundInstance.forUI(event, option.pitch(), Math.min(MAX_VOLUME, option.volume())));
         } catch (Exception ignored) {
         }
     }

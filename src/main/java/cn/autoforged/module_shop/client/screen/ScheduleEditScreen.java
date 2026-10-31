@@ -267,7 +267,10 @@ public class ScheduleEditScreen extends Screen {
                 Nav.back();
             }
             case "reward" -> {
-                // 进奖励界面**不再**提交标题/正文/颜色：那些等本界面点「保存」时才发布。
+                // 进奖励界面之前先把当前填写的内容记进**服务端草稿**：
+                // 界面在来回切换时会被重新 init()（输入框按草稿值重建），
+                // 不记草稿的话刚输入的标题/公告正文会因为界面重建而丢掉。
+                sendDraft();
                 Nav.open(new ScheduleRewardScreen(this.day, this.color, this.titleBox.getValue(),
                         this.bodyBox.getValue()));
             }
@@ -284,13 +287,25 @@ public class ScheduleEditScreen extends Screen {
 
     /** 把标题/正文/颜色发给服务端；只带这几个键，服务端对未携带的字段保持原值。 */
     private void sendDay() {
+        CompoundTag tag = draftTag();
+        tag.putString("action", "admin_signin_day_set");
+        ServerboundShopActionPayload.send(tag);
+    }
+
+    /** 只写草稿（不发布）：离开本界面去配奖励时用，返回后输入框能回填回来。 */
+    private void sendDraft() {
+        CompoundTag tag = draftTag();
+        tag.putString("action", "admin_signin_draft_set");
+        ServerboundShopActionPayload.send(tag);
+    }
+
+    private CompoundTag draftTag() {
         CompoundTag tag = new CompoundTag();
         tag.putLong("day", this.day);
         tag.putString("title", this.titleBox.getValue().trim());
         tag.putString("note", this.bodyBox.getValue().trim());
         tag.putString("color", String.format("#%06X", this.color & 0xFFFFFF));
-        tag.putString("action", "admin_signin_day_set");
-        ServerboundShopActionPayload.send(tag);
+        return tag;
     }
 
     private record Region(int x, int y, int w, int h, String action, String rightAction, CompoundTag extra) {

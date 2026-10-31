@@ -494,27 +494,18 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     }
 
     /**
-     * 模块显示名：**改过名就用新名字**，否则用默认翻译名。
+     * 模块显示名：一律用语言文件里的默认名。
      *
-     * <p>侧栏页签、页面标题等"玩家日常看到"的地方用它（只显示新名字，省地方）。
+     * <p>「右键重命名模块」这个功能已经去掉了：模块名和商店主标题不再混在一起，
+     * 只保留左上角「模块商店」主标题可以改（编辑布局 → 右键主标题）。
      */
     private static Component tabLabel(String id) {
-        String custom = ClientShopData.sidebarNameOf(id);
-        return custom == null ? tabOriginal(id) : Component.literal(custom);
+        return tabOriginal(id);
     }
 
-    /**
-     * 管理语境下的模块名：**改过名时显示「新名（原名）」**，例如「每日任务（每日收购）」。
-     *
-     * <p>用在「商店设置」页（标题 / 当前编辑 / 选择模块下拉 / 模块管理），
-     * 这样管理员一眼能看出这个显示名对应哪个既有模块，不会因为改名而找不到东西。
-     */
+    /** 管理语境下的模块名（同样只用默认名）。 */
     private static Component tabLabelWithOriginal(String id) {
-        String custom = ClientShopData.sidebarNameOf(id);
-        if (custom == null) {
-            return tabOriginal(id);
-        }
-        return Component.translatable("gui.module_shop.name_with_original", custom, tabOriginal(id));
+        return tabOriginal(id);
     }
 
     private int left() {
@@ -784,19 +775,6 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 Integer.toString(SidebarLayout.MAX_TITLE)).getString());
         openInput("admin_shop_title_set", "gui.module_shop.input.shop_title", req, "name");
     }
-    /** 编辑模式右键页签：打开重命名输入框（留空 = 恢复原名）。 */
-    private void openTabRename(String id) {
-        if (id == null || id.isEmpty() || "admin".equals(id)) {
-            return;
-        }
-        CompoundTag req = new CompoundTag();
-        req.putString("tab", id);
-        String current = ClientShopData.sidebarNameOf(id);
-        req.putString("default_name", current == null ? "" : current);
-        req.putString("info", Component.translatable("gui.module_shop.rename_info",
-                tabOriginal(id), Integer.toString(SidebarLayout.MAX_NAME)).getString());
-        openInput("admin_sidebar_rename", "gui.module_shop.input.sidebar_rename", req, "name");
-    }
 
     /** 内容区顶部标题行：当前页标题 + 右侧「商店设置（管理员）/ 签到 / 交易 / 转账」药丸 + 提醒齿轮 + 关闭。 */
     private void drawHeader(GuiGraphics g, int x, int y, int contentX, int contentY, int contentW,
@@ -808,15 +786,6 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                         tabLabelWithOriginal(adminMode))
                 : tabLabel(currentTab);
         g.drawString(this.font, headerTitle, contentX, titleY, COLOR_TEXT, false);
-        // 管理员：**右键标题**即可重命名当前模块（和右键侧栏页签等效）。
-        if (ClientShopData.canAdmin && !"admin".equals(currentTab)) {
-            int titleW = this.font.width(headerTitle);
-            addRegion(contentX - 2, titleY - 2, titleW + 8, 12, null, "rename_current_tab", null);
-            if (IOStyle.inside(contentX - 2, titleY - 2, titleW + 8, 12, mouseX, mouseY)) {
-                g.renderTooltip(this.font,
-                        Component.translatable("gui.module_shop.rename_hint", tabOriginal(currentTab)), mouseX, mouseY);
-            }
-        }
         // 关闭（右上角的 ×）：直角方块 + 1px 硬边框
         int closeX = x + PANEL_W - 22;
         int closeY = y + 7;
@@ -936,7 +905,6 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         int first = Math.max(0, (int) Math.floor(this.sidebarScrollPx / pitch) - 1);
         int last = Math.min(tabs.size() - 1,
                 (int) Math.ceil((this.sidebarScrollPx + rowsFit * (float) pitch) / pitch));
-        String hoveredInEdit = null;
         for (int i = first; i <= last; i++) {
             String id = tabs.get(i);
             float slot = easeSlot(id, i, k);
@@ -959,9 +927,6 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             boolean selected = id.equals(currentTab);
             boolean hover = !selected && !editing && IOStyle.inside(tabX, ty, TAB_W, TAB_H, mouseX, mouseY);
             boolean dragging = id.equals(this.dragTab) && this.dragMoved;
-            if (editing && !dragging && IOStyle.inside(tabX, ty, TAB_W, TAB_H, mouseX, mouseY)) {
-                hoveredInEdit = id;
-            }
             drawOneTab(g, id, tabX, ty, TAB_W, TAB_H, selected, hover, !dragging, editing, dragging, mouseX, mouseY);
         }
         // 列表末尾预留的空槽（新模块默认落到这里），画一个虚线感的空框。
@@ -982,11 +947,6 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         }
         if (scissor) {
             g.disableScissor();
-        }
-        // 编辑模式悬停页签：提示"右键可以改名"（只能在裁剪区之外画提示框）。
-        if (hoveredInEdit != null) {
-            g.renderTooltip(this.font, Component.translatable("gui.module_shop.rename_hint",
-                    tabOriginal(hoveredInEdit)), mouseX, mouseY);
         }
         // 管理页入口只保留右上角那枚「商店设置」药丸（管理员可见）：
         // 侧栏这一行删掉了——模块多起来时它会和最后一个模块画在同一行、挡住对方。
@@ -2223,6 +2183,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     /** 求购页当前的「只看我的」过滤开关。 */
     private boolean demandOnlyMine;
+    /** 当前展开的求购单 id（点一行展开/收起，同一时间只展开一条）。 */
+    private String demandExpandedId;
 
     /** 当前显示的求购单（按过滤条件收好）。 */
     private List<cn.autoforged.module_shop.data.DemandEntry> visibleDemands() {
@@ -2303,34 +2265,49 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                             : "gui.module_shop.demand.empty"),
                     cx + cw / 2, cy + 50, COLOR_MUTED);
         }
-        int shown = Math.min(DEMAND_ROWS, Math.max(0, (ch - 24) / DEMAND_ROW_H));
-        for (int i = 0; i < shown && i < list.size(); i++) {
-            var entry = list.get(i);
-            int ry = listTop + i * DEMAND_ROW_H;
-            boolean hover = IOStyle.inside(cx + 4, ry, rowW, DEMAND_ROW_H - 2, mx, my);
-            IOStyle.rounded(g, cx + 4, ry, rowW, DEMAND_ROW_H - 2, 0, hover ? IOStyle.ROW_HOVER : IOStyle.SIDEBAR);
-            IOStyle.ring(g, cx + 4, ry, rowW, DEMAND_ROW_H - 2, 0, IOStyle.BORDER_DIM);
+        var self = this.minecraft == null || this.minecraft.player == null ? null : this.minecraft.player.getUUID();
+        int bottom = cy + ch - 20;   // 底栏留给「发起求购 / 只看我的」
+        int y = listTop;
+        for (var entry : list) {
+            boolean mine = self != null && self.equals(entry.requester);
+            boolean expanded = entry.id != null && entry.id.equals(this.demandExpandedId);
+            int headH = DEMAND_ROW_H - 2;
+            int detailH = expanded ? demandDetailHeight(entry) : 0;
+            if (y + headH + detailH > bottom) {
+                break;   // 放不下就不画（展开时优先保证这一条完整显示）
+            }
+            boolean hover = IOStyle.inside(cx + 4, y, rowW, headH, mx, my);
+            IOStyle.rounded(g, cx + 4, y, rowW, headH, 0,
+                    hover || expanded ? IOStyle.ROW_HOVER : IOStyle.SIDEBAR);
+            IOStyle.ring(g, cx + 4, y, rowW, headH, 0, IOStyle.BORDER_DIM);
             // 想要的物品图标 + 数量
             ItemStack want = entry.wants.isEmpty() ? ItemStack.EMPTY : entry.wants.get(0).display();
-            g.renderItem(want, cx + 6, ry + 2);
-            g.renderItemDecorations(this.font, want, cx + 6, ry + 2);
-            drawSmallLabel(g, cx + 26, ry + 3, entry.summary(), COLOR_TEXT);
+            g.renderItem(want, cx + 6, y + 2);
+            g.renderItemDecorations(this.font, want, cx + 6, y + 2);
+            drawSmallLabel(g, cx + 26, y + 3, entry.summary(), COLOR_TEXT);
             // 悬赏
-            drawSmallLabel(g, cx + 26, ry + 12, Component.translatable("gui.module_shop.demand.reward",
+            drawSmallLabel(g, cx + 26, y + 12, Component.translatable("gui.module_shop.demand.reward",
                     demandRewardLine(entry)), COLOR_GOLD);
             // 发布者 + 剩余时间（右侧对齐）
             String who = entry.requesterName == null || entry.requesterName.isBlank() ? "?" : entry.requesterName;
             Component remain = demandRemainText(entry);
             Component right = remain == null ? Component.literal(who)
                     : Component.literal(who + "  " + remain.getString());
-            int rightX = cx + 4 + rowW - 8 - (int) (this.font.width(right) * 0.8F);
-            drawSmallLabel(g, rightX, ry + 7, right, COLOR_MUTED);
+            int rightX = cx + 4 + rowW - 12 - (int) (this.font.width(right) * 0.8F);
+            drawSmallLabel(g, rightX, y + 7, right, COLOR_MUTED);
+            // 展开/收起指示（▾ 展开中，▸ 收起）
+            drawSmallLabel(g, cx + 4 + rowW - 10, y + 6,
+                    Component.literal(expanded ? "▾" : "▸"), COLOR_MUTED);
             CompoundTag extra = new CompoundTag();
             extra.putString("id", entry.id);
-            addRegion(cx + 4, ry, rowW - 2, DEMAND_ROW_H - 2, "demand_detail", null, extra);
+            addRegion(cx + 4, y, rowW - 2, headH, "demand_toggle", null, extra);
             if (hover) {
                 this.jeiHover = want;
             }
+            if (expanded) {
+                drawDemandDetail(g, entry, cx + 4, y + headH, rowW - 2, mine, mx, my);
+            }
+            y += headH + detailH + 2;
         }
         // 底栏按钮：发起求购 / 只看我的 / 提示
         int buttonY = barMid(cy, ch, 16);
@@ -2344,41 +2321,95 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 Component.translatable("gui.module_shop.demand.hint"), COLOR_MUTED);
     }
 
+    /** 展开区域高度：每行物品 16px（两列），底部留一行按钮。 */
+    private int demandDetailHeight(cn.autoforged.module_shop.data.DemandEntry entry) {
+        int rows = (Math.max(1, entry.wants.size()) + 1) / 2;
+        return 4 + rows * 16 + 18;
+    }
+
+    /**
+     * 展开的求购清单：逐条列出「想要的物品 ×N」+「需要 / 背包里有」+ √×。
+     *
+     * <p>物品按两列排（最多 12 条），右侧空白处放「交付」按钮 —— 数量全够才能点，
+     * 点了由服务端扣物品、发悬赏（客户端不做任何扣减，避免和服务端不一致）。
+     */
+    private void drawDemandDetail(GuiGraphics g, cn.autoforged.module_shop.data.DemandEntry entry,
+            int x, int y, int w, boolean mine, int mx, int my) {
+        IOStyle.rounded(g, x, y, w, demandDetailHeight(entry), 0, IOStyle.SLOT_INNER);
+        IOStyle.ring(g, x, y, w, demandDetailHeight(entry), 0, IOStyle.HAIR);
+        int colW = (w - 8) / 2;
+        boolean allEnough = true;
+        for (int i = 0; i < entry.wants.size(); i++) {
+            var line = entry.wants.get(i);
+            ItemStack template = line.stack.copy();
+            template.setCount(1);
+            int have = countInBag(template);
+            boolean enough = have >= line.count;
+            if (!enough) {
+                allEnough = false;
+            }
+            int col = i % 2;
+            int row = i / 2;
+            int cellX = x + 6 + col * colW;
+            int cellY = y + 4 + row * 16;
+            ItemStack icon = line.stack.copy();
+            icon.setCount(1);
+            g.renderItem(icon, cellX, cellY);
+            g.renderItemDecorations(this.font, icon, cellX, cellY);
+            // 名称 ×N（截断到列宽的一半，右边留给 需要/拥有）
+            Component name = IOStyle.ellipsize(this.font, plainNameComponent(line.stack),
+                    Math.max(24, colW - 18 - 56));
+            drawSmallLabel(g, cellX + 18, cellY + 3, name, COLOR_TEXT);
+            Component counts = Component.translatable("gui.module_shop.demand.need_have",
+                    line.count, have);
+            Component mark = Component.literal(" " + (enough ? "√" : "×"));
+            Component tail = Component.empty().append(counts).append(mark);
+            int tailX = cellX + colW - 6 - (int) (this.font.width(tail) * 0.8F);
+            drawSmallLabel(g, tailX, cellY + 3, tail, enough ? IOStyle.GREEN : IOStyle.RED);
+            if (IOStyle.inside(cellX, cellY, colW - 4, 16, mx, my)) {
+                this.jeiHover = icon;
+                this.pendingItemTip = line.stack;   // 悬停看原版说明（含数量）
+            }
+        }
+        // 右下角的操作按钮：自己的 → 撤销；别人的 → 交付（数量不够时置灰不可点）
+        int by = y + demandDetailHeight(entry) - 17;
+        if (mine) {
+            addRegion(x + w - 8 - 60, by, 60, 15, "demand_cancel_go", null, demandIdTag(entry));
+            drawButton(g, x + w - 8 - 60, by, 60, 15, Component.translatable("gui.module_shop.demand.cancel_action"),
+                    true);
+        } else {
+            addRegion(x + w - 8 - 60, by, 60, 15, "demand_fulfill_go", null, demandIdTag(entry));
+            drawButton(g, x + w - 8 - 60, by, 60, 15,
+                    Component.translatable("gui.module_shop.demand.fulfill_action"), allEnough);
+        }
+    }
+
+    private static CompoundTag demandIdTag(cn.autoforged.module_shop.data.DemandEntry entry) {
+        CompoundTag tag = new CompoundTag();
+        tag.putString("id", entry.id);
+        return tag;
+    }
+
+    /** 背包里有多少个「同物品同组件」的堆（与服务器清点方式一致）。 */
+    private int countInBag(ItemStack template) {
+        if (this.minecraft == null || this.minecraft.player == null || template.isEmpty()) {
+            return 0;
+        }
+        int total = 0;
+        var inventory = this.minecraft.player.getInventory();
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            ItemStack stack = inventory.getItem(i);
+            if (!stack.isEmpty() && ItemStack.isSameItemSameComponents(stack, template)) {
+                total += stack.getCount();
+            }
+        }
+        return total;
+    }
+
     /** 发起求购：主手放「想要的物品」，副手放「愿意付出的物品」，这里填数量与金币。 */
     /** 发起求购：打开「物品搜索」选物界面（最多 12 种，各自填数量）。 */
     private void openDemandCreate() {
         Nav.open(new DemandCreateScreen());
-    }
-
-    /** 点一条求购：看详情并决定「交付」（别人的）或「撤销」（自己的）。 */
-    private void openDemandDetail(String id) {
-        cn.autoforged.module_shop.data.DemandEntry entry = null;
-        for (var candidate : ClientShopData.demands) {
-            if (candidate.id != null && candidate.id.equals(id)) {
-                entry = candidate;
-                break;
-            }
-        }
-        if (entry == null) {
-            return;
-        }
-        var self = this.minecraft == null || this.minecraft.player == null ? null : this.minecraft.player.getUUID();
-        boolean mine = self != null && self.equals(entry.requester);
-        Component message = Component.translatable(mine ? "gui.module_shop.demand.detail_mine"
-                : "gui.module_shop.demand.detail_other",
-                entry.summary(), demandRewardLine(entry),
-                entry.requesterName == null ? "?" : entry.requesterName);
-        CompoundTag tag = new CompoundTag();
-        tag.putString("id", entry.id);
-        String action = mine ? "demand_cancel" : "demand_fulfill";
-        Component yes = Component.translatable(mine ? "gui.module_shop.demand.cancel_action"
-                : "gui.module_shop.demand.fulfill_action");
-        Nav.open(new ShopConfirmScreen(Component.translatable("gui.module_shop.demand.detail_title"),
-                message, yes, Component.translatable("gui.module_shop.cancel"), confirmed -> {
-                    if (confirmed) {
-                        ServerboundShopActionPayload.send(withAction(action, tag));
-                    }
-                }));
     }
 
     /** 复制一份动作包并写入 action（客户端发请求用）。 */
@@ -4665,16 +4696,6 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         if (this.layoutEdit && ClientShopData.canAdmin && button == 0 && handleLayoutClick(mouseX, mouseY)) {
             return true;
         }
-        // 布局编辑模式：**右键页签 = 重命名模块**（只改显示名，id 不变；留空恢复原名）。
-        if (ClientShopData.canAdmin && button == 1) {
-            for (TabRect rect : this.tabRects) {
-                if (IOStyle.inside(rect.x(), rect.y(), rect.w(), rect.h(), mouseX, mouseY)) {
-                    Bricks.click();
-                    openTabRename(rect.id());
-                    return true;
-                }
-            }
-        }
         for (Region region : this.regions) {
             if (mouseX < region.x || mouseX >= region.x + region.w || mouseY < region.y || mouseY >= region.y + region.h) {
                 continue;
@@ -4824,9 +4845,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 // 点「完成」= 把草稿一次性发布给所有玩家。
                 send(this.layoutEdit ? "admin_layout_begin" : "admin_layout_commit", null);
             }
-            // 右键标题（或侧栏页签）→ 重命名当前模块
-            case "rename_current_tab" -> openTabRename(currentTab);
-            // 左上角主标题改名
+            // 左上角主标题改名（唯一的改名入口）
             case "rename_shop_title" -> openShopTitleRename();
             // 编辑布局下右键余额 → 改货币名（全服生效）
             case "rename_currency" -> openCurrencyRename();
@@ -4942,7 +4961,14 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             // ---- 玩家求购（悬赏）----
             case "demand_create" -> openDemandCreate();
             case "demand_filter" -> this.demandOnlyMine = !this.demandOnlyMine;
-            case "demand_detail" -> openDemandDetail(extra == null ? "" : extra.getString("id"));
+            // 点一行 = 展开/收起它的清单（展开后右侧有交付/撤销按钮）
+            case "demand_toggle" -> {
+                String id = extra == null ? "" : extra.getString("id");
+                this.demandExpandedId = id.equals(this.demandExpandedId) ? null : id;
+            }
+            // 交付：扣清单物品、发悬赏（服务端校验并结算）
+            case "demand_fulfill_go" -> send("demand_fulfill", extra);
+            case "demand_cancel_go" -> send("demand_cancel", extra);
             case "demand_settings" -> openDemandSettings();
             case "demand_expire" -> openDemandExpire();
             case "demand_admin_cancel" -> openDemandAdminCancel(extra == null ? "" : extra.getString("id"));

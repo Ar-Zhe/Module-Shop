@@ -628,7 +628,9 @@ public final class ShopManager {
             if (expireDays > 0) {
                 // 只清理“已经领取/查看过”的邮件：未领取的物品、未查看的货款不能因为过期直接蒸发。
                 // receivedDay<=0 表示旧存档缺这个字段，按“刚收到”处理，避免一开过期功能就清空历史邮件。
+                // 标星的邮件永不自动过期（和「一键清理」「邮箱满了自动删」保持同一规则）。
                 account.mailbox.removeIf(mail -> !mail.pending()
+                        && !mail.starred
                         && mail.receivedDay > 0
                         && day - mail.receivedDay >= expireDays);
             }
@@ -1159,6 +1161,16 @@ public final class ShopManager {
         }
     }
 
+    /** 全服聊天公告（求购发布这类要让所有人看到的消息）。 */
+    static void broadcastChat(MinecraftServer server, Component message) {
+        if (server == null || message == null) {
+            return;
+        }
+        for (ServerPlayer online : server.getPlayerList().getPlayers()) {
+            online.sendSystemMessage(message);
+        }
+    }
+
     public static void openInput(ServerPlayer player, String action, String titleKey, @Nullable CompoundTag extra, String... fields) {
         openInput(player, action, titleKey, extra, null, fields);
     }
@@ -1193,6 +1205,10 @@ public final class ShopManager {
     }
 
     private static void openDeposit(ServerPlayer player, String context) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         openDeposit(player, context, false);
     }
 
@@ -1210,6 +1226,10 @@ public final class ShopManager {
      * 与单件添加一样，槽里只是模板副本，关闭时会原样退还。
      */
     private static void openBatchAdd(ServerPlayer player) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         DEPOSIT_CONTEXT.put(player.getUUID(), "admin");
         AdminEditType type = ADMIN_EDIT_TYPE.getOrDefault(player.getUUID(), AdminEditType.DAILY_SHOP);
         player.openMenu(new SimpleMenuProvider(
@@ -1375,9 +1395,7 @@ public final class ShopManager {
             // 编辑布局的开关：开始 = 拉草稿（之后只改草稿）；完成 = 一次性发布给全服。
             case "admin_layout_begin" -> adminLayoutBegin(player);
             case "admin_layout_commit" -> adminLayoutCommit(player);
-            // 编辑布局里右键页签 → 重命名模块（只改显示名，id 不变）
-            case "admin_sidebar_rename" -> adminSidebarRename(player, tag);
-            // 左上角主标题改名（空 = 恢复默认「模块商店」）
+            // 左上角主标题改名（空 = 恢复默认「模块商店」）—— 现在**唯一**的改名入口
             case "admin_shop_title_set" -> adminShopTitleSet(player, tag);
             // 编辑布局里右键余额 → 改货币名称（空 = 恢复配置默认）
             case "admin_currency_set" -> adminCurrencySet(player, tag);
@@ -1407,6 +1425,8 @@ public final class ShopManager {
             case "admin_redeem_reward_save" -> adminRedeemRewardSave(player, tag);
             case "admin_redeem_reward_cancel" -> adminRedeemRewardCancel(player);
             case "admin_redeem_draft_request" -> sendRedeemDraft(player);
+            // 放弃本次兑换码编辑（关闭编辑器 / 取消）：草稿丢弃，兑换码保持不变。
+            case "admin_redeem_draft_discard" -> adminRedeemDraftDiscard(player);
             case "admin_redeem_update" -> adminRedeemUpdate(player, tag);
             case "admin_redeem_claimed" -> sendRedeemClaimed(player, tag);
             case "admin_redeem_preview" -> adminRedeemPreview(player, tag);
@@ -1552,8 +1572,11 @@ public final class ShopManager {
         }
     }
 
-    /** 需求 11：记录管理员当前编辑的模块。 */
+    /** 需求 11：记录管理员当前编辑的模块（只有管理员能设，否则改价/删除会打到别人的上下文里）。 */
     public static void setAdminEditType(ServerPlayer player, String type) {
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ADMIN_EDIT_TYPE.put(player.getUUID(), AdminEditType.byId(type));
     }
 
@@ -3080,6 +3103,10 @@ public final class ShopManager {
         notifyPlayer(player, Component.translatable("msg.module_shop.demand_created",
                 entry.summary(), demandRewardText(entry))
                 .withStyle(ChatFormatting.GREEN));
+        // 全服公告：让所有人都知道有人挂悬赏（发布者自己也会看到一条）。
+        broadcastChat(player.server, Component.translatable("msg.module_shop.demand_broadcast",
+                player.getGameProfile().getName(), entry.summary(), demandRewardText(entry))
+                .withStyle(ChatFormatting.GOLD));
         broadcastSnapshots(player.server);
     }
 
@@ -3803,11 +3830,11 @@ public final class ShopManager {
         }
     }
 
-    /** 需求四：一键清理所有已经领取（物品）/已查看（金额）的邮件。 */
+    /** 需求四：一键清理已经领取（物品）/已查看（金额）的邮件 —— **标星的邮件永远保留**。 */
     private static void deleteReadMail(ServerPlayer player) {
         synchronized (LOCK) {
             PlayerAccount account = account(player);
-            boolean removed = account.mailbox.removeIf(entry -> !entry.pending());
+            boolean removed = account.mailbox.removeIf(entry -> !entry.pending() && !entry.starred);
             if (!removed) {
                 return;
             }
@@ -3899,6 +3926,10 @@ public final class ShopManager {
 
     /** 设置页“交易记录”按钮：把某玩家的流水发给管理员本人。 */
     private static void sendHistory(ServerPlayer admin, String targetName, int page) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (admin == null || !admin.hasPermissions(2)) {
+            return;
+        }
         List<Component> lines = historyLines(admin.server, targetName, page <= 0 ? 1 : page);
         if (lines.isEmpty()) {
             notifyPlayer(admin, Component.translatable("msg.module_shop.grant_unknown", targetName)
@@ -3911,6 +3942,10 @@ public final class ShopManager {
     }
 
     private static void adminSetPriceNew(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         // 需求 11：模板来自幽灵槽，不是 PENDING_ITEM。
         ItemStack stack = ADMIN_TEMPLATE.remove(player.getUUID());
         if (stack == null || stack.isEmpty()) {
@@ -3969,6 +4004,10 @@ public final class ShopManager {
     }
 
     private static void adminApplyPrice(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         int index = tag.getInt("index");
         // 确认后输入界面会立刻关闭：这里必须给一条**说明原因**的反馈，否则管理员会以为「确认没生效」。
         long price = parseAdminPrice(player, tag.getString("price"));
@@ -4008,6 +4047,10 @@ public final class ShopManager {
     }
 
     private static void adminRemove(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         int index = tag.getInt("index");
         AdminEditType type = editType(player, tag);
         ShopSavedData data = data(player.server);
@@ -4229,6 +4272,10 @@ public final class ShopManager {
 
     /** 管理员：新增兑换货币（模板来自幽灵槽，价格来自输入框）；同一物品重复添加视为改价。 */
     private static void adminExchangeSet(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ItemStack stack = ADMIN_TEMPLATE.remove(player.getUUID());
         if (stack == null || stack.isEmpty()) {
             return;
@@ -4261,6 +4308,10 @@ public final class ShopManager {
 
     /** 管理员：改汇率（界面左键点击条目）。 */
     private static void adminExchangeEdit(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         int index = tag.getInt("index");
         ShopSavedData data = data(player.server);
         long value = parsePrice(tag.getString("value"));
@@ -4279,6 +4330,10 @@ public final class ShopManager {
 
     /** 管理员：移除兑换货币（模板不退还，原因同商品池：退还会复制物品）。 */
     private static void adminExchangeRemove(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         ExchangeEntry entry = exchangeEntry(data, tag.getInt("index"));
         if (entry == null) {
@@ -4458,6 +4513,10 @@ public final class ShopManager {
 
     /** 管理员：登录自动签到开关。 */
     private static void adminSignInAutoToggle(ServerPlayer player) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         data.signInAuto = !data.signInAuto;
         data.setDirty();
@@ -4469,6 +4528,10 @@ public final class ShopManager {
 
     /** 管理员：累计签到加成开关（关闭时界面不显示里程进度条）。 */
     private static void adminSignInCumulativeToggle(ServerPlayer player) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         data.signInCumulative = !data.signInCumulative;
         data.setDirty();
@@ -4484,6 +4547,10 @@ public final class ShopManager {
      * tiers=「天数:每日加成」逗号分隔（如 3:5,5:7,7:10），miles=「天数:一次性奖励」逗号分隔。
      */
     private static void adminSignInSet(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         long base = parsePositive(tag.getString("base"));
         long cost = parsePositive(tag.getString("makeupCost"));
@@ -4561,6 +4628,10 @@ public final class ShopManager {
      * 不填标题且金额为 0 视为取消该活动日。
      */
     private static void adminActivityDaySet(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         long day = tag.getLong("day");
         if (day <= 0L) {
@@ -4685,6 +4756,10 @@ public final class ShopManager {
 
     /** 管理员：取消某天的活动日。 */
     private static void adminActivityDayClear(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         data.activityDays.remove(tag.getLong("day"));
         // 删了日程就别留着对应日期的草稿，否则下次编辑会被旧草稿带偏。
@@ -4822,11 +4897,26 @@ public final class ShopManager {
         if (tag.contains("catchUp")) {
             draft.catchUp = !"false".equalsIgnoreCase(tag.getString("catchUp").trim());
         }
+        // 标题 / 公告正文 / 颜色也记进草稿：日程编辑界面在来回切界面时会被重建，
+        // 输入框要能从草稿回填，刚填的内容才不会丢。
+        if (tag.contains("title")) {
+            draft.title = tag.getString("title").trim();
+        }
+        if (tag.contains("note")) {
+            draft.note = tag.getString("note").trim();
+        }
+        if (tag.contains("color")) {
+            draft.color = parseColor(tag.getString("color"));
+        }
         sendActivityDraft(player);
     }
 
     /** 编辑界面「取消」：丢掉草稿，正式日程保持不变。 */
     private static void adminActivityDraftDiscard(ServerPlayer player) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ACTIVITY_DRAFTS.remove(player.getUUID());
         sendActivityDraft(player);
     }
@@ -5007,8 +5097,22 @@ public final class ShopManager {
         return REDEEM_DRAFT.getOrDefault(player.getUUID(), new RedeemDraft(List.of(), 0L, List.of()));
     }
 
+    /** 管理员：放弃本次兑换码编辑（关闭编辑器时调用）——草稿丢掉，兑换码本身一点没改。 */
+    private static void adminRedeemDraftDiscard(ServerPlayer player) {
+        if (!player.hasPermissions(2)) {
+            return;
+        }
+        REDEEM_DRAFT.remove(player.getUUID());
+        REDEEM_EDIT_TARGET.remove(player.getUUID());
+        sendRedeemDraft(player);
+    }
+
     /** 把草稿推给客户端：生成器显示「物品 / 星币 / 玩家」摘要，编辑界面据此回填。 */
     private static void sendRedeemDraft(ServerPlayer player) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         RedeemDraft draft = redeemDraft(player);
         CompoundTag tag = new CompoundTag();
         tag.putString("kind", "redeem_draft");
@@ -5060,6 +5164,11 @@ public final class ShopManager {
             }
             REDEEM_EDIT_TARGET.put(player.getUUID(), target);
             source = new ArrayList<>(existing.items);
+            // 草稿先镜像这个码**当前**的奖励：之后在奖励界面里的改动只改草稿，
+            // 点编辑界面的「保存」才落到兑换码上（和「生成」是同一套语义，不会改一半就生效）。
+            REDEEM_DRAFT.put(player.getUUID(), new RedeemDraft(
+                    new ArrayList<>(existing.items), existing.money,
+                    existing.global ? new ArrayList<>() : new ArrayList<>(existing.players)));
             // 全体可兑换的码不推玩家名单（界面上"一个都没勾"就是全体玩家）。
             sendRedeemDraftFor(player, existing.items, existing.money,
                     existing.global ? new ArrayList<>() : new ArrayList<>(existing.players));
@@ -5109,8 +5218,10 @@ public final class ShopManager {
     /**
      * 管理员：保存「兑换码奖励配置」界面里的物品 + 星币 + 玩家。
      * <p>
-     * 从生成器进来 = 写进服务端草稿（下一步生成兑换码时使用）；
-     * 从「编辑兑换码」进来 = **直接改这个兑换码**（已领取记录 {@code usedBy} 原样保留，已领过的玩家不受影响）。
+     * 两种情况都只写**服务端草稿**：从生成器进来时，草稿在「生成」时变成兑换码；
+     * 从「编辑兑换码」进来时，草稿在编辑界面点「保存」时落到那个兑换码上
+     * （已领取记录 {@code usedBy} 原样保留，已领过的玩家不受影响）。
+     * 这样「改一半就生效」不会发生：取消编辑 = 兑换码完全没变。
      */
     private static void adminRedeemRewardSave(ServerPlayer player, CompoundTag tag) {
         if (!player.hasPermissions(2)) {
@@ -5144,25 +5255,9 @@ public final class ShopManager {
         }
         // 勾选名单可以是空的：**空 = 全体玩家都能兑换**（默认），非空 = 只有名单里的玩家能兑换。
         long money = Math.min(parsePositive(tag.getString("money")), Config.maxBalanceLimit());
-        if (target.isEmpty()) {
-            REDEEM_DRAFT.put(player.getUUID(), new RedeemDraft(items, money, players));
-        } else {
-            ShopSavedData data = data(player.server);
-            synchronized (LOCK) {
-                RedeemCode rc = data.redeemCodes.get(target);
-                if (rc != null) {
-                    rc.items.clear();
-                    rc.items.addAll(items);
-                    rc.money = money;
-                    rc.global = players.isEmpty();
-                    rc.players.clear();
-                    if (!rc.global) {
-                        rc.players.addAll(players);
-                    }
-                    // usedBy / usedCount 保持原样：已经领过的玩家就这么算领过了，不再补发。
-                    data.setDirty();
-                }
-            }
+        // 两种情况都只写**草稿**：新码等「生成」、改已有码等「保存」才真正生效。
+        REDEEM_DRAFT.put(player.getUUID(), new RedeemDraft(items, money, players));
+        if (!target.isEmpty()) {
             sendRedeemList(player);
         }
         Component scope = players.isEmpty()
@@ -5229,6 +5324,10 @@ public final class ShopManager {
      * fields：weights=「传说,史诗,稀有,普通」权重，guarantee=「稀有,史诗,传说」保底，slots=条目/牌数上限。
      */
     private static void adminShopGenSet(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         boolean shop = isShopMode(player, tag);
         int[] weights = shop ? data.shopWeights : data.buybackWeights;
@@ -5481,6 +5580,10 @@ public final class ShopManager {
 
     /** 管理员：开关收购全清奖励。 */
     private static void adminBuybackBonusToggle(ServerPlayer player) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         data.buybackBonusEnabled = !data.buybackBonusEnabled;
         data.setDirty();
@@ -5492,6 +5595,10 @@ public final class ShopManager {
 
     /** 管理员：修改收购全清奖励金额（0 = 关闭奖励）。 */
     private static void adminBuybackBonusSet(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         long amount = parsePrice(tag.getString("amount"));
         ShopSavedData data = data(player.server);
         if (amount < 0L) {
@@ -5569,6 +5676,10 @@ public final class ShopManager {
 
     /** 管理员生成兑换码：码必填且不可重复、必须有奖励；指定玩家模式会把名字解析成 UUID。 */
     private static void adminRedeemCreate(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         String code = tag.getString("code").trim().toUpperCase(java.util.Locale.ROOT);
         if (code.isEmpty()) {
@@ -5645,11 +5756,20 @@ public final class ShopManager {
         if (rc == null) {
             return;
         }
+        // 正在编辑这个码：界面上的摘要显示**草稿**（还没保存的改动），别被"当前存档值"盖回去。
+        if (code.equals(REDEEM_EDIT_TARGET.get(player.getUUID())) && REDEEM_DRAFT.containsKey(player.getUUID())) {
+            sendRedeemDraft(player);
+            return;
+        }
         sendRedeemDraftFor(player, rc.items, rc.money, new ArrayList<>(rc.players));
     }
 
     /** 管理员：下发已生成的兑换码列表（客户端列表界面展示与删除）。 */
     private static void sendRedeemList(ServerPlayer player) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         CompoundTag tag = new CompoundTag();
         tag.putString("kind", "redeem_list");
@@ -5682,6 +5802,10 @@ public final class ShopManager {
 
     /** 管理员：修改已有兑换码的基础设置（时效 / 限领 / 总上限 / 标题 / 备注）。 */
     private static void adminRedeemUpdate(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         String code = tag.getString("code").trim().toUpperCase(java.util.Locale.ROOT);
         RedeemCode rc = data.redeemCodes.get(code);
@@ -5697,6 +5821,21 @@ public final class ShopManager {
             rc.totalLimit = Math.max(0, parseInt(tag.getString("total")));
             rc.title = tag.getString("title").trim();
             rc.note = tag.getString("note").trim();
+            // 奖励内容走草稿：只有「这次编辑确实打开过奖励界面（草稿属于这个码）」才覆盖，
+            // 否则保持兑换码原来的奖励 —— 不能因为改个标题就把奖励清空。
+            String editTarget = REDEEM_EDIT_TARGET.remove(player.getUUID());
+            RedeemDraft draft = REDEEM_DRAFT.remove(player.getUUID());
+            if (draft != null && code.equals(editTarget)) {
+                rc.items.clear();
+                rc.items.addAll(draft.items());
+                rc.money = draft.money();
+                rc.global = draft.players().isEmpty();
+                rc.players.clear();
+                if (!rc.global) {
+                    rc.players.addAll(draft.players());
+                }
+                // usedBy / usedCount 保持原样：已经领过的玩家就这么算领过了，不再补发。
+            }
             data.setDirty();
         }
         notifyPlayer(player, Component.translatable("msg.module_shop.redeem_updated", code)
@@ -5706,6 +5845,10 @@ public final class ShopManager {
 
     /** 管理员：查看某个兑换码「谁领过、各领了几次」。 */
     private static void sendRedeemClaimed(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         String code = tag.getString("code").trim().toUpperCase(java.util.Locale.ROOT);
         RedeemCode rc = data.redeemCodes.get(code);
@@ -5727,6 +5870,10 @@ public final class ShopManager {
 
     /** 管理员删除兑换码。 */
     private static void adminRedeemDelete(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         String code = tag.getString("code").trim().toUpperCase(java.util.Locale.ROOT);
         if (data.redeemCodes.remove(code) != null) {
@@ -6010,6 +6157,8 @@ public final class ShopManager {
         grantActivityDay(player);
         // 同 IP 多账号登录限制已按需求**移除**：同一个 IP 可以正常登录多个账号，不再踢人。
         PlayerAccount account = account(player);
+        // 「右键重命名模块」已删除：把旧存档里改过的模块名一次性清掉，回到语言文件里的默认名。
+        clearLegacyModuleNames(data(player.server));
         // 需求 13：惰性刷新——登录时检查时间戳，过期才重新生成每日商店/收购，不做全局 tick 遍历。
         ensureDaily(player, account, data(player.server));
         // 需求 10：登录时把持久化的未读数量同步给客户端，红点不会因为重连丢失。
@@ -6069,6 +6218,9 @@ public final class ShopManager {
         // 编辑到一半掉线：草稿直接丢掉（正式数据本来就没被改过，安全）。
         LAYOUT_DRAFTS.remove(player.getUUID());
         ACTIVITY_DRAFTS.remove(player.getUUID());
+        REDEEM_DRAFT.remove(player.getUUID());
+        REDEEM_EDIT_TARGET.remove(player.getUUID());
+        REDEEM_REWARD_EDIT.remove(player.getUUID());
     }
 
     // =========================================================== 侧栏布局（拖拽排序）
@@ -6078,20 +6230,19 @@ public final class ShopManager {
      * 服务端只接受合法 id 并去重，防止客户端塞垃圾进存档。
      */
     /**
-     * 「编辑布局」草稿：拖拽 / 改名 / 改标题 / 改货币名都只写这里，
+     * 「编辑布局」草稿：拖拽 / 页签改名 / 主标题都只写这里，
      * **只有点「完成」**才写进正式存档并广播给所有在线玩家。
      *
      * <p>为什么必须是真的草稿：如果只是「先存进存档、推迟广播」，别人下一条快照
      * （买东西、开界面、登录）就会把半成品布局读走 —— 等于还是提前同步了。
+     *
+     * <p>货币名称**不在**草稿里：它是独立设置，确认即保存并广播，避免草稿被丢弃时回滚。
      */
     private static final class LayoutDraft {
         final SidebarLayout layout;
-        /** 草稿里的货币名；null = 这次没改。 */
-        String currency;
 
-        LayoutDraft(SidebarLayout layout, String currency) {
+        LayoutDraft(SidebarLayout layout) {
             this.layout = layout;
-            this.currency = currency;
         }
     }
 
@@ -6110,17 +6261,12 @@ public final class ShopManager {
     /** 取（或从正式存档复制一份）布局草稿。 */
     private static LayoutDraft layoutDraft(ShopSavedData data, ServerPlayer player) {
         return LAYOUT_DRAFTS.computeIfAbsent(player.getUUID(),
-                key -> new LayoutDraft(SidebarLayout.load(data.sidebarLayout.save()), data.shopCurrency));
+                key -> new LayoutDraft(SidebarLayout.load(data.sidebarLayout.save())));
     }
 
-    /** 该玩家看到的货币名：编辑布局时用草稿里的（还没发布），否则用正式存档里的名字。 */
+    /** 该玩家看到的货币名：永远取正式存档（货币名不进布局草稿）。 */
     private static String currencyFor(ShopSavedData data, ServerPlayer player) {
-        LayoutDraft draft = player == null ? null : LAYOUT_DRAFTS.get(player.getUUID());
-        if (draft != null && draft.currency != null) {
-            String text = draft.currency.trim();
-            return text.isEmpty() ? currencyName() : text;
-        }
-        return currencyName(player.server);
+        return currencyName(player == null ? null : player.server);
     }
 
     /** 布局类改动推送：编辑中只推给操作者本人（他立刻看到预览），否则广播给所有在线玩家。 */
@@ -6137,6 +6283,10 @@ public final class ShopManager {
 
     /** 管理员：开始编辑布局（拉一份草稿，之后只改草稿）。 */
     private static void adminLayoutBegin(ServerPlayer player) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         LAYOUT_DRAFTS.remove(player.getUUID());
         layoutDraft(data, player);
@@ -6144,6 +6294,10 @@ public final class ShopManager {
 
     /** 管理员：点「完成」→ 把草稿一次性写进正式存档并广播给所有人。 */
     private static void adminLayoutCommit(ServerPlayer player) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         LayoutDraft draft = LAYOUT_DRAFTS.remove(player.getUUID());
         if (draft == null) {
             return;
@@ -6159,9 +6313,6 @@ public final class ShopManager {
             data.sidebarLayout.setName(entry.getKey(), entry.getValue());
         }
         data.sidebarLayout.setShopTitle(src.shopTitle());
-        if (draft.currency != null) {
-            data.shopCurrency = draft.currency;
-        }
         data.setDirty();
         broadcastSidebarLayout(player.server);
         notifyPlayer(player, Component.translatable("msg.module_shop.sidebar_saved")
@@ -6169,6 +6320,10 @@ public final class ShopManager {
     }
 
     private static void adminSidebarOrder(ServerPlayer player, CompoundTag tag) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ListTag list = tag.getList("order", 8);
         List<String> ids = new ArrayList<>();
         for (int i = 0; i < list.size() && ids.size() < 32; i++) {
@@ -6209,61 +6364,19 @@ public final class ShopManager {
     }
 
     /**
-     * 可重命名的模块 id（与客户端 {@code ShopScreen.TAB_IDS} 一一对应）。
-     * <p>改名只允许改**显示名**，id 永不改变（存档 / 配置文件 / 动作包都按 id 走）。
-     */
-    private static final List<String> MODULE_IDS = List.of(
-            "daily", "buyback", "mall", "shipping", "auction", "stall", "demand", "mail", "exchange",
-            "signin", "trade", "transfer");
-
-    /**
-     * 管理员：**重命名模块**（编辑布局里右键页签）。
+     * 模块显示名已**不再支持重命名**：只保留左上角「模块商店」主标题可以改。
      *
-     * <p>只改显示名：名字存进 {@link SidebarLayout#names()}，随快照下发，所有玩家立刻看到；
-     * 传空名字 = 恢复成 lang 里的默认名。名字会去掉 {@code §} 格式符并截断到 12 个字。
+     * <p>以前「右键页签/标题改模块名」那套已经删除，所以这里把旧存档里改过的名字一次性清掉，
+     * 让所有模块回到语言文件里的默认名（否则改过名的模块永远改不回来）。
      */
-    private static void adminSidebarRename(ServerPlayer player, CompoundTag tag) {
-        if (!player.hasPermissions(2)) {
+    static void clearLegacyModuleNames(ShopSavedData data) {
+        if (data.sidebarLayout.names().isEmpty()) {
             return;
         }
-        String id = tag.getString("tab").trim();
-        if (!MODULE_IDS.contains(id)) {
-            notifyPlayer(player, Component.translatable("msg.module_shop.sidebar_rename_no_module")
-                    .withStyle(ChatFormatting.RED));
-            return;
+        for (String id : new ArrayList<>(data.sidebarLayout.names().keySet())) {
+            data.sidebarLayout.setName(id, null);
         }
-        ShopSavedData data = data(player.server);
-        boolean editing = layoutEditing(player);
-        SidebarLayout target = editing ? layoutDraft(data, player).layout : data.sidebarLayout;
-        String raw = tag.getString("name");
-        String clean = SidebarLayout.sanitize(raw);
-        boolean truncated = SidebarLayout.sanitizeFull(raw).length() > SidebarLayout.MAX_NAME;
-        String previousName = target.nameOf(id);
-        if (clean.isEmpty()) {
-            if (previousName == null) {
-                return;   // 本来就是默认名，什么都不用做
-            }
-            target.setName(id, null);
-            if (!editing) {
-                data.setDirty();
-            }
-            pushLayoutTo(player);
-            notifyPlayer(player, Component.translatable("msg.module_shop.sidebar_rename_reset")
-                    .withStyle(ChatFormatting.YELLOW));
-            return;
-        }
-        if (target.setName(id, clean)) {
-            if (!editing) {
-                data.setDirty();
-            }
-            pushLayoutTo(player);
-            notifyPlayer(player, Component.translatable("msg.module_shop.sidebar_renamed", clean)
-                    .withStyle(ChatFormatting.GREEN));
-        }
-        if (truncated) {
-            notifyPlayer(player, Component.translatable("msg.module_shop.sidebar_rename_too_long",
-                    SidebarLayout.MAX_NAME).withStyle(ChatFormatting.YELLOW));
-        }
+        data.setDirty();
     }
 
     /**
@@ -6306,6 +6419,10 @@ public final class ShopManager {
 
     /** 管理员：把所有页签位置恢复默认（编辑中同样只改草稿，点「完成」才广播）。 */
     private static void adminSidebarReset(ServerPlayer player) {
+        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
+        if (player == null || !player.hasPermissions(2)) {
+            return;
+        }
         ShopSavedData data = data(player.server);
         boolean editing = layoutEditing(player);
         SidebarLayout target = editing ? layoutDraft(data, player).layout : data.sidebarLayout;
@@ -6355,33 +6472,32 @@ public final class ShopManager {
     /** 货币名称最大长度。 */
     public static final int CURRENCY_NAME_MAX = 8;
 
-    /** 管理员：改**货币名称**（全服生效；空 = 恢复 config 默认值）。 */
+    /**
+     * 管理员：改**货币名称**（全服生效；空 = 恢复默认「星币」）。
+     *
+     * <p>这条设置**立刻保存并广播**，不参与「编辑布局」的草稿流程：
+     * 草稿里的货币名一旦因为「没点完成就离开界面」被丢掉，就会出现
+     * 「改成金币 → 改回星币 → 点发放物品 → 退出又变回金币」这种回滚。
+     * 货币名只有这一条路径能改，别的任何操作都不会写它。
+     */
     private static void adminCurrencySet(ServerPlayer player, CompoundTag tag) {
         if (!player.hasPermissions(2)) {
             return;
         }
         ShopSavedData data = data(player.server);
-        boolean editing = layoutEditing(player);
         String raw = tag.getString("name");
         String clean = SidebarLayout.sanitizeFull(raw);
         if (clean.length() > CURRENCY_NAME_MAX) {
             clean = clean.substring(0, CURRENCY_NAME_MAX);
         }
-        String previous = editing
-                ? (layoutDraft(data, player).currency == null ? null : layoutDraft(data, player).currency)
-                : data.shopCurrency;
-        if (clean.equals(previous == null ? "" : previous)) {
+        String previous = data.shopCurrency == null ? "" : data.shopCurrency;
+        if (clean.equals(previous)) {
             return;
         }
-        if (editing) {
-            // 只写草稿：货币名要等「完成」才广播，否则别人已经换名字了。
-            layoutDraft(data, player).currency = clean;
-        } else {
-            data.shopCurrency = clean;
-            data.setDirty();
-        }
-        // 货币名在快照里下发；编辑布局期间只推给操作者本人，「完成」时才广播给所有人。
-        pushLayoutTo(player);
+        data.shopCurrency = clean;
+        data.setDirty();
+        // 立刻让所有在线玩家换名字（货币名在快照里下发）。
+        broadcastSnapshots(player.server);
         if (clean.isBlank()) {
             notifyPlayer(player, Component.translatable("msg.module_shop.currency_reset")
                     .withStyle(ChatFormatting.YELLOW));

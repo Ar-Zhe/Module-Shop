@@ -27,6 +27,14 @@ public class RedeemGeneratorScreen extends Screen {
     private static final int PANEL_W = 400;
     private static final int PANEL_H = 250;
     private static RedeemGeneratorScreen open;
+    /**
+     * 输入框内容的**本地草稿**（纯界面状态，不进存档）。
+     *
+     * <p>点「奖励配置」会切到容器界面，回来时本界面会被重新 {@code init()}，
+     * 输入框一律重建 —— 不存一份的话刚填的兑换码 / 时长 / 额度 / 标题 / 说明就没了。
+     * 生成成功、点「清空」或退出本界面时丢弃。
+     */
+    private static CompoundTag inputStash;
 
     private final List<Region> regions = new ArrayList<>();
     private EditBox codeBox;
@@ -60,6 +68,10 @@ public class RedeemGeneratorScreen extends Screen {
     @Override
     public void onClose() {
         open = null;
+        // 真正离开生成器（不是切去奖励配置）才丢掉本地草稿，下次进来是干净的；
+        // 服务端的奖励草稿也一起丢掉，避免下次生成时莫名其妙带上上一次的奖励。
+        inputStash = null;
+        send("admin_redeem_draft_discard", null);
         Nav.back();
     }
 
@@ -78,6 +90,8 @@ public class RedeemGeneratorScreen extends Screen {
         this.noteBox = box(x + 92, y + 188, 294);
         this.perPlayerBox.setValue("1");
         this.totalBox.setValue("0");
+        // 从「奖励配置」回来时，把刚才填的内容填回去（界面重建不会丢字）。
+        restoreInputStash();
         this.setInitialFocus(this.codeBox);
         // 打开时拉一次草稿摘要（服务端权威），保证摘要与真实配置一致。
         send("admin_redeem_draft_request", null);
@@ -304,8 +318,45 @@ public class RedeemGeneratorScreen extends Screen {
      * 所以这里先记住返回目标再发包，服务端 openMenu 后客户端会自动切到编辑界面。
      */
     private void openRewardEditor() {
+        // 进容器界面之前先把当前填写的内容存进本地草稿。
+        saveInputStash();
         cn.autoforged.module_shop.client.screen.RedeemRewardEditorScreen.setReturnTo(this);
         send("admin_redeem_reward_open", null);
+    }
+
+    /** 把输入框内容存进本地草稿（只是界面状态，不发布、不落库）。 */
+    private void saveInputStash() {
+        CompoundTag tag = new CompoundTag();
+        tag.putString("code", this.codeBox.getValue());
+        tag.putString("days", Integer.toString(this.days));
+        tag.putString("perPlayer", this.perPlayerBox.getValue());
+        tag.putString("total", this.totalBox.getValue());
+        tag.putString("title", this.titleBox.getValue());
+        tag.putString("note", this.noteBox.getValue());
+        inputStash = tag;
+    }
+
+    /** 从本地草稿回填输入框。 */
+    private void restoreInputStash() {
+        if (inputStash == null) {
+            return;
+        }
+        this.codeBox.setValue(inputStash.getString("code"));
+        try {
+            this.days = Integer.parseInt(inputStash.getString("days"));
+        } catch (NumberFormatException ignored) {
+            // 草稿里的天数坏了就保持默认
+        }
+        String perPlayer = inputStash.getString("perPlayer");
+        String total = inputStash.getString("total");
+        if (!perPlayer.isEmpty()) {
+            this.perPlayerBox.setValue(perPlayer);
+        }
+        if (!total.isEmpty()) {
+            this.totalBox.setValue(total);
+        }
+        this.titleBox.setValue(inputStash.getString("title"));
+        this.noteBox.setValue(inputStash.getString("note"));
     }
 
     private void clear() {
@@ -317,6 +368,7 @@ public class RedeemGeneratorScreen extends Screen {
         this.days = 30;
         this.hint = "";
         this.error = false;
+        inputStash = null;
     }
 
     private void generate() {
@@ -351,6 +403,8 @@ public class RedeemGeneratorScreen extends Screen {
             Minecraft.getInstance().keyboardHandler.setClipboard(code);
             open.error = false;
             open.hint = Component.translatable("gui.module_shop.redeem.generated", code).getString();
+            // 生成成功 = 草稿已经变成正式兑换码，本地草稿丢弃。
+            inputStash = null;
         } else {
             open.error = true;
             open.hint = Component.translatable("msg.module_shop.redeem." + data.getString("reason")).getString();

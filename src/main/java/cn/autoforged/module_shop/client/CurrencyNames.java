@@ -26,21 +26,37 @@ public final class CurrencyNames {
 
     /** 当前生效的自定义货币名（空 / 默认名 = 不做替换）。 */
     private static String applied = "";
+    /** 第一次包之前的那份原始语言表。 */
+    private static Language base;
+    /** 当前 Language.getInstance() 是不是我们自己装的包装层。 */
+    private static boolean installed;
 
     private CurrencyNames() {
     }
 
-    /** 按当前货币名刷新（每次收到商店快照时调用即可，重复调用没有副作用）。 */
+    /**
+     * 按当前货币名刷新（每次收到商店快照 / 每 tick 调用都可以，名字没变时什么都不做）。
+     *
+     * <p><b>改名必须换一个新的 {@link Language} 实例</b>：{@code TranslatableContents} 会把
+     * 「解析好的整句」按 Language 实例缓存起来，实例不换的话，改回默认名之后
+     * 界面上仍然显示上一次的旧名字（表现为「改回星币 → 点别的地方又变回金币」）。
+     * 所以这里每次都 {@code inject} 一个新实例：自定义名 → 新的包装层；默认名 → 原始语言表。
+     */
     public static void apply(String rawName) {
         try {
             String want = rawName == null ? "" : rawName.trim();
+            boolean wantCustom = !want.isEmpty() && !DEFAULT.equals(want);
+            if (want.equals(applied) && installed == wantCustom) {
+                return;   // 名字没变：不折腾语言表
+            }
             applied = want;
             Language current = Language.getInstance();
-            if (current == null || current instanceof CurrencyLanguage) {
-                // 已经包过（或者还没初始化好）：不用重复包。
+            if (current == null) {
                 return;
             }
-            Language.inject(new CurrencyLanguage(current));
+            base = current instanceof CurrencyLanguage wrapper ? wrapper.delegate : current;
+            installed = wantCustom;
+            Language.inject(wantCustom ? new CurrencyLanguage(base) : base);
         } catch (Throwable ignored) {
             // 只影响「货币名自动跟随」，绝不因为它把界面搞崩。
         }
