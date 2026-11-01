@@ -1205,8 +1205,8 @@ public final class ShopManager {
     }
 
     private static void openDeposit(ServerPlayer player, String context) {
-        // 只有管理员（权限等级 2）能改商店设置：客户端隐藏按钮不算数，报文也必须校验。
-        if (player == null || !player.hasPermissions(2)) {
+        // 玩家行为（上架摊位 / 拍卖 / 交易放物品），**不能**要求管理员权限。
+        if (player == null) {
             return;
         }
         openDeposit(player, context, false);
