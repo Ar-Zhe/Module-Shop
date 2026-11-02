@@ -24,6 +24,10 @@
   "msg.module_shop.action_failed": "操作失败：服务端出错了，详情见日志",
   "key.categories.module_shop": "模块商店",
   "key.module_shop.open_shop": "打开商店",
+  "key.module_shop.open_atom_shell": "打开 AtomLib 壳层（开发）",
+  "gui.module_shop.atom_shell.title": "AtomLib",
+  "gui.module_shop.atom_shell.body": "模块商店界面壳层",
+  "gui.module_shop.atom_shell.close": "关闭",
 
   "tab.module_shop.daily": "每日商店",
   "tab.module_shop.buyback": "每日收购",

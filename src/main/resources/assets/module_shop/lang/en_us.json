@@ -24,6 +24,10 @@
   "msg.module_shop.action_failed": "Action failed: server error, see logs",
   "key.categories.module_shop": "Module Shop",
   "key.module_shop.open_shop": "Open Shop",
+  "key.module_shop.open_atom_shell": "Open AtomLib Shell (dev)",
+  "gui.module_shop.atom_shell.title": "AtomLib",
+  "gui.module_shop.atom_shell.body": "Module Shop UI shell",
+  "gui.module_shop.atom_shell.close": "Close",
 
   "tab.module_shop.daily": "Daily Shop",
   "tab.module_shop.buyback": "Buyback",

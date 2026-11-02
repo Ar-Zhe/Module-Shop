@@ -1,6 +1,7 @@
 package cn.autoforged.module_shop.client;
 
 import cn.autoforged.module_shop.ModuleShopMod;
+import cn.autoforged.module_shop.client.screen.AtomShopShellScreen;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
 import net.minecraft.client.Minecraft;
 import net.minecraft.nbt.CompoundTag;
@@ -28,6 +29,12 @@ public final class ClientKeyHandler {
                 tag.putString("action", "request_data");
                 tag.putString("tab", "daily");
                 ServerboundShopActionPayload.send(tag);
+            }
+        }
+        // 开发壳层：不走商店网络，也不经过 Nav（关掉就回游戏，不会打开 ShopScreen）。
+        while (ClientEvents.OPEN_ATOM_SHELL.get().consumeClick()) {
+            if (minecraft.screen == null) {
+                minecraft.setScreen(new AtomShopShellScreen());
             }
         }
     }

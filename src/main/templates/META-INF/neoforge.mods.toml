@@ -97,6 +97,16 @@ Everything is server-authoritative; the GUI is available in English and Simplifi
     ordering="NONE"
     side="BOTH"
 
+# 客户端 UI（壳层与确认框）依赖 AtomLib 0.1.0-beta。专用服务器不需要它。
+# 上界排除 0.2.0：那个版本还没发布，控件 API 也不在这次接线里。
+[[dependencies.${mod_id}]]
+    modId="atomlib"
+    type="required"
+    versionRange="[0.1.0-beta,0.2.0)"
+    ordering="AFTER"
+    side="CLIENT"
+    reason="Client screens draw with AtomLib 0.1.0-beta. Skija and Yoga stay inside AtomLib."
+
 # Features are specific properties of the game environment, that you may want to declare you require. This example declares
 # that your mod requires GL version 3.2 or higher. Other features will be added. They are side aware so declaring this won't
 # stop your mod loading on the server for example.
