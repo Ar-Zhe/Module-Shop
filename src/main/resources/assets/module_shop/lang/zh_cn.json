@@ -21,6 +21,7 @@
   "gui.module_shop.currency_hint": "右键修改货币名称",
   "msg.module_shop.currency_renamed": "货币名称已改为「%s」",
   "msg.module_shop.currency_reset": "货币名称已恢复默认",
+  "msg.module_shop.action_failed": "操作失败：服务端出错了，详情见日志",
   "key.categories.module_shop": "模块商店",
   "key.module_shop.open_shop": "打开商店",
 

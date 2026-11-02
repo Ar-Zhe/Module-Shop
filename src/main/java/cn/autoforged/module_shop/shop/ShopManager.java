@@ -1358,6 +1358,22 @@ public final class ShopManager {
     // =========================================================== 动作分发
 
     public static void handleAction(ServerPlayer player, CompoundTag tag) {
+        // 兜底：任何一个分支抛异常都不应该让玩家"点了没反应"。
+        // 这里统一捕获并记录（含动作名），同时给玩家一条提示，便于排查。
+        try {
+            handleActionInner(player, tag);
+        } catch (Throwable error) {
+            String action = tag == null ? "?" : tag.getString("action");
+            org.slf4j.LoggerFactory.getLogger("module_shop").error("处理动作 {} 失败（player={}）", action,
+                    player == null ? "null" : player.getGameProfile().getName(), error);
+            if (player != null) {
+                notifyPlayer(player, Component.translatable("msg.module_shop.action_failed")
+                        .withStyle(ChatFormatting.RED));
+            }
+        }
+    }
+
+    private static void handleActionInner(ServerPlayer player, CompoundTag tag) {
         String action = tag.getString("action");
         // 服务端权威：管理操作必须校验权限，客户端不再可信（canAdmin 只是显示开关）。
         if (action.startsWith("admin_") && !player.hasPermissions(2)) {
