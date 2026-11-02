@@ -1,43 +1,85 @@
 package cn.autoforged.module_shop.client.screen;
 
+import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.atom.AtomUi;
 import cn.autoforged.module_shop.data.Rarity;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
+import com.atom.lib.design.atomchat.Design;
+import com.atom.lib.design.atomchat.UiCards;
+import com.atom.lib.design.atomchat.UiTokens;
+import com.atom.lib.font.FontId;
+import com.atom.lib.geometry.Rect;
+import com.atom.lib.input.PointerEvent;
+import com.atom.lib.input.PointerTarget;
+import com.atom.lib.layout.Constraints;
+import com.atom.lib.layout.LayoutBox;
+import com.atom.lib.layout.LayoutNode;
+import com.atom.lib.layout.LayoutStyle;
+import com.atom.lib.layout.Length;
+import com.atom.lib.layout.NodeId;
+import com.atom.lib.layout.PresentationFrame;
+import com.atom.lib.text.TextLayout;
+import com.atom.lib.text.TextRequest;
+import io.github.humbleui.skija.Canvas;
+import io.github.humbleui.skija.Path;
+import io.github.humbleui.skija.PathBuilder;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import net.minecraft.Util;
+import net.minecraft.util.StringUtil;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.network.chat.Component;
-import net.neoforged.neoforge.network.PacketDistributor;
+import org.lwjgl.glfw.GLFW;
 
-/** 通用数值/文本输入界面：管理员配置、拍卖出价、转账、修改价格都走这里。 */
-public class ShopInputScreen extends Screen {
-    /** 品质字段不用输入框，改成四个品质按钮（点一下就选中，按钮上方显示「当前品质：X」）。 */
+/**
+ * 通用数值/文本输入界面（AtomLib 绘制，打开路径和提交内容与原来的输入框一致）。
+ * <p>
+ * 构造器仍是 {@code ShopInputScreen(CompoundTag)}。玩家点开走 {@link Nav#open}，
+ * 服务端 {@code kind=input} 仍走 {@link Nav#openPushed}。确认把整份请求原样发回
+ * {@link ServerboundShopActionPayload}，再 {@link Nav#back()}；取消、ESC、{@link #onClose()}
+ * 不发包，同样返回上一级。交易金额还会在返回后打开交易界面。
+ * 点按钮响 {@link Bricks#click()}。文本框不处理 Enter，所以打字时按 Enter 不会提交；
+ * Tab 到确认/取消后按 Enter 或空格才会按那个按钮。
+ */
+public class ShopInputScreen extends AtomScreen {
+    /** 品质字段不用输入框，改成四个品质按钮。 */
     private static final String RARITY_FIELD = "rarity";
+    private static final float CARD_W = 280.0F;
+    private static final float TEXT_W = 256.0F;
+    private static final float FIELD_H = 20.0F;
+    private static final float BUTTON_H = 20.0F;
+    private static final float BUTTON_W = 100.0F;
+    private static final float INPUT_SIZE = 13.0F;
+
+    private static final NodeId CARD = new NodeId("input.card");
+    private static final NodeId LEFT = new NodeId("input.left");
+    private static final NodeId RIGHT = new NodeId("input.right");
+
     private final CompoundTag request;
     private final List<String> fieldNames = new ArrayList<>();
-    private final List<EditBox> boxes = new ArrayList<>();
-    /** 与 {@link #boxes} 一一对应的字段名（品质字段没有输入框，所以下标不能直接跟着 fieldNames 走）。 */
-    private final List<String> boxFields = new ArrayList<>();
-    /** 每个品质按钮的矩形（x, y, w, h, rarityIndex），渲染时给选中项描边。 */
-    private final List<int[]> rarityRects = new ArrayList<>();
-    /** 当前选中的品质 id。 */
-    private String rarityValue = Rarity.COMMON.id();
-    /**
-     * 选项字段（提供 {@code choices_<字段名>} 的字段）：值 → 当前选择；值 → 按钮矩形。
-     * 用于「补货设置」这类开关 / 二选一（关/开、现实时间/游戏时间），点按钮即选中，不用手打。
-     */
-    private final java.util.Map<String, String> choiceValues = new java.util.LinkedHashMap<>();
-    private final java.util.Map<String, List<int[]>> choiceRects = new java.util.LinkedHashMap<>();
+    private final List<Slot> chain = new ArrayList<>();
+    private final Map<NodeId, Slot> slots = new LinkedHashMap<>();
+    private final Map<NodeId, PointerTarget> targets = new LinkedHashMap<>();
+    private final Set<NodeId> interactive;
     private final Component title;
     private final String info;
-    private final int panelW = 240;
-    private int panelH;
-    private int left;
-    private int top;
+    private final boolean confirmOnLeft;
+    /** 当前选中的品质 id。窗口缩放时保留，不跟选项字段一起重置。 */
+    private String rarityValue = Rarity.COMMON.id();
+    /** 选项字段（请求里带 {@code choices_<字段名>}）：字段名 → 当前选择。 */
+    private final Map<String, String> choiceValues = new LinkedHashMap<>();
+
+    private boolean closed;
+    private int focusIndex = -1;
+    private int mouseX;
+    private int mouseY;
 
     public ShopInputScreen(CompoundTag request) {
         super(Component.translatable("gui.module_shop.input.title"));
@@ -61,6 +103,46 @@ public class ShopInputScreen extends Screen {
         String presetRarity = request.getString("default_" + RARITY_FIELD).trim();
         Rarity preset = Rarity.byIdOrNull(presetRarity);
         this.rarityValue = preset == null ? Rarity.COMMON.id() : preset.id();
+        // 需求 7/8：防误触按钮统一为“左侧确认、右侧取消”；confirm_right 为 true 才反过来。
+        this.confirmOnLeft = !request.getBoolean("confirm_right");
+        for (int i = 0; i < this.fieldNames.size(); i++) {
+            this.addFieldSlots(i, this.fieldNames.get(i));
+        }
+        this.addSlot(Slot.press(LEFT, -1, this.confirmOnLeft ? this::confirm : this::onClose));
+        this.addSlot(Slot.press(RIGHT, -1, this.confirmOnLeft ? this::onClose : this::confirm));
+        this.interactive = Set.copyOf(this.slots.keySet());
+        this.resetChoices();
+        this.applyText(Map.of());
+    }
+
+    private void addFieldSlots(int index, String field) {
+        if (isRarityField(field)) {
+            Rarity[] all = Rarity.values();
+            for (int k = 0; k < all.length; k++) {
+                Rarity rarity = all[k];
+                this.addSlot(Slot.rarity(new NodeId("input.rarity." + index + "." + k), index,
+                        () -> this.rarityValue = rarity.id(), rarity));
+            }
+            return;
+        }
+        ListTag choices = this.choicesOf(field);
+        if (!choices.isEmpty()) {
+            int count = Math.min(4, choices.size());
+            for (int k = 0; k < count; k++) {
+                String picked = choices.getString(k);
+                this.addSlot(Slot.choice(new NodeId("input.choice." + index + "." + k), index,
+                        () -> this.choiceValues.put(field, picked), field, picked));
+            }
+            return;
+        }
+        TextField box = new TextField(field, isTimeField(field) ? 5 : 32);
+        this.addSlot(Slot.text(new NodeId("input.box." + index), index, box));
+    }
+
+    private void addSlot(Slot slot) {
+        this.chain.add(slot);
+        this.slots.put(slot.id, slot);
+        this.targets.put(slot.id, new SlotTarget(slot));
     }
 
     private static boolean isRarityField(String field) {
@@ -97,10 +179,10 @@ public class ShopInputScreen extends Screen {
         return digits.substring(0, 2) + ":" + digits.substring(2);
     }
 
-    /** 「HH:mm」是否合法。 */
+    /** 「HH:mm」是否合法。留空表示不改这项。 */
     private static boolean validClock(String text) {
         if (text == null || text.isEmpty()) {
-            return true;   // 留空 = 不改这项
+            return true;
         }
         int colon = text.indexOf(':');
         if (colon <= 0 || colon >= text.length() - 1) {
@@ -117,16 +199,12 @@ public class ShopInputScreen extends Screen {
 
     /** 有没有格式不对的时间字段（有的话红字提示并且不让确认）。 */
     private boolean timeBad() {
-        for (int i = 0; i < this.boxFields.size(); i++) {
-            if (isTimeField(this.boxFields.get(i)) && !validClock(this.boxes.get(i).getValue().trim())) {
+        for (Slot slot : this.chain) {
+            if (slot.field != null && isTimeField(slot.field.name) && !validClock(slot.field.value.trim())) {
                 return true;
             }
         }
         return false;
-    }
-
-    private int infoOffset() {
-        return this.info.isEmpty() ? 0 : 14;
     }
 
     /** 需求 3：交易金额界面在标题/提示下方额外显示一行“玩家余额”。 */
@@ -134,16 +212,26 @@ public class ShopInputScreen extends Screen {
         return this.request.getBoolean("show_balance");
     }
 
-    /** 输入框里填的数量（不是数字时返回 0）。 */
+    /** 输入框里填的数量（第一个文本框；不是数字时返回 0）。 */
     private long enteredQuantity() {
-        if (this.boxes.isEmpty()) {
+        TextField first = this.firstText();
+        if (first == null) {
             return 0L;
         }
         try {
-            return Math.max(0L, Long.parseLong(this.boxes.get(0).getValue().trim()));
+            return Math.max(0L, Long.parseLong(first.value.trim()));
         } catch (NumberFormatException ex) {
             return 0L;
         }
+    }
+
+    private TextField firstText() {
+        for (Slot slot : this.chain) {
+            if (slot.field != null) {
+                return slot.field;
+            }
+        }
+        return null;
     }
 
     /**
@@ -153,15 +241,11 @@ public class ShopInputScreen extends Screen {
     private boolean overBalance() {
         long unit = this.request.getLong("unit_price");
         long balance = this.request.getLong("balance");
-        if (unit <= 0L || !showBalance()) {
+        if (unit <= 0L || !this.showBalance()) {
             return false;
         }
-        long quantity = enteredQuantity();
+        long quantity = this.enteredQuantity();
         return quantity > 0L && quantity > balance / unit;
-    }
-
-    private int headerOffset() {
-        return infoOffset() + (showBalance() ? 14 : 0);
     }
 
     /** 需求 1（bug 修复）：交易金额输入界面关闭/确认后需要回到交易界面。 */
@@ -170,274 +254,789 @@ public class ShopInputScreen extends Screen {
     }
 
     private void returnToTradeIfNeeded() {
-        if (isTradeMoney() && !cn.autoforged.module_shop.client.ClientShopData.tradeSelfName.isEmpty()) {
+        if (this.isTradeMoney() && !ClientShopData.tradeSelfName.isEmpty()) {
             Nav.open(new TradeScreen());
         }
     }
 
+    /** 窗口缩放会再次 {@code init}：按字段名留下已输入的字，空字符串仍回退到预设。 */
     @Override
     protected void init() {
         super.init();
-        // init() 在窗口 resize 时会再次执行：先把已输入的值记下来、清空 boxes 再重建，
-        // 否则 boxes 会累积成 2N 条，setInitialFocus/confirm 读到的是上一轮已经不在界面上的旧输入框
-        // （玩家看到的输入框里敲的数字不会进入发送包）。
-        List<String> previous = new ArrayList<>();
-        for (EditBox box : this.boxes) {
-            previous.add(box.getValue());
+        Map<String, String> previous = new LinkedHashMap<>();
+        for (Slot slot : this.chain) {
+            if (slot.field != null) {
+                previous.put(slot.field.name, slot.field.value);
+            }
         }
-        this.boxes.clear();
-        this.boxFields.clear();
-        this.rarityRects.clear();
-        this.choiceValues.clear();
-        this.choiceRects.clear();
-        this.panelH = 70 + this.fieldNames.size() * 33 + headerOffset();
-        this.left = (this.width - this.panelW) / 2;
-        this.top = (this.height - this.panelH) / 2;
-        for (int i = 0; i < this.fieldNames.size(); i++) {
-            String field = this.fieldNames.get(i);
-            if (isRarityField(field)) {
-                // 品质：不再用输入框（以前要手打 legendary/epic/rare/common，容易打错），
-                // 改成四个按钮，点一下即选中，按钮上方显示「品质　当前品质：X」。
-                int rowY = this.top + 38 + headerOffset() + i * 33;
-                int btnW = 47;
-                int gap = 4;
-                Rarity[] all = Rarity.values();
-                for (int k = 0; k < all.length; k++) {
-                    Rarity rarity = all[k];
-                    int bx = this.left + 20 + k * (btnW + gap);
-                    this.rarityRects.add(new int[]{bx, rowY, btnW, 18, k});
-                    this.addRenderableWidget(new ShopButton(bx, rowY, btnW, 18,
-                            Component.translatable(rarity.translationKey()),
-                            b -> this.rarityValue = rarity.id()));
-                }
+        this.applyText(previous);
+        // 选项按钮跟原来一样，缩放时回到请求里的默认值；品质选择保留。
+        this.resetChoices();
+        this.focusFirstText();
+    }
+
+    private void applyText(Map<String, String> previous) {
+        for (Slot slot : this.chain) {
+            if (slot.field == null) {
                 continue;
             }
-            ListTag choices = choicesOf(field);
-            if (!choices.isEmpty()) {
-                // 选项字段：一排按钮（关/开、现实时间/游戏时间…），点一下即选中，上方显示「当前：X」。
-                int rowY = this.top + 38 + headerOffset() + i * 33;
-                int count = Math.min(4, choices.size());
-                int gap = 4;
-                int btnW = Math.min(110, (this.panelW - 40 - gap * (count - 1)) / Math.max(1, count));
-                String presetValue = this.request.getString("default_" + field).trim();
-                String current = presetValue;
-                for (int k = 0; k < choices.size(); k++) {
-                    if (choices.getString(k).equals(presetValue)) {
-                        current = choices.getString(k);
-                    }
-                }
-                if (current.isEmpty() && choices.size() > 0) {
-                    current = choices.getString(0);
-                }
-                this.choiceValues.put(field, current);
-                List<int[]> rects = new ArrayList<>();
-                for (int k = 0; k < count; k++) {
-                    String value = choices.getString(k);
-                    int bx = this.left + 20 + k * (btnW + gap);
-                    rects.add(new int[]{bx, rowY, btnW, 18});
-                    final String picked = value;
-                    this.addRenderableWidget(new ShopButton(bx, rowY, btnW, 18,
-                            choiceLabel(field, value), b -> this.choiceValues.put(field, picked)));
-                }
-                this.choiceRects.put(field, rects);
-                continue;
-            }
-            EditBox box = new EditBox(this.font, this.left + 20, this.top + 38 + headerOffset() + i * 33, this.panelW - 40, 18,
-                    Component.translatable("gui.module_shop.field." + field));
-            box.setMaxLength(32);
-            // 需求 6/7：管理界面编辑时带出当前值，方便修改而不是重新输入。
-            String preset = request.getString("default_" + field);
-            if (!preset.isEmpty()) {
-                box.setValue(preset);
-            }
-            // resize 前已经输入过的内容优先保留，避免重建输入框时把玩家输入清掉。
-            if (i < previous.size() && !previous.get(i).isEmpty()) {
-                box.setValue(previous.get(i));
-            }
-            if (isTimeField(field)) {
-                // 时间输入：自动补冒号（输入 0600 就变成 06:00），并且只允许数字与冒号
-                box.setMaxLength(5);
-                box.setFilter(text -> text.isEmpty() || text.matches("[0-9:]{0,5}"));
-                box.setResponder(text -> {
-                    String formatted = autoColon(text);
-                    if (!formatted.equals(text)) {
-                        box.setValue(formatted);
-                    }
-                });
-            }
-            this.addRenderableWidget(box);
-            this.boxes.add(box);
-            this.boxFields.add(field);
-        }
-        int buttonY = this.top + this.panelH - 30;
-        // 需求 7/8：防误触按钮统一为“左侧确认、右侧取消”；confirm_right 保留作兼容开关（true 才反过来）。
-        boolean confirmRight = this.request.getBoolean("confirm_right");
-        int leftX = this.left + 24;
-        int rightX = this.left + this.panelW - 114;
-        this.addRenderableWidget(new ShopButton(leftX, buttonY, 90, 20,
-                Component.translatable(confirmRight ? "gui.module_shop.cancel" : "gui.module_shop.confirm"),
-                b -> {
-                    if (confirmRight) {
-                        onClose();
-                    } else {
-                        confirm();
-                    }
-                }));
-        this.addRenderableWidget(new ShopButton(rightX, buttonY, 90, 20,
-                Component.translatable(confirmRight ? "gui.module_shop.confirm" : "gui.module_shop.cancel"),
-                b -> {
-                    if (confirmRight) {
-                        confirm();
-                    } else {
-                        onClose();
-                    }
-                }));
-        if (!this.boxes.isEmpty()) {
-            this.setInitialFocus(this.boxes.get(0));
+            String kept = previous.get(slot.field.name);
+            String preset = this.request.getString("default_" + slot.field.name);
+            slot.field.setValue(kept != null && !kept.isEmpty() ? kept : preset);
         }
     }
 
+    private void resetChoices() {
+        this.choiceValues.clear();
+        for (String field : this.fieldNames) {
+            ListTag choices = this.choicesOf(field);
+            if (choices.isEmpty() || isRarityField(field)) {
+                continue;
+            }
+            String presetValue = this.request.getString("default_" + field).trim();
+            String current = presetValue;
+            for (int k = 0; k < choices.size(); k++) {
+                if (choices.getString(k).equals(presetValue)) {
+                    current = choices.getString(k);
+                }
+            }
+            if (current.isEmpty() && choices.size() > 0) {
+                current = choices.getString(0);
+            }
+            this.choiceValues.put(field, current);
+        }
+    }
+
+    private void focusFirstText() {
+        this.focusIndex = -1;
+        for (int i = 0; i < this.chain.size(); i++) {
+            if (this.chain.get(i).field != null) {
+                this.focusIndex = i;
+                this.chain.get(i).field.poke();
+                return;
+            }
+        }
+    }
+
+    private Slot focused() {
+        if (this.focusIndex < 0 || this.focusIndex >= this.chain.size()) {
+            return null;
+        }
+        return this.chain.get(this.focusIndex);
+    }
+
     private void confirm() {
-        // 时间字段格式不对：不进包、不关界面，红字让玩家改（服务端也会再校验一次）
-        if (timeBad()) {
+        // 时间字段格式不对：不进包、不关界面，红字让玩家改（服务端也会再校验一次）。
+        if (this.closed || this.timeBad()) {
             return;
         }
         CompoundTag tag = this.request.copy();
-        for (int i = 0; i < this.boxes.size(); i++) {
-            tag.putString(this.boxFields.get(i), this.boxes.get(i).getValue().trim());
+        for (Slot slot : this.chain) {
+            if (slot.field != null) {
+                tag.putString(slot.field.name, slot.field.value.trim());
+            }
         }
         // 品质是按钮选的，值单独带上（没有输入框，所以不在上面的循环里）。
         if (this.fieldNames.contains(RARITY_FIELD)) {
             tag.putString(RARITY_FIELD, this.rarityValue);
         }
         // 选项字段（开关 / 二选一）同样是按钮选的。
-        for (java.util.Map.Entry<String, String> entry : this.choiceValues.entrySet()) {
+        for (Map.Entry<String, String> entry : this.choiceValues.entrySet()) {
             tag.putString(entry.getKey(), entry.getValue());
         }
         ServerboundShopActionPayload.send(tag);
-        // 需求 1（bug 修复）：确认后**立刻返回上一级**（和「取消」走同一条返回路径）。
-        // 旧版只对「交易金额」做了返回，其它入口（管理员编辑商品、出价、兑换…）确认后就一直停在
-        // 这个输入界面上，玩家以为「确认没生效」，其实数据早就在服务端改好了。
-        Nav.back();
-        returnToTradeIfNeeded();
-    }
-
-    @Override
-    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        super.renderBackground(g, mouseX, mouseY, partialTick);
-        Bricks.panel(g, this.left, this.top, this.panelW, this.panelH);
-    }
-
-    @Override
-    public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        super.render(g, mouseX, mouseY, partialTick);
-        // 标题/提示过长时截断，避免顶出面板（货币名可能很长，例如别的模组的“银币锭”）。
-        int maxTextW = this.panelW - 20;
-        IOStyle.centerAt(g, this.font, truncate(this.title, maxTextW), this.left + this.panelW / 2, this.top + 12, IOStyle.ORANGE);
-        if (!this.info.isEmpty()) {
-            IOStyle.centerAt(g, this.font, truncate(Component.literal(this.info), maxTextW), this.left + this.panelW / 2,
-                    this.top + 27, IOStyle.ORANGE);
-        }
-        // 需求 3：交易金额界面显示玩家余额（数值由服务端在打开输入界面时下发）。
-        if (showBalance()) {
-            long balance = this.request.getLong("balance");
-            int balanceY = this.top + 27 + infoOffset();
-            Component balanceText = Component.translatable("gui.module_shop.trade.balance",
-                    cn.autoforged.module_shop.client.ClientShopData.money(balance));
-            if (overBalance()) {
-                // 输入的数量超过余额能兑换的数量：余额改为左对齐，右侧腾出位置红字提示「余额不足」。
-                g.drawString(this.font, balanceText, this.left + 20, balanceY, IOStyle.ORANGE, false);
-                Component warn = Component.translatable("gui.module_shop.input.not_enough");
-                g.drawString(this.font, warn, this.left + this.panelW - 12 - this.font.width(warn), balanceY,
-                        IOStyle.RED, true);
-            } else {
-                IOStyle.centerAt(g, this.font, balanceText, this.left + this.panelW / 2, balanceY, IOStyle.ORANGE);
-            }
-        }
-        for (int i = 0; i < this.fieldNames.size(); i++) {
-            String field = this.fieldNames.get(i);
-            int labelY = this.top + 26 + headerOffset() + i * 33;
-            if (isRarityField(field)) {
-                // 「品质」+ 右侧「当前品质：X」（按品质配色），与按钮同一行上方，互不重叠。
-                Component label = Component.translatable("gui.module_shop.field." + RARITY_FIELD);
-                g.drawString(this.font, label, this.left + 20, labelY, IOStyle.TEXT_2, true);
-                Rarity current = Rarity.byId(this.rarityValue);
-                g.drawString(this.font,
-                        Component.translatable("gui.module_shop.quality_current",
-                                Component.translatable(current.translationKey())),
-                        this.left + 20 + this.font.width(label) + 10, labelY, current.color(), true);
-                // 选中的那一个按钮加一圈品质色描边（按钮本身是原版样式，这里只勾边）。
-                for (int[] rect : this.rarityRects) {
-                    Rarity rarity = Rarity.values()[rect[4]];
-                    boolean selected = rarity.id().equals(this.rarityValue);
-                    if (selected) {
-                        IOStyle.ring(g, rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2, 0, rarity.color());
-                    } else {
-                        IOStyle.ring(g, rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2, 0, IOStyle.BORDER_DIM);
-                    }
-                }
-                continue;
-            }
-            List<int[]> rects = this.choiceRects.get(field);
-            if (rects != null) {
-                // 「字段名　当前：X」+ 选中项描边（和品质按钮同一套观感）。
-                Component label = Component.translatable("gui.module_shop.field." + field);
-                g.drawString(this.font, label, this.left + 20, labelY, IOStyle.TEXT_2, true);
-                String value = this.choiceValues.getOrDefault(field, "");
-                g.drawString(this.font,
-                        Component.translatable("gui.module_shop.choice_current",
-                                value.isEmpty() ? Component.literal("-") : choiceLabel(field, value)),
-                        this.left + 20 + this.font.width(label) + 10, labelY, IOStyle.BLUE, true);
-                for (int k = 0; k < rects.size(); k++) {
-                    int[] rect = rects.get(k);
-                    boolean selected = k < choicesOf(field).size()
-                            && choicesOf(field).getString(k).equals(value);
-                    IOStyle.ring(g, rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2, 0,
-                            selected ? IOStyle.BLUE : IOStyle.BORDER_DIM);
-                }
-                continue;
-            }
-            g.drawString(this.font, Component.translatable("gui.module_shop.field." + field),
-                    this.left + 20, labelY, IOStyle.TEXT_2, true);
-        }
-        // 需求 7：购买弹窗实时显示总价与余额变化（货币兑换取款复用，并换用自己的文案 key）。
-        long unitPrice = this.request.getLong("unit_price");
-        if (unitPrice > 0L && !this.boxes.isEmpty()) {
-            long quantity = enteredQuantity();
-            long total = quantity > Long.MAX_VALUE / unitPrice ? Long.MAX_VALUE : quantity * unitPrice;
-            long balanceAfter = this.request.getLong("balance") - total;
-            String totalKey = this.request.contains("total_key")
-                    ? this.request.getString("total_key") : "gui.module_shop.buy_total";
-            IOStyle.centerAt(g, this.font, Component.translatable(totalKey,
-                            cn.autoforged.module_shop.client.ClientShopData.money(total),
-                            cn.autoforged.module_shop.client.ClientShopData.money(balanceAfter)),
-                    this.left + this.panelW / 2, this.top + this.panelH - 46, overBalance() ? IOStyle.RED : IOStyle.ORANGE);
-        }
-        // 时间格式错误：红字提示（并且确认按钮点了不会生效）
-        if (timeBad()) {
-            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.input.time_bad"),
-                    this.left + this.panelW / 2, this.top + this.panelH - 46, IOStyle.RED);
-        }
-    }
-
-    /** 按面板宽度截断文本（超出部分用省略号结尾）。 */
-    private Component truncate(Component text, int maxWidth) {
-        String plain = text.getString();
-        if (this.font.width(plain) <= maxWidth) {
-            return text;
-        }
-        return Component.literal(this.font.plainSubstrByWidth(plain, maxWidth - 6) + "...");
+        // 确认后立刻返回上一级，和取消走同一条返回路径。
+        this.leave();
     }
 
     @Override
     public void onClose() {
-        // 需求 1（bug 修复）：取消交易金额输入后回到交易界面，而不是直接关闭所有界面。
+        this.leave();
+    }
+
+    /** 回到上一级，只走一次，避免关闭过程里再退一层。 */
+    private void leave() {
+        if (this.closed) {
+            return;
+        }
+        this.closed = true;
         Nav.back();
-        returnToTradeIfNeeded();
+        this.returnToTradeIfNeeded();
     }
 
     @Override
     public boolean isPauseScreen() {
         return false;
+    }
+
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (this.closed) {
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_ESCAPE && this.shouldCloseOnEsc()) {
+            this.onClose();
+            return true;
+        }
+        if (keyCode == GLFW.GLFW_KEY_TAB && !this.chain.isEmpty()) {
+            int direction = Screen.hasShiftDown() ? -1 : 1;
+            if (this.focusIndex < 0) {
+                this.focusIndex = direction > 0 ? 0 : this.chain.size() - 1;
+            } else {
+                this.focusIndex = Math.floorMod(this.focusIndex + direction, this.chain.size());
+            }
+            Slot slot = this.focused();
+            if (slot != null && slot.field != null) {
+                slot.field.poke();
+            }
+            return true;
+        }
+        Slot slot = this.focused();
+        if (slot != null && slot.field != null && slot.field.keyPressed(keyCode)) {
+            return true;
+        }
+        if (slot != null && slot.field == null && slot.action != null && isActivateKey(keyCode)) {
+            Bricks.click();
+            slot.action.run();
+            return true;
+        }
+        return super.keyPressed(keyCode, scanCode, modifiers);
+    }
+
+    private static boolean isActivateKey(int keyCode) {
+        return keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER || keyCode == GLFW.GLFW_KEY_SPACE;
+    }
+
+    @Override
+    public boolean charTyped(char codePoint, int modifiers) {
+        if (this.closed || Screen.hasControlDown() || Screen.hasAltDown()) {
+            return super.charTyped(codePoint, modifiers);
+        }
+        Slot slot = this.focused();
+        if (slot != null && slot.field != null && StringUtil.isAllowedChatCharacter(codePoint)) {
+            slot.field.insert(String.valueOf(codePoint));
+            return true;
+        }
+        return super.charTyped(codePoint, modifiers);
+    }
+
+    @Override
+    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        super.render(graphics, mouseX, mouseY, partialTick);
+        this.mouseX = mouseX;
+        this.mouseY = mouseY;
+        if (this.width < 2 || this.height < 2 || this.closed) {
+            return;
+        }
+        int cardFill = UiTokens.cardFill();
+        boolean light = Design.isLight(cardFill);
+        int titleColor = light ? 0xFF8A4B12 : 0xFFE0B15E;
+        int bodyColor = light ? 0xFF1B1E27 : 0xFFF3F5F9;
+        int labelColor = light ? 0xFF5C6570 : 0xFF9AA4B5;
+        int fieldFill = light ? 0xFFFFFFFF : 0xFF12151C;
+        int danger = 0xFFE5645F;
+        int choiceColor = light ? 0xFF2B4BFF : 0xFF8EB4FF;
+        String titleText = this.title == null ? "" : this.title.getString();
+        String infoText = this.info == null ? "" : this.info;
+        Map<NodeId, Glyph> glyphs = new LinkedHashMap<>();
+        List<LayoutNode> column = new ArrayList<>();
+        column.add(this.glyph(glyphs, "input.title", titleText, true, 15.0F, titleColor, TEXT_W));
+        if (!infoText.isEmpty()) {
+            column.add(this.glyph(glyphs, "input.info", infoText, false, 13.0F, titleColor, TEXT_W));
+        }
+        if (this.showBalance()) {
+            long balance = this.request.getLong("balance");
+            String balanceText = Component.translatable("gui.module_shop.trade.balance", ClientShopData.money(balance))
+                    .getString();
+            if (this.overBalance()) {
+                String warnText = Component.translatable("gui.module_shop.input.not_enough").getString();
+                float warnW = Math.min(this.textWidth(warnText, false, 12.0F), TEXT_W * 0.46F);
+                float balanceW = Math.max(48.0F, TEXT_W - warnW - 8.0F);
+                column.add(AtomUi.node("input.balance.row",
+                        LayoutStyle.row().size(Length.points(TEXT_W), Length.auto()).spacing(8.0F, 0.0F)
+                                .justify(LayoutStyle.Justify.SPACE_BETWEEN).align(LayoutStyle.Align.CENTER),
+                        List.of(
+                                this.glyph(glyphs, "input.balance", balanceText, false, 12.0F, titleColor, balanceW),
+                                this.glyph(glyphs, "input.balance.warn", warnText, false, 12.0F, danger, warnW))));
+            } else {
+                column.add(this.glyph(glyphs, "input.balance", balanceText, false, 13.0F, titleColor, TEXT_W));
+            }
+        }
+        for (int i = 0; i < this.fieldNames.size(); i++) {
+            column.add(this.fieldBlock(glyphs, i, labelColor, choiceColor));
+        }
+        long unitPrice = this.request.getLong("unit_price");
+        TextField first = this.firstText();
+        if (unitPrice > 0L && first != null) {
+            long quantity = this.enteredQuantity();
+            long total = quantity > Long.MAX_VALUE / unitPrice ? Long.MAX_VALUE : quantity * unitPrice;
+            long balanceAfter = this.request.getLong("balance") - total;
+            String totalKey = this.request.contains("total_key")
+                    ? this.request.getString("total_key") : "gui.module_shop.buy_total";
+            String totalText = Component.translatable(totalKey, ClientShopData.money(total),
+                    ClientShopData.money(balanceAfter)).getString();
+            int totalColor = this.overBalance() ? danger : titleColor;
+            column.add(this.glyph(glyphs, "input.total", totalText, false, 12.0F, totalColor, TEXT_W));
+        }
+        if (this.timeBad()) {
+            String timeText = Component.translatable("gui.module_shop.input.time_bad").getString();
+            column.add(this.glyph(glyphs, "input.time", timeText, false, 12.0F, danger, TEXT_W));
+        }
+        column.add(AtomUi.node("input.actions",
+                LayoutStyle.row().size(Length.points(TEXT_W), Length.auto())
+                        .justify(LayoutStyle.Justify.SPACE_BETWEEN).align(LayoutStyle.Align.CENTER),
+                List.of(AtomUi.fixed(LEFT.value(), BUTTON_W, BUTTON_H),
+                        AtomUi.fixed(RIGHT.value(), BUTTON_W, BUTTON_H))));
+        LayoutNode card = AtomUi.node(CARD.value(),
+                LayoutStyle.column().size(Length.points(CARD_W), Length.auto()).padding(12.0F).spacing(6.0F, 0.0F)
+                        .align(LayoutStyle.Align.CENTER),
+                column);
+        LayoutNode root = AtomUi.node("input.root",
+                LayoutStyle.column().size(Length.points(this.width), Length.points(this.height))
+                        .align(LayoutStyle.Align.CENTER).justify(LayoutStyle.Justify.CENTER),
+                List.of(card));
+        PresentationFrame frame = AtomUi.present(root, this.width, this.height);
+        this.pointers.use(frame, this.interactive, this.targets);
+        String confirmText = Component.translatable("gui.module_shop.confirm").getString();
+        String cancelText = Component.translatable("gui.module_shop.cancel").getString();
+        paintAtom(graphics, (canvas, borrowed) -> {
+            for (NodeId id : frame.paintOrder()) {
+                LayoutBox box = frame.box(id);
+                if (box == null) {
+                    continue;
+                }
+                Rect rect = box.border();
+                if (CARD.equals(id)) {
+                    UiCards.drawCard(canvas, rect.x(), rect.y(), rect.width(), rect.height(), UiTokens.cardRadius(),
+                            0.0F);
+                    continue;
+                }
+                Glyph glyph = glyphs.get(id);
+                if (glyph != null) {
+                    this.drawGlyph(canvas, glyph, box.content());
+                    continue;
+                }
+                Slot slot = this.slots.get(id);
+                if (slot == null) {
+                    continue;
+                }
+                boolean hot = rect.contains(this.mouseX, this.mouseY);
+                boolean keyed = slot == this.focused();
+                if (slot.field != null) {
+                    int ring = keyed ? UiTokens.accentFill() : UiTokens.hairline();
+                    this.drawChrome(canvas, rect, fieldFill, ring, false);
+                    this.drawFieldText(canvas, rect, slot.field, bodyColor, keyed);
+                } else if (slot.rarity != null) {
+                    boolean selected = slot.rarity.id().equals(this.rarityValue);
+                    int color = slot.rarity.color() | 0xFF000000;
+                    int fill = selected ? (light ? 0xFFFFF8EE : 0xFF2C3344) : (light ? 0xFFF3F0EA : 0xFF232833);
+                    this.drawChrome(canvas, rect, fill, selected ? color : UiTokens.hairline(), hot || keyed);
+                    AtomUi.drawTextCentered(canvas, Component.translatable(slot.rarity.translationKey()).getString(),
+                            AtomUi.bold(), 12.0F, selected ? color : bodyColor, rect);
+                } else if (slot.choiceField != null) {
+                    boolean selected = slot.choiceValue.equals(this.choiceValues.get(slot.choiceField));
+                    int fill = selected ? (light ? 0xFFF4F7FF : 0xFF243044) : (light ? 0xFFF3F0EA : 0xFF232833);
+                    this.drawChrome(canvas, rect, fill, selected ? choiceColor : UiTokens.hairline(), hot || keyed);
+                    AtomUi.drawTextCentered(canvas, choiceLabel(slot.choiceField, slot.choiceValue).getString(),
+                            AtomUi.bold(), 12.0F, selected ? choiceColor : bodyColor, rect);
+                } else if (LEFT.equals(id) || RIGHT.equals(id)) {
+                    boolean confirm = LEFT.equals(id) == this.confirmOnLeft;
+                    int fill = confirm ? UiTokens.accentFill() : 0xFF5A6270;
+                    // 确认钮本身就是强调色，键盘焦点用正文色描边才看得出。
+                    int ring = keyed ? bodyColor : 0;
+                    this.drawChrome(canvas, rect, fill, ring, hot || keyed);
+                    AtomUi.drawTextCentered(canvas, confirm ? confirmText : cancelText, AtomUi.bold(), 13.0F,
+                            UiTokens.onAccent(fill), rect);
+                }
+            }
+        });
+    }
+
+    private LayoutNode fieldBlock(Map<NodeId, Glyph> glyphs, int index, int labelColor, int choiceColor) {
+        String field = this.fieldNames.get(index);
+        List<LayoutNode> kids = new ArrayList<>();
+        if (isRarityField(field)) {
+            String label = Component.translatable("gui.module_shop.field." + RARITY_FIELD).getString();
+            Rarity current = Rarity.byId(this.rarityValue);
+            String currentText = Component.translatable("gui.module_shop.quality_current",
+                    Component.translatable(current.translationKey())).getString();
+            kids.add(this.splitLabel(glyphs, index, label, labelColor, currentText, current.color() | 0xFF000000));
+            kids.add(this.optionRow(index));
+        } else if (!this.choicesOf(field).isEmpty()) {
+            String label = Component.translatable("gui.module_shop.field." + field).getString();
+            String value = this.choiceValues.getOrDefault(field, "");
+            String currentText = Component.translatable("gui.module_shop.choice_current",
+                    value.isEmpty() ? Component.literal("-") : choiceLabel(field, value)).getString();
+            kids.add(this.splitLabel(glyphs, index, label, labelColor, currentText, choiceColor));
+            kids.add(this.optionRow(index));
+        } else {
+            String label = Component.translatable("gui.module_shop.field." + field).getString();
+            kids.add(this.glyph(glyphs, "input.label." + index, label, false, 12.0F, labelColor, TEXT_W));
+            kids.add(AtomUi.fixed("input.box." + index, TEXT_W, FIELD_H));
+        }
+        return AtomUi.node("input.block." + index,
+                LayoutStyle.column().size(Length.points(TEXT_W), Length.auto()).spacing(2.0F, 0.0F)
+                        .align(LayoutStyle.Align.FLEX_START),
+                kids);
+    }
+
+    private LayoutNode splitLabel(Map<NodeId, Glyph> glyphs, int index, String label, int labelColor, String current,
+            int currentColor) {
+        float labelW = Math.min(Math.max(24.0F, this.textWidth(label, false, 12.0F)), TEXT_W * 0.48F);
+        float currentW = Math.max(40.0F, TEXT_W - labelW - 8.0F);
+        return AtomUi.node("input.caption." + index,
+                LayoutStyle.row().size(Length.points(TEXT_W), Length.auto()).spacing(8.0F, 0.0F)
+                        .align(LayoutStyle.Align.CENTER),
+                List.of(
+                        this.glyph(glyphs, "input.label." + index, label, false, 12.0F, labelColor, labelW),
+                        this.glyph(glyphs, "input.current." + index, current, false, 12.0F, currentColor, currentW)));
+    }
+
+    private LayoutNode optionRow(int index) {
+        List<Slot> options = new ArrayList<>();
+        for (Slot slot : this.chain) {
+            if (slot.fieldIndex == index && slot.field == null) {
+                options.add(slot);
+            }
+        }
+        float gap = 4.0F;
+        int count = Math.max(1, options.size());
+        float width = Math.min(110.0F, (TEXT_W - gap * (count - 1)) / count);
+        List<LayoutNode> buttons = new ArrayList<>();
+        for (Slot slot : options) {
+            buttons.add(AtomUi.fixed(slot.id.value(), width, BUTTON_H));
+        }
+        return AtomUi.node("input.opts." + index,
+                LayoutStyle.row().spacing(gap, 0.0F).align(LayoutStyle.Align.CENTER),
+                buttons);
+    }
+
+    private LayoutNode glyph(Map<NodeId, Glyph> glyphs, String id, String text, boolean bold, float size, int color,
+            float width) {
+        glyphs.put(new NodeId(id), new Glyph(text == null ? "" : text, bold, size, color));
+        return AtomUi.textLeaf(id, text == null ? "" : text, bold ? AtomUi.bold() : AtomUi.regular(), size, color,
+                width);
+    }
+
+    private void drawGlyph(Canvas canvas, Glyph glyph, Rect rect) {
+        AtomUi.drawText(canvas, glyph.text, glyph.bold ? AtomUi.bold() : AtomUi.regular(), glyph.size, glyph.color,
+                rect.x(), rect.y(), rect.width());
+    }
+
+    private void drawChrome(Canvas canvas, Rect rect, int fill, int ring, boolean hot) {
+        if (ring != 0) {
+            UiCards.drawCard(canvas, rect.x() - 1.0F, rect.y() - 1.0F, rect.width() + 2.0F, rect.height() + 2.0F,
+                    UiTokens.buttonRadius() + 1.0F, 0.0F, 0, 0.0F, ring);
+        }
+        UiCards.drawCard(canvas, rect.x(), rect.y(), rect.width(), rect.height(), UiTokens.buttonRadius(),
+                hot ? 1.0F : 0.0F, 0x55000000, hot ? 6.0F : 2.0F, fill);
+    }
+
+    private void drawFieldText(Canvas canvas, Rect rect, TextField field, int color, boolean focused) {
+        float padX = 6.0F;
+        float visible = Math.max(1.0F, rect.width() - padX * 2.0F);
+        TextLayout laid = field.layout();
+        float textH = laid == null ? INPUT_SIZE : Math.max(INPUT_SIZE, laid.size().height());
+        float textX = rect.x() + padX;
+        float textY = rect.y() + (rect.height() - textH) / 2.0F;
+        float caret = field.caretX(laid);
+        float view = field.adjustScroll(caret, visible, laid);
+        field.originX = textX;
+        field.originY = textY;
+        field.scroll = view;
+        canvas.save();
+        PathBuilder clipBuilder = new PathBuilder();
+        Path clipPath = null;
+        try {
+            float clipY = rect.y() + 2.0F;
+            float clipH = Math.max(1.0F, rect.height() - 4.0F);
+            clipBuilder.moveTo(textX, clipY).lineTo(textX + visible, clipY).lineTo(textX + visible, clipY + clipH)
+                    .lineTo(textX, clipY + clipH).closePath();
+            clipPath = clipBuilder.snapshot();
+            canvas.clipPath(clipPath);
+            if (laid != null && field.cursor != field.anchor) {
+                int from = Math.max(0, Math.min(field.value.length(), Math.min(field.cursor, field.anchor)));
+                int to = Math.max(0, Math.min(field.value.length(), Math.max(field.cursor, field.anchor)));
+                for (Rect piece : laid.selection(from, to)) {
+                    UiCards.drawCard(canvas, textX + piece.x() - view, textY + piece.y(), piece.width(),
+                            piece.height(), 1.0F, 0.0F, 0, 0.0F, 0x664C8DFF);
+                }
+            }
+            AtomUi.drawText(canvas, field.value, AtomUi.regular(), INPUT_SIZE, color, textX - view, textY, 8000.0F);
+            if (focused && field.caretOn()) {
+                float caretX = textX + caret - view;
+                UiCards.drawCard(canvas, caretX, textY, 1.25F, textH, 0.0F, 0.0F, 0, 0.0F, color);
+            }
+        } finally {
+            canvas.restore();
+            if (clipPath != null) {
+                clipPath.close();
+            }
+            clipBuilder.close();
+        }
+    }
+
+    private float textWidth(String value, boolean bold, float size) {
+        if (value == null || value.isEmpty()) {
+            return 0.0F;
+        }
+        TextLayout laid = AtomUi.text().layout(
+                new TextRequest(value, bold ? AtomUi.bold() : AtomUi.regular(), size, 0xFFFFFFFF, 1, false),
+                new Constraints(Constraints.Axis.atMost(2000.0F), Constraints.Axis.undefined()));
+        return laid.size().width();
+    }
+
+    private final class SlotTarget implements PointerTarget {
+        private final Slot slot;
+
+        private SlotTarget(Slot slot) {
+            this.slot = slot;
+        }
+
+        @Override
+        public boolean press(PointerEvent event) {
+            if (ShopInputScreen.this.closed) {
+                return true;
+            }
+            ShopInputScreen.this.focusIndex = ShopInputScreen.this.chain.indexOf(this.slot);
+            if (this.slot.field != null) {
+                this.slot.field.place(event.x(), event.y(), false);
+                this.slot.field.poke();
+                return true;
+            }
+            Bricks.click();
+            if (this.slot.action != null) {
+                this.slot.action.run();
+            }
+            return true;
+        }
+
+        @Override
+        public void drag(PointerEvent event) {
+            if (this.slot.field != null && !ShopInputScreen.this.closed) {
+                this.slot.field.place(event.x(), event.y(), true);
+            }
+        }
+
+        @Override
+        public void release(PointerEvent event) {
+        }
+
+        @Override
+        public void cancel() {
+        }
+    }
+
+    /** 一个文本框。光标、选区、时间冒号和长度限制都在这里，不依赖原版 {@code EditBox}。 */
+    private static final class TextField {
+        private final String name;
+        private final int maxLength;
+        private final boolean time;
+        private String value = "";
+        private int cursor;
+        private int anchor;
+        private float scroll;
+        private float originX;
+        private float originY;
+        private long pokedAt;
+
+        private TextField(String name, int maxLength) {
+            this.name = name;
+            this.maxLength = maxLength;
+            this.time = isTimeField(name);
+            this.poke();
+        }
+
+        private void poke() {
+            this.pokedAt = Util.getMillis();
+        }
+
+        private boolean caretOn() {
+            return ((Util.getMillis() - this.pokedAt) / 500L) % 2L == 0L;
+        }
+
+        private void setValue(String raw) {
+            String text = raw == null ? "" : raw;
+            if (text.length() > this.maxLength) {
+                text = text.substring(0, this.maxLength);
+            }
+            if (this.time && !this.accept(text)) {
+                return;
+            }
+            this.value = text;
+            this.cursor = this.value.length();
+            this.anchor = this.cursor;
+            this.normalizeTime();
+            this.poke();
+        }
+
+        private boolean accept(String text) {
+            return text.isEmpty() || text.matches("[0-9:]{0,5}");
+        }
+
+        private void normalizeTime() {
+            if (!this.time) {
+                return;
+            }
+            String formatted = autoColon(this.value);
+            if (formatted.equals(this.value) || !this.accept(formatted)) {
+                return;
+            }
+            this.value = formatted;
+            this.cursor = this.value.length();
+            this.anchor = this.cursor;
+        }
+
+        private void insert(String raw) {
+            int from = Math.min(this.cursor, this.anchor);
+            int to = Math.max(this.cursor, this.anchor);
+            int room = this.maxLength - this.value.length() - (from - to);
+            if (room <= 0) {
+                return;
+            }
+            String clean = StringUtil.filterText(raw == null ? "" : raw);
+            if (clean.length() > room) {
+                if (Character.isHighSurrogate(clean.charAt(room - 1))) {
+                    room--;
+                }
+                clean = room <= 0 ? "" : clean.substring(0, room);
+            }
+            String next = new StringBuilder(this.value).replace(from, to, clean).toString();
+            if (this.time && !this.accept(next)) {
+                return;
+            }
+            this.value = next;
+            this.cursor = from + clean.length();
+            this.anchor = this.cursor;
+            this.normalizeTime();
+            this.poke();
+        }
+
+        private boolean keyPressed(int keyCode) {
+            boolean shift = Screen.hasShiftDown();
+            boolean control = Screen.hasControlDown();
+            if (Screen.isSelectAll(keyCode)) {
+                this.anchor = 0;
+                this.cursor = this.value.length();
+                this.poke();
+                return true;
+            }
+            if (Screen.isCopy(keyCode)) {
+                Minecraft.getInstance().keyboardHandler.setClipboard(this.selected());
+                return true;
+            }
+            if (Screen.isPaste(keyCode)) {
+                this.insert(clipboard());
+                return true;
+            }
+            if (Screen.isCut(keyCode)) {
+                Minecraft.getInstance().keyboardHandler.setClipboard(this.selected());
+                this.insert("");
+                return true;
+            }
+            if (keyCode == GLFW.GLFW_KEY_LEFT) {
+                this.move(-1, shift, control);
+                return true;
+            }
+            if (keyCode == GLFW.GLFW_KEY_RIGHT) {
+                this.move(1, shift, control);
+                return true;
+            }
+            if (keyCode == GLFW.GLFW_KEY_HOME) {
+                this.cursor = 0;
+                if (!shift) {
+                    this.anchor = this.cursor;
+                }
+                this.poke();
+                return true;
+            }
+            if (keyCode == GLFW.GLFW_KEY_END) {
+                this.cursor = this.value.length();
+                if (!shift) {
+                    this.anchor = this.cursor;
+                }
+                this.poke();
+                return true;
+            }
+            if (keyCode == GLFW.GLFW_KEY_BACKSPACE) {
+                this.erase(-1, control);
+                return true;
+            }
+            if (keyCode == GLFW.GLFW_KEY_DELETE) {
+                this.erase(1, control);
+                return true;
+            }
+            // 原版输入框不处理 Enter，打字时按 Enter 不会提交。
+            return false;
+        }
+
+        private static String clipboard() {
+            String text = Minecraft.getInstance().keyboardHandler.getClipboard();
+            return text == null ? "" : text;
+        }
+
+        private String selected() {
+            int from = Math.min(this.cursor, this.anchor);
+            int to = Math.max(this.cursor, this.anchor);
+            if (from == to || from < 0 || to > this.value.length()) {
+                return "";
+            }
+            return this.value.substring(from, to);
+        }
+
+        private void move(int direction, boolean select, boolean word) {
+            int next = word ? this.word(direction) : Util.offsetByCodepoints(this.value, this.cursor, direction);
+            this.cursor = Math.max(0, Math.min(this.value.length(), next));
+            if (!select) {
+                this.anchor = this.cursor;
+            }
+            this.poke();
+        }
+
+        /** 和原版输入框一样，只把空格当成单词边界。 */
+        private int word(int direction) {
+            int index = this.cursor;
+            if (direction >= 0) {
+                int length = this.value.length();
+                index = this.value.indexOf(' ', index);
+                if (index == -1) {
+                    return length;
+                }
+                while (index < length && this.value.charAt(index) == ' ') {
+                    index++;
+                }
+                return index;
+            }
+            while (index > 0 && this.value.charAt(index - 1) == ' ') {
+                index--;
+            }
+            while (index > 0 && this.value.charAt(index - 1) != ' ') {
+                index--;
+            }
+            return index;
+        }
+
+        private void erase(int direction, boolean word) {
+            if (this.cursor != this.anchor) {
+                this.insert("");
+                return;
+            }
+            int next = word ? this.word(direction) : Util.offsetByCodepoints(this.value, this.cursor, direction);
+            int from = Math.min(this.cursor, next);
+            int to = Math.max(this.cursor, next);
+            if (from == to) {
+                return;
+            }
+            this.anchor = to;
+            this.cursor = from;
+            this.insert("");
+        }
+
+        private void place(float mouseX, float mouseY, boolean extend) {
+            TextLayout laid = this.layout();
+            int hit = 0;
+            if (laid != null && !laid.lines().isEmpty()) {
+                float localX = mouseX - this.originX + this.scroll;
+                float localY = mouseY - this.originY;
+                if (Float.isFinite(localX) && Float.isFinite(localY)) {
+                    try {
+                        hit = laid.hitTest(Math.max(0.0F, localX), Math.max(0.0F, localY));
+                    } catch (RuntimeException ignored) {
+                        hit = this.value.length();
+                    }
+                }
+            } else if (mouseX > this.originX) {
+                hit = this.value.length();
+            }
+            this.cursor = Math.max(0, Math.min(this.value.length(), hit));
+            if (!extend) {
+                this.anchor = this.cursor;
+            }
+            this.poke();
+        }
+
+        private TextLayout layout() {
+            if (this.value.isEmpty()) {
+                return null;
+            }
+            return AtomUi.text().layout(
+                    new TextRequest(this.value, AtomUi.regular(), INPUT_SIZE, 0xFFFFFFFF, 1, false),
+                    new Constraints(Constraints.Axis.atMost(8000.0F), Constraints.Axis.undefined()));
+        }
+
+        private float caretX(TextLayout laid) {
+            if (laid == null) {
+                return 0.0F;
+            }
+            float x = 0.0F;
+            for (TextLayout.Line line : laid.lines()) {
+                for (TextLayout.Caret caret : line.carets()) {
+                    x = caret.x();
+                    if (caret.offset() >= this.cursor) {
+                        return caret.x();
+                    }
+                }
+            }
+            return x;
+        }
+
+        private float adjustScroll(float caret, float visible, TextLayout laid) {
+            float view = this.scroll;
+            if (caret < view) {
+                view = caret;
+            }
+            if (caret > view + visible - 2.0F) {
+                view = caret - visible + 2.0F;
+            }
+            float width = laid == null ? 0.0F : laid.size().width();
+            float max = Math.max(0.0F, width - visible);
+            if (view > max) {
+                view = max;
+            }
+            if (view < 0.0F) {
+                view = 0.0F;
+            }
+            return view;
+        }
+    }
+
+    private static final class Slot {
+        private final NodeId id;
+        private final int fieldIndex;
+        private final TextField field;
+        private final Runnable action;
+        private final Rarity rarity;
+        private final String choiceField;
+        private final String choiceValue;
+
+        private Slot(NodeId id, int fieldIndex, TextField field, Runnable action, Rarity rarity, String choiceField,
+                String choiceValue) {
+            this.id = id;
+            this.fieldIndex = fieldIndex;
+            this.field = field;
+            this.action = action;
+            this.rarity = rarity;
+            this.choiceField = choiceField;
+            this.choiceValue = choiceValue;
+        }
+
+        private static Slot text(NodeId id, int fieldIndex, TextField field) {
+            return new Slot(id, fieldIndex, field, null, null, null, null);
+        }
+
+        private static Slot press(NodeId id, int fieldIndex, Runnable action) {
+            return new Slot(id, fieldIndex, null, action, null, null, null);
+        }
+
+        private static Slot rarity(NodeId id, int fieldIndex, Runnable action, Rarity rarity) {
+            return new Slot(id, fieldIndex, null, action, rarity, null, null);
+        }
+
+        private static Slot choice(NodeId id, int fieldIndex, Runnable action, String choiceField, String choiceValue) {
+            return new Slot(id, fieldIndex, null, action, null, choiceField, choiceValue);
+        }
+    }
+
+    private record Glyph(String text, boolean bold, float size, int color) {
     }
 }

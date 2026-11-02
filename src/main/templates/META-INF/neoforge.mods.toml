@@ -97,8 +97,8 @@ Everything is server-authoritative; the GUI is available in English and Simplifi
     ordering="NONE"
     side="BOTH"
 
-# 客户端 UI（壳层与确认框）依赖 AtomLib 0.1.0-beta。专用服务器不需要它。
-# 上界排除 0.2.0：那个版本还没发布，控件 API 也不在这次接线里。
+# 客户端 UI（壳层、确认框、数值输入）依赖 AtomLib 0.1.0-beta。专用服务器不需要它。
+# 上界排除 0.2.0：那个版本还没发布。输入框用现有的文本、布局和指针 API 绘制。
 [[dependencies.${mod_id}]]
     modId="atomlib"
     type="required"
