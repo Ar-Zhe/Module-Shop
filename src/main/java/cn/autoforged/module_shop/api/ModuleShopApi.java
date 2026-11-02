@@ -2,9 +2,9 @@ package cn.autoforged.module_shop.api;
 
 import cn.autoforged.module_shop.api.internal.ApiImpl;
 import net.minecraft.server.MinecraftServer;
-import net.neoforged.bus.api.BusBuilder;
-import net.neoforged.bus.api.IEventBus;
-import net.neoforged.neoforge.server.ServerLifecycleHooks;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.eventbus.api.IEventBus;
+import net.minecraftforge.server.ServerLifecycleHooks;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -20,7 +20,7 @@ import org.jetbrains.annotations.Nullable;
  */
 public final class ModuleShopApi {
     /** 事件总线：只发布"业务已成功之后"的通知型事件（不可取消）。 */
-    private static final IEventBus BUS = BusBuilder.builder().build();
+    private static final IEventBus BUS = MinecraftForge.EVENT_BUS;
 
     private static final EconomyApi ECONOMY = new ApiImpl.Economy();
     private static final ItemDeliveryApi ITEMS = new ApiImpl.Items();

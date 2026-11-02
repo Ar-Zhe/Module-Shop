@@ -1,7 +1,7 @@
 package cn.autoforged.module_shop.data;
 
 import java.util.UUID;
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.ItemStack;
 
@@ -98,7 +98,7 @@ public final class MailEntry {
         }
         ItemStack rest = add.copy();
         for (ItemStack exist : stacks) {
-            if (exist.isEmpty() || !ItemStack.isSameItemSameComponents(exist, rest)) {
+            if (exist.isEmpty() || !ItemStack.isSameItemSameTags(exist, rest)) {
                 continue;
             }
             int room = exist.getMaxStackSize() - exist.getCount();
@@ -188,7 +188,7 @@ public final class MailEntry {
         return pendingItem() || pendingMoney();
     }
 
-    public CompoundTag save(HolderLookup.Provider registries) {
+    public CompoundTag save(RegistryAccess registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
         tag.putString("mailId", mailId);
         tag.putString("type", type.id());
@@ -218,7 +218,7 @@ public final class MailEntry {
         return tag;
     }
 
-    public static MailEntry load(CompoundTag tag, HolderLookup.Provider registries) {
+    public static MailEntry load(CompoundTag tag, RegistryAccess registries) {
         MailEntry entry = new MailEntry();
         entry.stack = ShopNbt.loadStack(tag, registries);
         // 旧存档没有 mailId 时现补一个，保证每封邮件都有稳定身份。

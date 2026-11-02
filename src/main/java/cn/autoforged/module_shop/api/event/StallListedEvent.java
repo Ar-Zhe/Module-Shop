@@ -2,7 +2,7 @@ package cn.autoforged.module_shop.api.event;
 
 import java.util.UUID;
 import net.minecraft.world.item.ItemStack;
-import net.neoforged.bus.api.Event;
+import net.minecraftforge.eventbus.api.Event;
 
 /** 一件物品已上架到玩家摊位（成功后发布，不可取消）。 */
 public final class StallListedEvent extends Event {

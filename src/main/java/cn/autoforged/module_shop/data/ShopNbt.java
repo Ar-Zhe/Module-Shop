@@ -1,6 +1,6 @@
 package cn.autoforged.module_shop.data;
 
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -11,19 +11,19 @@ public final class ShopNbt {
     private ShopNbt() {
     }
 
-    public static CompoundTag saveStack(ItemStack stack, HolderLookup.Provider registries) {
+    public static CompoundTag saveStack(ItemStack stack, RegistryAccess registries) {
         CompoundTag tag = new CompoundTag();
         if (stack != null && !stack.isEmpty()) {
-            tag.put("item", stack.saveOptional(registries));
+            tag.put("item", stack.save(new net.minecraft.nbt.CompoundTag()));
         }
         return tag;
     }
 
-    public static ItemStack loadStack(CompoundTag tag, HolderLookup.Provider registries) {
+    public static ItemStack loadStack(CompoundTag tag, RegistryAccess registries) {
         if (tag == null || !tag.contains("item", Tag.TAG_COMPOUND)) {
             return ItemStack.EMPTY;
         }
-        return ItemStack.parseOptional(registries, tag.getCompound("item"));
+        return ItemStack.of(tag.getCompound("item"));
     }
 
     /**
@@ -32,7 +32,7 @@ public final class ShopNbt {
      * 这里强制走一次 NBT 序列化/反序列化，保证内容物、自定义 NBT、标签与属性数据
      * 完全独立且不丢失，任一方向后续修改都不会影响另一方。
      */
-    public static ItemStack deepCopy(ItemStack stack, HolderLookup.Provider registries) {
+    public static ItemStack deepCopy(ItemStack stack, RegistryAccess registries) {
         if (stack == null || stack.isEmpty()) {
             return ItemStack.EMPTY;
         }

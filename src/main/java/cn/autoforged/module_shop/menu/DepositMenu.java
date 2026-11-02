@@ -144,10 +144,6 @@ public class DepositMenu extends AbstractContainerMenu {
             return false;
         }
 
-        @Override
-        public boolean isFake() {
-            return true;
-        }
     }
 
     /** 需求 2：交易槽位已满时的锁定槽，服务端拒绝任何放入。 */

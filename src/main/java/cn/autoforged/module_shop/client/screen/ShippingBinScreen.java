@@ -159,7 +159,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
 
     private static String modName(String namespace) {
         try {
-            return net.neoforged.fml.ModList.get().getModContainerById(namespace)
+            return net.minecraftforge.fml.ModList.get().getModContainerById(namespace)
                     .map(c -> c.getModInfo().getDisplayName()).orElse(namespace);
         } catch (Throwable ignored) {
             return namespace;
@@ -175,7 +175,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         int total = 0;
         for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
             ItemStack stack = player.getInventory().getItem(i);
-            if (!stack.isEmpty() && ItemStack.isSameItemSameComponents(stack, want)) {
+            if (!stack.isEmpty() && ItemStack.isSameItemSameTags(stack, want)) {
                 total += stack.getCount();
             }
         }
@@ -619,7 +619,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         List<Slot> targets = new ArrayList<>();
         for (Slot slot : getMenu().slots) {
             if (slot.container == this.minecraft.player.getInventory() && slot.hasItem()
-                    && ItemStack.isSameItemSameComponents(slot.getItem(), entry.stack())) {
+                    && ItemStack.isSameItemSameTags(slot.getItem(), entry.stack())) {
                 targets.add(slot);
             }
         }
@@ -629,27 +629,27 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         Bricks.click();
         for (Slot slot : targets) {
             // 每搬一叠都重新确认一次：前面的移动可能已经把这一格合并掉了。
-            if (slot.hasItem() && ItemStack.isSameItemSameComponents(slot.getItem(), entry.stack())) {
+            if (slot.hasItem() && ItemStack.isSameItemSameTags(slot.getItem(), entry.stack())) {
                 this.slotClicked(slot, slot.index, 0, ClickType.QUICK_MOVE);
             }
         }
     }
 
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (scrollY != 0.0D) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        if (delta != 0.0D) {
             if (this.catOpen && IOStyle.inside(this.catRect[0], this.catRect[1], this.catRect[2], this.catRect[3],
                     mouseX, mouseY)) {
-                this.catScroll = Math.max(0, this.catScroll + (scrollY > 0 ? -1 : 1));
+                this.catScroll = Math.max(0, this.catScroll + (delta > 0 ? -1 : 1));
                 return true;
             }
             if (mouseX >= this.leftPos + LIST_X - 6 && mouseX < this.leftPos + LIST_X + LIST_W
                     && mouseY >= this.topPos + LIST_TOP) {
-                this.listScroll = Math.max(0, this.listScroll + (scrollY > 0 ? -1 : 1));
+                this.listScroll = Math.max(0, this.listScroll + (delta > 0 ? -1 : 1));
                 return true;
             }
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     @Override

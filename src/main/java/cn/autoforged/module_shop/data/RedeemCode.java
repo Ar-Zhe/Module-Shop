@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.world.item.ItemStack;
@@ -77,7 +77,7 @@ public final class RedeemCode {
         return !items.isEmpty() || money > 0L;
     }
 
-    public CompoundTag save(HolderLookup.Provider registries) {
+    public CompoundTag save(RegistryAccess registries) {
         CompoundTag tag = new CompoundTag();
         tag.putString("code", code);
         tag.putLong("expireAt", expireAt);
@@ -108,7 +108,7 @@ public final class RedeemCode {
         return tag;
     }
 
-    public static RedeemCode load(CompoundTag tag, HolderLookup.Provider registries) {
+    public static RedeemCode load(CompoundTag tag, RegistryAccess registries) {
         RedeemCode code = new RedeemCode();
         code.code = tag.getString("code");
         code.expireAt = tag.getLong("expireAt");

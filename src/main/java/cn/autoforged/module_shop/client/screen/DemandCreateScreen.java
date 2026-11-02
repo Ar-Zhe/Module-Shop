@@ -153,7 +153,7 @@ public class DemandCreateScreen extends Screen {
     /** 加入清单（同种物品合并数量）。 */
     private void add(ItemStack stack) {
         for (Entry entry : this.picked) {
-            if (ItemStack.isSameItemSameComponents(entry.stack, stack)) {
+            if (ItemStack.isSameItemSameTags(entry.stack, stack)) {
                 entry.count = Math.min(64, entry.count + 1);
                 return;
             }
@@ -190,7 +190,7 @@ public class DemandCreateScreen extends Screen {
         ListTag list = new ListTag();
         for (Entry entry : this.picked) {
             CompoundTag line = new CompoundTag();
-            line.put("item", entry.stack.saveOptional(this.minecraft.level.registryAccess()));
+            line.put("item", entry.stack.save(new net.minecraft.nbt.CompoundTag()));
             line.putInt("count", entry.count);
             list.add(line);
         }
@@ -207,7 +207,7 @@ public class DemandCreateScreen extends Screen {
      * 这里直接铺一层实色底，内容看起来干净清晰。
      */
     @Override
-    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+    public void renderBackground(GuiGraphics g) {
         g.fill(0, 0, this.width, this.height, 0xFF0E1013);
     }
 
@@ -216,7 +216,7 @@ public class DemandCreateScreen extends Screen {
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         // 顺序：背景 → 原版组件（输入框）→ 底板 → 内容。内容永远在最上层。
-        this.renderBackground(g, mouseX, mouseY, partialTick);
+        this.renderBackground(g);
         super.render(g, mouseX, mouseY, partialTick);
         int x = left();
         int y = top();
@@ -327,7 +327,7 @@ public class DemandCreateScreen extends Screen {
     // ---------------------------------------------------------------- 交互
 
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
         int x = left();
         int y = top();
         int rx = x + PICK_X_OFFSET;
@@ -335,11 +335,11 @@ public class DemandCreateScreen extends Screen {
         int listBottom = listTop + PICK_VISIBLE * PICK_ROW_H;
         if (maxPickScroll() > 0
                 && IOStyle.inside(rx - 2, listTop - 2, 170, listBottom - listTop + 4, mouseX, mouseY)) {
-            int dir = scrollY > 0 ? -1 : 1;
+            int dir = delta > 0 ? -1 : 1;
             this.pickScroll = Math.max(0, Math.min(maxPickScroll(), this.pickScroll + dir));
             return true;
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     @Override

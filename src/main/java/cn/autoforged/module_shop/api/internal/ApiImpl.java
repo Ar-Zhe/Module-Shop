@@ -867,7 +867,7 @@ public final class ApiImpl {
             net.minecraft.nbt.ListTag list = new net.minecraft.nbt.ListTag();
             for (ItemStack stack : clean) {
                 CompoundTag line = new CompoundTag();
-                line.put("item", stack.saveOptional(server.registryAccess()));
+                line.put("item", stack.save(new net.minecraft.nbt.CompoundTag()));
                 line.putInt("count", Math.min(64, Math.max(1, stack.getCount())));
                 list.add(line);
             }

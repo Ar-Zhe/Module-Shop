@@ -11,7 +11,6 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
-import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * 兑换码列表（第八轮改版，仅管理员）。
@@ -294,14 +293,14 @@ public class RedeemListScreen extends Screen {
     }
 
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (scrollY != 0.0D) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        if (delta != 0.0D) {
             int perScreen = Math.max(1, (PANEL_H - 32) / ROW_H);
             int maxScroll = Math.max(0, CODES.size() - perScreen);
-            this.scrollRow = Math.max(0, Math.min(maxScroll, this.scrollRow + (scrollY > 0 ? -1 : 1)));
+            this.scrollRow = Math.max(0, Math.min(maxScroll, this.scrollRow + (delta > 0 ? -1 : 1)));
             return true;
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     @Override

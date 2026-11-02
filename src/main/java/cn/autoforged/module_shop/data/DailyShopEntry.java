@@ -1,6 +1,6 @@
 package cn.autoforged.module_shop.data;
 
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.ItemStack;
 
@@ -29,7 +29,7 @@ public final class DailyShopEntry {
         return Math.max(0, limit - bought);
     }
 
-    public CompoundTag save(HolderLookup.Provider registries) {
+    public CompoundTag save(RegistryAccess registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
         tag.putLong("price", price);
         tag.putString("rarity", rarity.id());
@@ -38,7 +38,7 @@ public final class DailyShopEntry {
         return tag;
     }
 
-    public static DailyShopEntry load(CompoundTag tag, HolderLookup.Provider registries) {
+    public static DailyShopEntry load(CompoundTag tag, RegistryAccess registries) {
         DailyShopEntry entry = new DailyShopEntry();
         entry.stack = ShopNbt.loadStack(tag, registries);
         entry.price = tag.getLong("price");

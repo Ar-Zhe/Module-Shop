@@ -12,7 +12,6 @@ import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
-import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * 需求 4：交易/转账对象选择界面。展示在线玩家名片（头像+名称），顶部搜索框支持简易搜索。
@@ -78,8 +77,8 @@ public class TradeSelectScreen extends Screen {
     }
 
     @Override
-    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        super.renderBackground(g, mouseX, mouseY, partialTick);
+    public void renderBackground(GuiGraphics g) {
+        super.renderBackground(g);
         Bricks.panel(g, this.left, this.top, PANEL_W, PANEL_H);
     }
 
@@ -147,16 +146,16 @@ public class TradeSelectScreen extends Screen {
 
     /** 鼠标滚轮翻页。 */
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (scrollY != 0.0D) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        if (delta != 0.0D) {
             int pages = Math.max(1, (filtered().size() + PAGE_SIZE - 1) / PAGE_SIZE);
-            int next = Math.max(0, Math.min(pages - 1, this.page + (scrollY > 0.0D ? -1 : 1)));
+            int next = Math.max(0, Math.min(pages - 1, this.page + (delta > 0.0D ? -1 : 1)));
             if (next != this.page) {
                 this.page = next;
                 return true;
             }
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     @Override

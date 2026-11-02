@@ -43,7 +43,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import net.minecraft.ChatFormatting;
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -62,7 +62,6 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.neoforged.neoforge.network.PacketDistributor;
 import javax.annotation.Nullable;
 
 /** 服务端权威的商店逻辑。所有校验都在这里完成，客户端只负责显示与发起请求。 */
@@ -433,7 +432,7 @@ public final class ShopManager {
         if (server == null || owner == null || draft == null || !draft.valid()) {
             return;
         }
-        HolderLookup.Provider regs = server.registryAccess();
+        RegistryAccess regs = server.registryAccess();
         long receivedDay = System.currentTimeMillis() / 86_400_000L;
         // 第八轮：一次发放只发**一封**邮件（所有物品装在同一封里），并在 storeMail 里与同渠道未领取的邮件继续合并，
         // 避免"一件物品一封邮件"把邮箱塞满。
@@ -464,7 +463,7 @@ public final class ShopManager {
         }
     }
 
-    private static void applyDraft(MailEntry entry, MailTemplates.DraftMail draft, HolderLookup.Provider regs) {
+    private static void applyDraft(MailEntry entry, MailTemplates.DraftMail draft, RegistryAccess regs) {
         entry.title = draft.title();
         entry.content = draft.content();
         entry.kind = draft.kind().name().toLowerCase(java.util.Locale.ROOT);
@@ -763,7 +762,7 @@ public final class ShopManager {
         ensureDaily(player, account, data);
         // 需求 3：价格始终以服务端商品池为权威，下发前用最新池数据刷新每日报价。
         refreshDailyPrices(account, data);
-        HolderLookup.Provider regs = player.level().registryAccess();
+        RegistryAccess regs = player.level().registryAccess();
 
         CompoundTag tag = new CompoundTag();
         tag.putString("kind", "snapshot");
@@ -1087,7 +1086,7 @@ public final class ShopManager {
         ClientboundShopSyncPayload.send(player, tag);
     }
 
-    private static ListTag offerList(List<ConfiguredOffer> pool, HolderLookup.Provider regs) {
+    private static ListTag offerList(List<ConfiguredOffer> pool, RegistryAccess regs) {
         ListTag list = new ListTag();
         for (ConfiguredOffer offer : pool) {
             CompoundTag c = ShopNbt.saveStack(offer.stack, regs);
@@ -2015,11 +2014,12 @@ public final class ShopManager {
         bin.resize(slots);
         // 规则写错时先在聊天栏提醒一次（格式错的规则不会生效，对应物品放不进去）。
         warnShippingRules(player);
+        // Forge 1.20.1 的 openMenu 没有「额外写入 buf」的重载：槽位数直接由服务端构造的容器决定，
+        // 客户端创建菜单时从容器读（ShippingBinMenu.clientSide 里用默认槽位，随后由快照刷新）。
         player.openMenu(new SimpleMenuProvider(
                 (id, inventory, p) -> new ShippingBinMenu(id, inventory,
                         new ShippingBinContainer(player, slots), slots),
-                Component.translatable("gui.module_shop.shipping.title", bin.level, slots)),
-                buf -> buf.writeVarInt(slots));
+                Component.translatable("gui.module_shop.shipping.title", bin.level, slots)));
     }
 
     /** 规则有错时给玩家一条说明（同一条错误 30 秒内只提醒一次）。 */
@@ -3043,7 +3043,7 @@ public final class ShopManager {
             int count = Math.max(1, Math.min(64, lineTag.getInt("count")));
             boolean merged = false;
             for (DemandEntry.WantLine exists : wants) {
-                if (ItemStack.isSameItemSameComponents(exists.stack, one)) {
+                if (ItemStack.isSameItemSameTags(exists.stack, one)) {
                     exists.count = Math.min(64, exists.count + count);
                     merged = true;
                     break;
@@ -3536,7 +3536,7 @@ public final class ShopManager {
         if (account == null) {
             return;
         }
-        HolderLookup.Provider regs = player.level().registryAccess();
+        RegistryAccess regs = player.level().registryAccess();
         CompoundTag tag = new CompoundTag();
         tag.putString("kind", "stall_browse");
         tag.putString("owner", owner.toString());
@@ -4112,7 +4112,7 @@ public final class ShopManager {
         int total = 0;
         for (int i = 0; i < inventory.getContainerSize(); i++) {
             ItemStack stack = inventory.getItem(i);
-            if (!stack.isEmpty() && ItemStack.isSameItemSameComponents(stack, template)) {
+            if (!stack.isEmpty() && ItemStack.isSameItemSameTags(stack, template)) {
                 total += stack.getCount();
             }
         }
@@ -4129,7 +4129,7 @@ public final class ShopManager {
         int taken = 0;
         for (int i = 0; i < inventory.getContainerSize() && taken < max; i++) {
             ItemStack stack = inventory.getItem(i);
-            if (stack.isEmpty() || !ItemStack.isSameItemSameComponents(stack, template)) {
+            if (stack.isEmpty() || !ItemStack.isSameItemSameTags(stack, template)) {
                 continue;
             }
             int take = Math.min(max - taken, stack.getCount());
@@ -4306,7 +4306,7 @@ public final class ShopManager {
         ExchangeEntry entry = new ExchangeEntry(stack, value);
         entry.normalize();
         for (ExchangeEntry existing : data.exchangePool) {
-            if (ItemStack.isSameItemSameComponents(existing.stack, entry.stack)) {
+            if (ItemStack.isSameItemSameTags(existing.stack, entry.stack)) {
                 existing.value = value;
                 data.setDirty();
                 sendSnapshot(player, "exchange");
@@ -5997,7 +5997,7 @@ public final class ShopManager {
                 if (remaining <= 0) {
                     break;
                 }
-                if (!ItemStack.isSameItemSameComponents(existing, stack)) {
+                if (!ItemStack.isSameItemSameTags(existing, stack)) {
                     continue;
                 }
                 int room = per - existing.getCount();
@@ -6875,6 +6875,6 @@ public final class ShopManager {
     }
 
     public static ResourceLocation id(String path) {
-        return ResourceLocation.fromNamespaceAndPath(ModuleShopMod.MODID, path);
+        return new ResourceLocation(ModuleShopMod.MODID, path);
     }
 }

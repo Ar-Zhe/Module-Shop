@@ -10,7 +10,6 @@ import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
-import net.neoforged.neoforge.network.PacketDistributor;
 
 /** “放入物品”界面。放好物品后点确认，服务端会弹出数值编辑界面。 */
 public class DepositScreen extends AbstractContainerScreen<DepositMenu> {

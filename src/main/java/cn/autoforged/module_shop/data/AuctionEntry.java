@@ -1,7 +1,7 @@
 package cn.autoforged.module_shop.data;
 
 import java.util.UUID;
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.ItemStack;
 
@@ -26,7 +26,7 @@ public final class AuctionEntry {
         return topBidder != null;
     }
 
-    public CompoundTag save(HolderLookup.Provider registries) {
+    public CompoundTag save(RegistryAccess registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
         tag.putLong("id", id);
         if (seller != null) {
@@ -44,7 +44,7 @@ public final class AuctionEntry {
         return tag;
     }
 
-    public static AuctionEntry load(CompoundTag tag, HolderLookup.Provider registries) {
+    public static AuctionEntry load(CompoundTag tag, RegistryAccess registries) {
         AuctionEntry entry = new AuctionEntry();
         entry.stack = ShopNbt.loadStack(tag, registries);
         entry.id = tag.getLong("id");

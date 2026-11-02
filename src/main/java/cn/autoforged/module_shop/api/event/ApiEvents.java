@@ -1,7 +1,7 @@
 package cn.autoforged.module_shop.api.event;
 
 import cn.autoforged.module_shop.api.ModuleShopApi;
-import net.neoforged.bus.api.Event;
+import net.minecraftforge.eventbus.api.Event;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

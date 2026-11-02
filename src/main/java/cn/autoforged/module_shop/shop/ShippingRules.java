@@ -12,7 +12,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.neoforged.fml.loading.FMLPaths;
+import net.minecraftforge.fml.loading.FMLPaths;
 
 /**
  * 出货箱的「兑换规则」：解析配置文件里的文本规则、缓存、匹配物品，并支持游戏内编辑。
@@ -51,7 +51,7 @@ public final class ShippingRules {
                     ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
                     yield id != null && id.getNamespace().equals(value);
                 }
-                case TAG -> stack.is(TagKey.create(Registries.ITEM, ResourceLocation.parse(value)));
+                case TAG -> stack.is(TagKey.create(Registries.ITEM, ResourceLocation.tryParse(value)));
             };
         }
     }

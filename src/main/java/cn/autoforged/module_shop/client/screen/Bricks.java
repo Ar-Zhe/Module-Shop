@@ -22,7 +22,7 @@ public final class Bricks {
     }
 
     public static ResourceLocation tex(String name) {
-        return ResourceLocation.fromNamespaceAndPath("autoforge_bricks", "textures/gui/" + name + ".png");
+        return new ResourceLocation("autoforge_bricks", "textures/gui/" + name + ".png");
     }
 
     /** 窗口背景：原版 iOS 风格圆角面板（带阴影与描边），配色随日间/暗色主题。 */

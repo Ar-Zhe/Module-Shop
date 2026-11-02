@@ -5,7 +5,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.ItemStack;
 
@@ -203,7 +203,7 @@ public final class MailTemplates {
     /**
      * 待发送的邮件草稿：标题 / 正文 / 发件人 / 类型 / 到期时间 / 附件（物品 + 星币）。
      * <p>
-     * {@link #toTag(HolderLookup.Provider)} 产出的标签与 {@code MailEntry.save} 的字段**同形**，
+     * {@link #toTag(RegistryAccess)} 产出的标签与 {@code MailEntry.save} 的字段**同形**，
      * 并额外带 {@code title / content / kind / expireAt / starred}，
      * 因此接入时只需在 {@code MailEntry} 补这几个字段即可，旧存档与旧调用点都不受影响。
      */
@@ -360,7 +360,7 @@ public final class MailTemplates {
          * 转成邮件标签：与 {@code MailEntry.save} 同形 + 新增 title/content/kind/expireAt/starred。
          * 金额类附件写在 {@code currencyAmount}，物品类附件写在第一个物品槽（其余追加在 {@code extraItems}）。
          */
-        public CompoundTag toTag(HolderLookup.Provider registries) {
+        public CompoundTag toTag(RegistryAccess registries) {
             ItemStack first = items.isEmpty() ? ItemStack.EMPTY : items.get(0);
             CompoundTag tag = ShopNbt.saveStack(first, registries);
             tag.putString("source", source);

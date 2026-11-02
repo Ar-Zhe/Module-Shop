@@ -5,9 +5,9 @@ import cn.autoforged.module_shop.data.Rarity;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.sounds.SoundEvent;
-import net.neoforged.bus.api.IEventBus;
-import net.neoforged.neoforge.registries.DeferredHolder;
-import net.neoforged.neoforge.registries.DeferredRegister;
+import net.minecraftforge.eventbus.api.IEventBus;
+import net.minecraftforge.registries.RegistryObject;
+import net.minecraftforge.registries.DeferredRegister;
 
 /**
  * 自定义音效。每日商店翻牌时按稀有度播放对应文件：
@@ -17,20 +17,20 @@ public final class ModSounds {
     public static final DeferredRegister<SoundEvent> SOUND_EVENTS =
             DeferredRegister.create(Registries.SOUND_EVENT, ModuleShopMod.MODID);
 
-    public static final DeferredHolder<SoundEvent, SoundEvent> RARITY_LEGENDARY = sound("rarity_legendary");
-    public static final DeferredHolder<SoundEvent, SoundEvent> RARITY_EPIC = sound("rarity_epic");
-    public static final DeferredHolder<SoundEvent, SoundEvent> RARITY_RARE = sound("rarity_rare");
-    public static final DeferredHolder<SoundEvent, SoundEvent> RARITY_COMMON = sound("rarity_common");
+    public static final RegistryObject<SoundEvent> RARITY_LEGENDARY = sound("rarity_legendary");
+    public static final RegistryObject<SoundEvent> RARITY_EPIC = sound("rarity_epic");
+    public static final RegistryObject<SoundEvent> RARITY_RARE = sound("rarity_rare");
+    public static final RegistryObject<SoundEvent> RARITY_COMMON = sound("rarity_common");
     /** 需求 10：界面点击音效，对应 sounds/fy.ogg。 */
-    public static final DeferredHolder<SoundEvent, SoundEvent> UI_CLICK = sound("ui_click");
+    public static final RegistryObject<SoundEvent> UI_CLICK = sound("ui_click");
 
     private ModSounds() {
     }
 
-    private static DeferredHolder<SoundEvent, SoundEvent> sound(String name) {
+    private static RegistryObject<SoundEvent> sound(String name) {
         return SOUND_EVENTS.register(name,
                 () -> SoundEvent.createVariableRangeEvent(
-                        ResourceLocation.fromNamespaceAndPath(ModuleShopMod.MODID, name)));
+                        new ResourceLocation(ModuleShopMod.MODID, name)));
     }
 
     public static SoundEvent forRarity(Rarity rarity) {

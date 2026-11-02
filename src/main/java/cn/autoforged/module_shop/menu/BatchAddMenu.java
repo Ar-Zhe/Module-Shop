@@ -133,9 +133,5 @@ public class BatchAddMenu extends AbstractContainerMenu {
             return false;
         }
 
-        @Override
-        public boolean isFake() {
-            return true;
-        }
     }
 }

@@ -12,7 +12,6 @@ import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
-import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * 需求 1：交易请求列表。打开后可以看到别人发来的交易请求，点击即可进入交易界面；
@@ -53,8 +52,8 @@ public class TradeRequestScreen extends Screen {
     }
 
     @Override
-    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        super.renderBackground(g, mouseX, mouseY, partialTick);
+    public void renderBackground(GuiGraphics g) {
+        super.renderBackground(g);
         Bricks.panel(g, this.left, this.top, PANEL_W, PANEL_H);
     }
 
@@ -81,7 +80,7 @@ public class TradeRequestScreen extends Screen {
                 PlayerInfo info = Minecraft.getInstance().getConnection() == null ? null
                         : Minecraft.getInstance().getConnection().getPlayerInfo(request.from);
                 if (info != null) {
-                    PlayerFaceRenderer.draw(g, info.getSkin(), x + 14, rowY + 3, 16);
+                    PlayerFaceRenderer.draw(g, info.getSkinLocation(), x + 14, rowY + 3, 16);
                 }
             }
             // 需求二：整行展示“请求来自谁 + 剩余时间”，进入交易改由独立绿色【接受】按钮触发。
@@ -123,16 +122,16 @@ public class TradeRequestScreen extends Screen {
 
     /** 鼠标滚轮翻页。 */
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (scrollY != 0.0D) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        if (delta != 0.0D) {
             int pages = Math.max(1, (ClientShopData.tradeRequests.size() + PAGE_SIZE - 1) / PAGE_SIZE);
-            int next = Math.max(0, Math.min(pages - 1, this.page + (scrollY > 0.0D ? -1 : 1)));
+            int next = Math.max(0, Math.min(pages - 1, this.page + (delta > 0.0D ? -1 : 1)));
             if (next != this.page) {
                 this.page = next;
                 return true;
             }
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     @Override

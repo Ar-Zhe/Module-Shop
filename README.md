@@ -1,5 +1,34 @@
 # Module Shop · 模块商店
 
+> **这个分支是 1.20.1 / Forge 版本**（分支 `forge-1.20.1`）。
+> 版本号 **1.1.0**，依赖 **Minecraft 1.20.1 + Forge 47.4.9 + Java 17**。
+> 1.21.1 / NeoForge 版本在 `main` 分支（1.0.x），两个分支各自维护、互不影响。
+
+## 1.20.1 / Forge 版怎么构建
+
+ForgeGradle 需要一个**完整 JDK 17**（`bin/javac.exe` 必须存在；指向 JRE 会报
+`Java compiler is not available`），它用这个 JDK 编译 Minecraft。
+
+```powershell
+# 1) 只构建模组（不含 KubeJS 桥接）
+.\build.ps1 -JdkPath 'C:\Path\To\jdk-17'
+
+# 2) 带 KubeJS 桥接（需要 kubejs-forge 2001.x 的 jar）
+.\build.ps1 -JdkPath 'C:\Path\To\jdk-17' -KubejsJar '.\libs\kubejs-forge-2001.6.5-build.26.jar'
+
+# 3) 起开发测试服 / 客户端（首次会自动下载依赖和资源）
+.\build.ps1 -JdkPath 'C:\Path\To\jdk-17' -Task runServer
+.\build.ps1 -JdkPath 'C:\Path\To\jdk-17' -Task runClient
+```
+
+产物：`build/libs/module_shop-1.1.0-forge-1.20.1.jar`
+
+- 客户端要装同一个 jar；只装服务端不会有界面。
+- KubeJS 桥接是**可选模块**：不传 `-KubejsJar` 时完全不编译，主模组不依赖 KubeJS。
+- 与 1.21.1 版本的差异（纯平台适配）见 [CHANGELOG.md](CHANGELOG.md) 的 1.1.0 条目。
+
+---
+
 **English** — A full server-side shop & economy mod for **Minecraft 1.21.1 / NeoForge 21.1.x** (tested on Arclight):
 daily shop with paid refresh, daily buyback with a completion bonus, auction house, player stalls, player trading,
 wallet transfers, mailbox, **currency exchange (items ⇄ Star Coins)**, admin grants (GUI), transaction history,

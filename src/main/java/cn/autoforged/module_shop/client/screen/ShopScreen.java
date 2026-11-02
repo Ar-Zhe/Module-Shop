@@ -1,5 +1,7 @@
 package cn.autoforged.module_shop.client.screen;
 
+
+import net.minecraft.resources.ResourceLocation;
 import cn.autoforged.module_shop.Config;
 import cn.autoforged.module_shop.client.ClientNotifications;
 import cn.autoforged.module_shop.client.ClientShopData;
@@ -27,7 +29,6 @@ import net.minecraft.nbt.StringTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 import net.minecraft.world.item.ItemStack;
-import net.neoforged.neoforge.network.PacketDistributor;
 import org.lwjgl.glfw.GLFW;
 
 /** 单界面、标签页切换的商店主界面。没有真实槽位，所有操作通过操作包发给服务端。 */
@@ -75,7 +76,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     private static final int GEAR_TEX_SIZE = 128;
     /** 需求 2：齿轮入口纹理（源文件 user-assets/577940.png，128×128）。 */
     private static final net.minecraft.resources.ResourceLocation GEAR_ICON =
-            net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(
+            new ResourceLocation(
                     "module_shop", "textures/gui/gear.png");
 
     // 需求：模块放在左侧从上往下排；钱包格去掉。管理页签不再占用侧栏（见左下角小按钮）。
@@ -738,7 +739,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         IOStyle.rounded(g, avatarX - 1, avatarY - 1, avatarSize + 2, avatarSize + 2, 6, 0x33FFFFFF);
         var player = Minecraft.getInstance().player;
         if (player != null) {
-            net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, player.getSkin(), avatarX, avatarY,
+            net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, player.getSkinTextureLocation(), avatarX, avatarY,
                     avatarSize);
         } else {
             IOStyle.rounded(g, avatarX, avatarY, avatarSize, avatarSize, 4, IOStyle.GRAY_BTN);
@@ -2399,7 +2400,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         var inventory = this.minecraft.player.getInventory();
         for (int i = 0; i < inventory.getContainerSize(); i++) {
             ItemStack stack = inventory.getItem(i);
-            if (!stack.isEmpty() && ItemStack.isSameItemSameComponents(stack, template)) {
+            if (!stack.isEmpty() && ItemStack.isSameItemSameTags(stack, template)) {
                 total += stack.getCount();
             }
         }
@@ -3980,7 +3981,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             return "";
         }
         try {
-            return net.neoforged.fml.ModList.get().getModContainerById(namespace)
+            return net.minecraftforge.fml.ModList.get().getModContainerById(namespace)
                     .map(c -> c.getModInfo().getDisplayName())
                     .orElse(namespace);
         } catch (Throwable ignored) {
@@ -4510,10 +4511,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     /** 鼠标滚轮：右侧内容区各自吃自己的滚轮；左侧模块列表（超过 6 个时）任何模式下都能滚。 */
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        int dir = scrollY > 0 ? -1 : 1;
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        int dir = delta > 0 ? -1 : 1;
         // 交易 / 转账页：滚轮翻在线玩家列表。
-        if (scrollY != 0.0D && !this.layoutEdit
+        if (delta != 0.0D && !this.layoutEdit
                 && ("trade".equals(currentTab) || "transfer".equals(currentTab))
                 && mouseX >= contentX() && mouseX < contentX() + contentW()
                 && mouseY >= contentY() && mouseY < contentY() + contentH()) {
@@ -4525,12 +4526,12 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             }
         }
         // ① 鼠标停在左侧菜单列上 → 翻左侧模块列表（一屏固定 6 个，多余的靠滚轮）。
-        if (scrollY != 0.0D && mouseX >= left() - 4 && mouseX < left() + SIDEBAR_W
+        if (delta != 0.0D && mouseX >= left() - 4 && mouseX < left() + SIDEBAR_W
                 && mouseY >= top() && mouseY <= top() + PANEL_H) {
             int maxScroll = sidebarMaxScroll();
             if (maxScroll > 0) {
                 // 触控板 / 高分辨率滚轮会发小数：累积到一格再动，滚起来才连续（普通鼠标每次正好一格）。
-                this.sidebarWheelAccum += scrollY;
+                this.sidebarWheelAccum += delta;
                 int steps = 0;
                 while (this.sidebarWheelAccum >= 1.0D) {
                     this.sidebarWheelAccum -= 1.0D;
@@ -4547,7 +4548,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             return true;
         }
         // 编辑模式：滚轮用来翻「下方模块管理列表」（模块多的时候），不翻内容区。
-        if (this.layoutEdit && ClientShopData.canAdmin && scrollY != 0.0D) {
+        if (this.layoutEdit && ClientShopData.canAdmin && delta != 0.0D) {
             // 鼠标停在模块管理面板上 → 翻模块管理。
             if (IOStyle.inside(this.managerRect[0], this.managerRect[1], this.managerRect[2], this.managerRect[3],
                     mouseX, mouseY)) {
@@ -4559,7 +4560,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             return true;
         }
         // 购物城：分类下拉 / 最近购买列表 / 货架翻页，各自吃自己的滚轮。
-        if (!this.layoutEdit && "mall".equals(currentTab) && scrollY != 0.0D) {
+        if (!this.layoutEdit && "mall".equals(currentTab) && delta != 0.0D) {
             if (this.mallCatOpen && IOStyle.inside(this.mallCatRect[0], this.mallCatRect[1], this.mallCatRect[2],
                     this.mallCatRect[3], mouseX, mouseY)) {
                 this.mallCatScroll = Math.max(0, this.mallCatScroll + dir);
@@ -4580,7 +4581,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             }
             return true;
         }
-        if (scrollY != 0.0D) {
+        if (delta != 0.0D) {
             int contentX = left() + SIDEBAR_W + 4;
             int contentY = top() + TOP_BAR_H + 2;
             int contentW = PANEL_W - SIDEBAR_W - 10;
@@ -4590,9 +4591,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 return true;
             }
             if (!IOStyle.inside(contentX, contentY, contentW, contentH, mouseX, mouseY)) {
-                return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+                return super.mouseScrolled(mouseX, mouseY, delta);
             }
-            int step = scrollY > 0.0D ? -1 : 1;
+            int step = delta > 0.0D ? -1 : 1;
             switch (currentTab) {
                 case "auction" -> {
                     int pages = Math.max(1, (ClientShopData.auctions.size() + 4) / 5);
@@ -4657,7 +4658,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 }
             }
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     @Override

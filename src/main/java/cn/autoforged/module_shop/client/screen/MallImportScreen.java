@@ -13,7 +13,6 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
-import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * 购物城的「整模组导入」：点上方「选择模组分类」展开 / 收起模组列表，
@@ -72,7 +71,7 @@ public class MallImportScreen extends Screen {
 
     private static String displayName(String namespace) {
         try {
-            return net.neoforged.fml.ModList.get().getModContainerById(namespace)
+            return net.minecraftforge.fml.ModList.get().getModContainerById(namespace)
                     .map(c -> c.getModInfo().getDisplayName())
                     .orElse(namespace);
         } catch (Throwable ignored) {
@@ -93,8 +92,8 @@ public class MallImportScreen extends Screen {
     }
 
     @Override
-    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        super.renderBackground(g, mouseX, mouseY, partialTick);
+    public void renderBackground(GuiGraphics g) {
+        super.renderBackground(g);
         Bricks.panel(g, this.left, this.top, PANEL_W, PANEL_H);
     }
 
@@ -368,11 +367,11 @@ public class MallImportScreen extends Screen {
     }
 
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (this.listOpen && scrollY != 0.0D) {
-            this.scroll = Math.max(0, this.scroll + (scrollY > 0 ? -1 : 1));
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        if (this.listOpen && delta != 0.0D) {
+            this.scroll = Math.max(0, this.scroll + (delta > 0 ? -1 : 1));
             return true;
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 }

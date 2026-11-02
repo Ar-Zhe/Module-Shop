@@ -12,7 +12,6 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
-import net.neoforged.neoforge.network.PacketDistributor;
 
 /** 浏览某个玩家的摊位，物品按上架先后顺序排列。 */
 public class StallBrowseScreen extends Screen implements JeiHoverSource {
@@ -63,7 +62,7 @@ public class StallBrowseScreen extends Screen implements JeiHoverSource {
         var registries = Minecraft.getInstance().level == null ? null : Minecraft.getInstance().level.registryAccess();
         for (int i = 0; i < list.size(); i++) {
             CompoundTag c = list.getCompound(i);
-            ItemStack stack = registries == null ? ItemStack.EMPTY : ItemStack.parseOptional(registries, c.getCompound("item"));
+            ItemStack stack = registries == null ? ItemStack.EMPTY : ItemStack.of(c.getCompound("item"));
             // 需求 5/6：携带单件价格与剩余库存（旧数据没有 stock 时以栈数量回退）。
             int stock = c.contains("stock") ? c.getInt("stock") : Math.max(1, stack.getCount());
             // 需求 9：按商品分别显示已售出件数。
@@ -146,16 +145,16 @@ public class StallBrowseScreen extends Screen implements JeiHoverSource {
 
     /** 鼠标滚轮翻页。 */
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (scrollY != 0.0D) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        if (delta != 0.0D) {
             int pages = Math.max(1, (this.entries.size() + PAGE_SIZE - 1) / PAGE_SIZE);
-            int next = Math.max(0, Math.min(pages - 1, this.page + (scrollY > 0.0D ? -1 : 1)));
+            int next = Math.max(0, Math.min(pages - 1, this.page + (delta > 0.0D ? -1 : 1)));
             if (next != this.page) {
                 this.page = next;
                 return true;
             }
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     @Override

@@ -11,7 +11,6 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.network.chat.Component;
-import net.neoforged.neoforge.network.PacketDistributor;
 
 /** 通用数值/文本输入界面：管理员配置、拍卖出价、转账、修改价格都走这里。 */
 public class ShopInputScreen extends Screen {
@@ -323,8 +322,8 @@ public class ShopInputScreen extends Screen {
     }
 
     @Override
-    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        super.renderBackground(g, mouseX, mouseY, partialTick);
+    public void renderBackground(GuiGraphics g) {
+        super.renderBackground(g);
         Bricks.panel(g, this.left, this.top, this.panelW, this.panelH);
     }
 

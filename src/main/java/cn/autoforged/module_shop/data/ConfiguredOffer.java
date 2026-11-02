@@ -1,6 +1,6 @@
 package cn.autoforged.module_shop.data;
 
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.ItemStack;
 
@@ -30,7 +30,7 @@ public final class ConfiguredOffer {
         return amount > 0 ? amount : fallback;
     }
 
-    public CompoundTag save(HolderLookup.Provider registries) {
+    public CompoundTag save(RegistryAccess registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
         tag.putLong("price", price);
         tag.putString("rarity", rarity.id());
@@ -38,7 +38,7 @@ public final class ConfiguredOffer {
         return tag;
     }
 
-    public static ConfiguredOffer load(CompoundTag tag, HolderLookup.Provider registries) {
+    public static ConfiguredOffer load(CompoundTag tag, RegistryAccess registries) {
         ConfiguredOffer offer = new ConfiguredOffer();
         offer.stack = ShopNbt.loadStack(tag, registries);
         offer.price = tag.getLong("price");

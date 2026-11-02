@@ -1,7 +1,7 @@
 package cn.autoforged.module_shop.api.event;
 
 import java.util.UUID;
-import net.neoforged.bus.api.Event;
+import net.minecraftforge.eventbus.api.Event;
 
 /** 一次拍卖出价已成功（成功后发布，不可取消）。 */
 public final class AuctionBidPlacedEvent extends Event {

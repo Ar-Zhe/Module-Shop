@@ -16,6 +16,11 @@ public final class ClientPayloadHandler {
     private ClientPayloadHandler() {
     }
 
+    /** 网络层调用（Forge 1.20.1：主线程里没有 payload context，直接取当前玩家）。 */
+    public static void handleSync(CompoundTag data) {
+        handleSync(data, net.minecraft.client.Minecraft.getInstance().player);
+    }
+
     public static void handleSync(CompoundTag data, Player player) {
         Minecraft minecraft = Minecraft.getInstance();
         String kind = data.getString("kind");

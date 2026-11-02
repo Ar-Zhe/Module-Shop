@@ -3,7 +3,7 @@ package cn.autoforged.module_shop.shop;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import net.neoforged.fml.loading.FMLPaths;
+import net.minecraftforge.fml.loading.FMLPaths;
 
 /**
  * 配置自动迁移（第七轮）：让服务端**只替换模组 jar** 就能拿到新默认值，无需手动改配置文件。

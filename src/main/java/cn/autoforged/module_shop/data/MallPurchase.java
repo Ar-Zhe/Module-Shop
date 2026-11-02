@@ -1,6 +1,6 @@
 package cn.autoforged.module_shop.data;
 
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.ItemStack;
 
@@ -28,7 +28,7 @@ public final class MallPurchase {
         this.time = time;
     }
 
-    public CompoundTag save(HolderLookup.Provider registries) {
+    public CompoundTag save(RegistryAccess registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
         tag.putString("player", playerName == null ? "" : playerName);
         tag.putInt("count", count);
@@ -38,7 +38,7 @@ public final class MallPurchase {
         return tag;
     }
 
-    public static MallPurchase load(CompoundTag tag, HolderLookup.Provider registries) {
+    public static MallPurchase load(CompoundTag tag, RegistryAccess registries) {
         MallPurchase record = new MallPurchase();
         record.stack = ShopNbt.loadStack(tag, registries);
         record.playerName = tag.getString("player");

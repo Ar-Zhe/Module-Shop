@@ -22,6 +22,7 @@
   "msg.module_shop.currency_renamed": "Currency renamed to \u0022%s\u0022",
   "msg.module_shop.currency_reset": "Currency name restored to default",
   "msg.module_shop.action_failed": "Action failed: server error, see logs",
+  "resourcepack.module_shop": "Module-Shop resources",
   "key.categories.module_shop": "Module Shop",
   "key.module_shop.open_shop": "Open Shop",
 

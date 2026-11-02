@@ -2,6 +2,32 @@
 
 遵循 [语义化版本](https://semver.org/lang/zh-CN/)。模组版本与 API 版本独立维护（当前 API `1.0.0`）。
 
+## [1.1.0] · 1.20.1 / Forge 分支
+
+面向 **Minecraft 1.20.1 + Forge 47.4.9 + Java 17** 的移植版本，功能与 1.0.2 对齐。
+
+### 与 1.21.1 版本的差异（纯平台适配，无玩法改动）
+
+* 加载器 NeoForge → **Forge 47.x**：包名 `net.neoforged.*` → `net.minecraftforge.*`，
+  `DeferredHolder` → `RegistryObject`，`ModConfigSpec` → `ForgeConfigSpec`，
+  mod 主类改为**无参构造**（构造注入是 1.20.2+ 的特性）。
+* 网络层用 **`SimpleChannel`** 重写（协议版本 `2`），保留原来的「gzip 压缩 + 512 KiB 分片」传输，
+  大快照与整包导入不会撞上原版 2 MiB NBT 上限。
+* 1.20.1 物品序列化仍是 NBT：`ItemStack.save(CompoundTag)` / `ItemStack.of(tag)`，
+  同物品判定用 `isSameItemSameTags`（1.21 是数据组件）。
+* 皮肤绘制用 `getSkinTextureLocation()`（`PlayerSkin` 是 1.20.2+ 才有的类型）。
+* 容器界面在 `FMLClientSetupEvent` 里用 `MenuScreens.register` 注册
+  （Forge 1.20.1 没有 `RegisterMenuScreensEvent`）。
+* 滚轮事件为 3 参、`Screen#renderBackground(GuiGraphics)` 单参。
+* **KubeJS 桥接**改为可选源集：`-PkubejsJar=<kubejs-forge jar>` 才编译，
+  API 适配 KubeJS 2001（`KubeJSPlugin` 是 class 要 `extends`、`registerBindings(BindingsEvent)`）。
+
+### 验证状态
+
+* 编译 0 错误；`runServer` 启动 `Done (6.144s)`、模组 0 报错；
+* `runClient` 正常进游戏，6 个容器界面注册无误；
+* 待人工点验：12 个模块界面、网络分片联调、KubeJS 运行期验证。
+
 ## [1.0.2]
 
 ### 修复

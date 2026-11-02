@@ -1,7 +1,7 @@
 package cn.autoforged.module_shop.integration.kubejs;
 
-import dev.latvian.mods.kubejs.plugin.KubeJSPlugin;
-import dev.latvian.mods.kubejs.script.BindingRegistry;
+import dev.latvian.mods.kubejs.KubeJSPlugin;
+import dev.latvian.mods.kubejs.script.BindingsEvent;
 
 /**
  * KubeJS 桥接（**可选模块**）：把公共 API 暴露成脚本全局对象 {@code ModuleShop}。
@@ -18,9 +18,9 @@ import dev.latvian.mods.kubejs.script.BindingRegistry;
  * })
  * }</pre>
  */
-public class ModuleShopKubeJsPlugin implements KubeJSPlugin {
+public class ModuleShopKubeJsPlugin extends KubeJSPlugin {
     @Override
-    public void registerBindings(BindingRegistry bindings) {
+    public void registerBindings(BindingsEvent bindings) {
         bindings.add("ModuleShop", new ModuleShopBindings());
     }
 }

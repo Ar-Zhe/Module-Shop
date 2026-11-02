@@ -1,6 +1,6 @@
 package cn.autoforged.module_shop.data;
 
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.ItemStack;
 
@@ -38,7 +38,7 @@ public final class StallEntry {
         this.stock = Math.max(0, stock);
     }
 
-    public CompoundTag save(HolderLookup.Provider registries) {
+    public CompoundTag save(RegistryAccess registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
         tag.putLong("price", price);
         tag.putLong("order", order);
@@ -53,7 +53,7 @@ public final class StallEntry {
         return tag;
     }
 
-    public static StallEntry load(CompoundTag tag, HolderLookup.Provider registries) {
+    public static StallEntry load(CompoundTag tag, RegistryAccess registries) {
         StallEntry entry = new StallEntry();
         entry.stack = ShopNbt.loadStack(tag, registries);
         entry.price = tag.getLong("price");

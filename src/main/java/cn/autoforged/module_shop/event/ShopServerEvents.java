@@ -1,5 +1,7 @@
 package cn.autoforged.module_shop.event;
 
+
+import net.minecraftforge.fml.common.Mod;
 import cn.autoforged.module_shop.ModuleShopMod;
 import cn.autoforged.module_shop.command.ShopCommands;
 import cn.autoforged.module_shop.shop.NotificationManager;
@@ -7,14 +9,14 @@ import cn.autoforged.module_shop.shop.ShopManager;
 import cn.autoforged.module_shop.shop.TradeManager;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.event.RegisterCommandsEvent;
-import net.neoforged.neoforge.event.entity.player.PlayerEvent;
-import net.neoforged.neoforge.event.server.ServerStoppingEvent;
-import net.neoforged.neoforge.event.tick.ServerTickEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod.EventBusSubscriber;
+import net.minecraftforge.event.RegisterCommandsEvent;
+import net.minecraftforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.event.server.ServerStoppingEvent;
+import net.minecraftforge.event.TickEvent;
 
-@EventBusSubscriber(modid = ModuleShopMod.MODID)
+@Mod.EventBusSubscriber(modid = ModuleShopMod.MODID)
 public final class ShopServerEvents {
     private static int tickCounter;
 
@@ -22,12 +24,15 @@ public final class ShopServerEvents {
     }
 
     @SubscribeEvent
-    public static void onServerStarted(net.neoforged.neoforge.event.server.ServerStartedEvent event) {
+    public static void onServerStarted(net.minecraftforge.event.server.ServerStartedEvent event) {
         cn.autoforged.module_shop.shop.http.ShopHttpApi.start(event.getServer());
     }
 
     @SubscribeEvent
-    public static void onServerTick(ServerTickEvent.Post event) {
+    public static void onServerTick(TickEvent.ServerTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) {
+            return;
+        }
         MinecraftServer server = event.getServer();
         // 签到活动日：给「补发给离线玩家」的活动日补发（每个现实日期只执行一次）。
         ShopManager.tickActivityDayOffline(server);

@@ -5,12 +5,10 @@ import cn.autoforged.module_shop.network.payload.ClientboundShopSyncPayload;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
 import cn.autoforged.module_shop.shop.ShopManager;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
-import net.neoforged.neoforge.network.handling.IPayloadContext;
-import net.neoforged.neoforge.network.registration.PayloadRegistrar;
+import net.minecraftforge.network.NetworkRegistry;
+import net.minecraftforge.network.simple.SimpleChannel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,65 +17,88 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-@EventBusSubscriber(modid = ModuleShopMod.MODID)
+/**
+ * 网络层（Forge 1.20.1）。
+ *
+ * <p>原来是 NeoForge 的 payload 系统（{@code PayloadRegistrar} + {@code StreamCodec}），
+ * 移植到 Forge 需要用 {@link SimpleChannel}：每个包自己实现 {@code encode/decode}，
+ * 处理函数拿 {@code NetworkEvent.Context} 手动 {@code enqueueWork} 切回主线程。
+ *
+ * <p>协议版本固定为 {@value #PROTOCOL}：新旧 jar 混用时 {@link SimpleChannel} 会直接断开
+ * （"channel version mismatch"），而不是让旧客户端去解码新格式导致协议错误踢人。
+ */
 public final class ModNetwork {
     private static final Logger LOGGER = LoggerFactory.getLogger("module_shop/network");
+
+    /** 协议版本（改包结构时必须同步加一）。 */
+    public static final String PROTOCOL = "2";
 
     /** 客户端只有一个连接，一份组装器就够。 */
     private static final ChunkAssembler CLIENT_ASSEMBLER = new ChunkAssembler();
     /** 服务端要按玩家分开（多人同时开商店 / 导入模组时不能串包）。 */
     private static final Map<UUID, ChunkAssembler> SERVER_ASSEMBLERS = new ConcurrentHashMap<>();
 
+    public static final SimpleChannel CHANNEL = NetworkRegistry.ChannelBuilder
+            .named(new ResourceLocation(ModuleShopMod.MODID, "main"))
+            .networkProtocolVersion(() -> PROTOCOL)
+            .clientAcceptedVersions(PROTOCOL::equals)
+            .serverAcceptedVersions(PROTOCOL::equals)
+            .simpleChannel();
+
     private ModNetwork() {
     }
 
-    @SubscribeEvent
-    public static void register(RegisterPayloadHandlersEvent event) {
-        // 版本从 1 提到 2：新旧 jar 混用时 NeoForge 会直接报「通道版本不一致」，
-        // 而不是让旧客户端去解码新格式（那会变成一条看不懂的 custom_payload 解码崩溃）。
-        PayloadRegistrar registrar = event.registrar("2");
-        registrar.playToClient(
-                ClientboundShopSyncPayload.TYPE,
-                ClientboundShopSyncPayload.STREAM_CODEC,
-                ModNetwork::handleSync);
-        registrar.playToServer(
-                ServerboundShopActionPayload.TYPE,
-                ServerboundShopActionPayload.STREAM_CODEC,
-                ModNetwork::handleAction);
-    }
-
-    // 客户端专用处理类只能通过 enqueueWork 内的 lambda 触达，避免专用服务器解析到 Screen。
-    private static void handleSync(ClientboundShopSyncPayload payload, IPayloadContext context) {
-        // 先在网络线程把分片拼起来（纯字节拷贝，不碰游戏状态），拼不齐就直接返回。
-        byte[] raw = CLIENT_ASSEMBLER.accept(payload.syncId(), payload.index(), payload.total(), payload.data());
-        if (raw == null) {
-            return;
-        }
-        CompoundTag tag = decompress(raw, "clientbound");
-        if (tag == null) {
-            return;
-        }
-        context.enqueueWork(() -> cn.autoforged.module_shop.client.ClientPayloadHandler
-                .handleSync(tag, context.player()));
-    }
-
-    private static void handleAction(ServerboundShopActionPayload payload, IPayloadContext context) {
-        if (!(context.player() instanceof ServerPlayer player)) {
-            return;
-        }
-        UUID key = player.getUUID();
-        ChunkAssembler assembler = SERVER_ASSEMBLERS.computeIfAbsent(key, k -> new ChunkAssembler());
-        byte[] raw = assembler.accept(payload.syncId(), payload.index(), payload.total(), payload.data());
-        if (raw == null) {
-            return;
-        }
-        if (assembler.isEmpty()) {
-            SERVER_ASSEMBLERS.remove(key, assembler);
-        }
-        CompoundTag tag = decompress(raw, "serverbound");
-        if (tag != null) {
-            ShopManager.handleAction(player, tag);
-        }
+    /** 由 mod 构造函数在 FMLCommonSetup 之前调用一次。 */
+    public static void register() {
+        int id = 0;
+        CHANNEL.registerMessage(id++,
+                ClientboundShopSyncPayload.class,
+                ClientboundShopSyncPayload::encode,
+                ClientboundShopSyncPayload::decode,
+                (payload, ctxSupplier) -> {
+                    var ctx = ctxSupplier.get();
+                    var sender = ctx.getSender();
+                    byte[] raw = CLIENT_ASSEMBLER.accept(payload.syncId(), payload.index(),
+                            payload.total(), payload.data());
+                    ctx.setPacketHandled(true);
+                    if (raw == null) {
+                        return;
+                    }
+                    CompoundTag tag = decompress(raw, "clientbound");
+                    if (tag == null) {
+                        return;
+                    }
+                    // 客户端处理类（Screen 等）只能在主线程触达，避免专用服务器解析到客户端类。
+                    ctx.enqueueWork(() -> cn.autoforged.module_shop.client.ClientPayloadHandler
+                            .handleSync(tag));
+                });
+        CHANNEL.registerMessage(id++,
+                ServerboundShopActionPayload.class,
+                ServerboundShopActionPayload::encode,
+                ServerboundShopActionPayload::decode,
+                (payload, ctxSupplier) -> {
+                    var ctx = ctxSupplier.get();
+                    ctx.setPacketHandled(true);
+                    ServerPlayer player = ctx.getSender();
+                    if (player == null) {
+                        return;
+                    }
+                    UUID key = player.getUUID();
+                    ChunkAssembler assembler = SERVER_ASSEMBLERS.computeIfAbsent(key,
+                            k -> new ChunkAssembler());
+                    byte[] raw = assembler.accept(payload.syncId(), payload.index(),
+                            payload.total(), payload.data());
+                    if (raw == null) {
+                        return;
+                    }
+                    if (assembler.isEmpty()) {
+                        SERVER_ASSEMBLERS.remove(key, assembler);
+                    }
+                    CompoundTag tag = decompress(raw, "serverbound");
+                    if (tag != null) {
+                        ctx.enqueueWork(() -> ShopManager.handleAction(player, tag));
+                    }
+                });
     }
 
     /**
@@ -91,7 +112,8 @@ public final class ModNetwork {
         try {
             return NbtTransport.decompress(raw);
         } catch (IOException | RuntimeException e) {
-            LOGGER.warn("模块商店：忽略一个无法解析的 {} 数据包（{} 字节）：{}", direction, raw.length, e.toString());
+            LOGGER.warn("模块商店：忽略一个无法解析的 {} 数据包（{} 字节）：{}",
+                    direction, raw.length, e.toString());
             return null;
         }
     }

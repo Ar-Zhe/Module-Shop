@@ -18,7 +18,6 @@ import net.minecraft.nbt.StringTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.player.Inventory;
-import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * 管理员发放界面：左侧 27 个物品槽（真实槽位，可放入要发放的物品），
@@ -255,16 +254,16 @@ public class GrantScreen extends AbstractContainerScreen<GrantMenu> {
 
     /** 鼠标滚轮翻页（右侧玩家列表）。 */
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (scrollY != 0.0D) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        if (delta != 0.0D) {
             int pages = Math.max(1, (filtered().size() + PAGE_SIZE - 1) / PAGE_SIZE);
-            int next = Mth.clamp(this.page + (scrollY > 0.0D ? -1 : 1), 0, pages - 1);
+            int next = Mth.clamp(this.page + (delta > 0.0D ? -1 : 1), 0, pages - 1);
             if (next != this.page) {
                 this.page = next;
                 return true;
             }
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     @Override

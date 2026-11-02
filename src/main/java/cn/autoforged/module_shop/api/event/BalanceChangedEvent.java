@@ -1,7 +1,7 @@
 package cn.autoforged.module_shop.api.event;
 
 import java.util.UUID;
-import net.neoforged.bus.api.Event;
+import net.minecraftforge.eventbus.api.Event;
 
 /**
  * 余额已发生变化（**业务成功之后**发布，不可取消）。

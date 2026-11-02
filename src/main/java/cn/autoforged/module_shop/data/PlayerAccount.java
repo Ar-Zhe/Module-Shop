@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -45,7 +45,7 @@ public final class PlayerAccount {
     /** 出货箱（新增模块）：每个玩家一份独立空间。 */
     public final ShippingBin shipping = new ShippingBin();
 
-    public CompoundTag save(HolderLookup.Provider registries) {
+    public CompoundTag save(RegistryAccess registries) {
         CompoundTag tag = new CompoundTag();
         tag.putLong("balance", balance);
         tag.putLong("lastTransferTick", lastTransferTick);
@@ -104,7 +104,7 @@ public final class PlayerAccount {
         return tag;
     }
 
-    public static PlayerAccount load(CompoundTag tag, HolderLookup.Provider registries) {
+    public static PlayerAccount load(CompoundTag tag, RegistryAccess registries) {
         PlayerAccount account = new PlayerAccount();
         account.balance = tag.getLong("balance");
         account.lastTransferTick = tag.getLong("lastTransferTick");

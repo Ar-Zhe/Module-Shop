@@ -3,7 +3,7 @@ package cn.autoforged.module_shop.data;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -50,13 +50,13 @@ public final class DemandEntry {
             return copy;
         }
 
-        public CompoundTag save(HolderLookup.Provider registries) {
+        public CompoundTag save(RegistryAccess registries) {
             CompoundTag tag = ShopNbt.saveStack(stack, registries);
             tag.putInt("count", count);
             return tag;
         }
 
-        public static WantLine load(CompoundTag tag, HolderLookup.Provider registries) {
+        public static WantLine load(CompoundTag tag, RegistryAccess registries) {
             WantLine line = new WantLine();
             line.stack = ShopNbt.loadStack(tag, registries);
             line.count = Math.max(1, tag.getInt("count"));
@@ -126,7 +126,7 @@ public final class DemandEntry {
                 first.stack.getHoverName(), first.count, this.wants.size());
     }
 
-    public CompoundTag save(HolderLookup.Provider registries) {
+    public CompoundTag save(RegistryAccess registries) {
         CompoundTag tag = new CompoundTag();
         tag.putString("id", id);
         if (requester != null) {
@@ -153,7 +153,7 @@ public final class DemandEntry {
         return tag;
     }
 
-    public static DemandEntry load(CompoundTag tag, HolderLookup.Provider registries) {
+    public static DemandEntry load(CompoundTag tag, RegistryAccess registries) {
         DemandEntry entry = new DemandEntry();
         entry.id = tag.getString("id");
         entry.requester = tag.contains("requester") ? tag.getUUID("requester") : null;

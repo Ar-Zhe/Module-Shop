@@ -5,8 +5,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
+
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
@@ -190,7 +191,9 @@ public final class ShopSavedData extends SavedData {
     }
 
     @Override
-    public CompoundTag save(CompoundTag tag, HolderLookup.Provider registries) {
+    public CompoundTag save(CompoundTag tag) {
+        // 1.20.1 的物品序列化走 NBT，不再需要 RegistryAccess（保留变量以便共用旧的 save 调用）。
+        RegistryAccess registries = null;
         CompoundTag accountsTag = new CompoundTag();
         for (Map.Entry<UUID, PlayerAccount> entry : accounts.entrySet()) {
             accountsTag.put(entry.getKey().toString(), entry.getValue().save(registries));
@@ -274,7 +277,7 @@ public final class ShopSavedData extends SavedData {
         return tag;
     }
 
-    public static ShopSavedData load(CompoundTag tag, HolderLookup.Provider registries) {
+    public static ShopSavedData load(CompoundTag tag, RegistryAccess registries) {
         ShopSavedData data = new ShopSavedData();
 
         CompoundTag accountsTag = tag.getCompound("accounts");
@@ -393,7 +396,7 @@ public final class ShopSavedData extends SavedData {
         return data;
     }
 
-    private ListTag saveOffers(List<ConfiguredOffer> offers, HolderLookup.Provider registries) {
+    private ListTag saveOffers(List<ConfiguredOffer> offers, RegistryAccess registries) {
         ListTag list = new ListTag();
         for (ConfiguredOffer offer : offers) {
             list.add(offer.save(registries));
@@ -401,7 +404,7 @@ public final class ShopSavedData extends SavedData {
         return list;
     }
 
-    private ListTag saveAuctions(HolderLookup.Provider registries) {
+    private ListTag saveAuctions(RegistryAccess registries) {
         ListTag list = new ListTag();
         for (AuctionEntry entry : auctions) {
             list.add(entry.save(registries));
@@ -423,11 +426,12 @@ public final class ShopSavedData extends SavedData {
         return data;
     }
 
-    private static final Factory<ShopSavedData> FACTORY = new Factory<>(ShopSavedData::create, ShopSavedData::load);
+
 
     public static ShopSavedData get(MinecraftServer server) {
         DimensionDataStorage storage = server.overworld().getDataStorage();
-        return storage.computeIfAbsent(FACTORY, FILE_ID);
+        // 1.20.1 的 API：computeIfAbsent(loadFunction, createSupplier, name)
+        return storage.computeIfAbsent(tag -> load(tag, null), ShopSavedData::create, FILE_ID);
     }
 
     // ============================ 默认商品池 ============================

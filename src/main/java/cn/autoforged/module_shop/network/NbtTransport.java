@@ -47,8 +47,11 @@ public final class NbtTransport {
 
     /** gzip 字节 -> NBT；解压失败/超限时抛 {@link IOException}，由调用方忽略这一包（不踢人）。 */
     public static CompoundTag decompress(byte[] raw) throws IOException {
-        try (ByteArrayInputStream in = new ByteArrayInputStream(raw)) {
-            return NbtIo.readCompressed(in, NbtAccounter.create(MAX_TAG_BYTES));
+        // 1.20.1 的 readCompressed(InputStream) 不接受 NbtAccounter 上限；
+        // 这里自己包 GZIPInputStream + NbtIo.read(DataInput, NbtAccounter)，保留自定义的防炸上限。
+        try (java.io.DataInputStream in = new java.io.DataInputStream(
+                new java.util.zip.GZIPInputStream(new ByteArrayInputStream(raw)))) {
+            return NbtIo.read(in, new NbtAccounter(MAX_TAG_BYTES));
         }
     }
 

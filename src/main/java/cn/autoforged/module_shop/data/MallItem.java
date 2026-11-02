@@ -1,6 +1,6 @@
 package cn.autoforged.module_shop.data;
 
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -95,7 +95,7 @@ public final class MallItem {
         this.personalUsed.clear();
     }
 
-    public CompoundTag save(HolderLookup.Provider registries) {
+    public CompoundTag save(RegistryAccess registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
         tag.putLong("price", price);
         tag.putString("rarity", rarity.id());
@@ -129,7 +129,7 @@ public final class MallItem {
      * </ul>
      * 客户端只认 {@code stock} 字段，所以界面代码不需要区分两种模式。
      */
-    public CompoundTag saveForView(HolderLookup.Provider registries, java.util.UUID viewer, boolean personal) {
+    public CompoundTag saveForView(RegistryAccess registries, java.util.UUID viewer, boolean personal) {
         CompoundTag tag = save(registries);
         tag.remove("personalUsed");
         if (personal) {
@@ -138,7 +138,7 @@ public final class MallItem {
         return tag;
     }
 
-    public static MallItem load(CompoundTag tag, HolderLookup.Provider registries) {
+    public static MallItem load(CompoundTag tag, RegistryAccess registries) {
         MallItem item = new MallItem();
         item.stack = ShopNbt.loadStack(tag, registries);
         item.price = tag.getLong("price");

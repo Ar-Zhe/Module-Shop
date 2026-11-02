@@ -12,7 +12,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -366,7 +366,7 @@ public final class ClientShopData {
     private ClientShopData() {
     }
 
-    public static void update(CompoundTag tag, HolderLookup.Provider registries) {
+    public static void update(CompoundTag tag, RegistryAccess registries) {
         if ("bill".equals(tag.getString("kind"))) {
             applyBill(tag);
             return;
@@ -534,7 +534,7 @@ public final class ClientShopData {
             CompoundTag c = auctionTag.getCompound(i);
             AuctionView view = new AuctionView();
             view.id = c.getLong("id");
-            view.stack = ItemStack.parseOptional(registries, c.getCompound("item"));
+            view.stack = ItemStack.of(c.getCompound("item"));
             view.seller = c.getString("seller");
             view.startPrice = c.getLong("startPrice");
             view.currentBid = c.getLong("currentBid");
@@ -701,7 +701,7 @@ public final class ClientShopData {
     }
 
     /** 单独更新交易面板数据（kind=trade）。 */
-    public static void updateTrade(CompoundTag tag, HolderLookup.Provider registries) {
+    public static void updateTrade(CompoundTag tag, RegistryAccess registries) {
         tradeSelfName = tag.getString("selfName");
         tradeOtherName = tag.getString("otherName");
         tradeSelfItems = parseItems(tag.getList("selfItems", Tag.TAG_COMPOUND), registries);
@@ -829,7 +829,7 @@ public final class ClientShopData {
         tradeRequester = false;
     }
 
-    private static List<ItemStack> parseItems(ListTag list, HolderLookup.Provider registries) {
+    private static List<ItemStack> parseItems(ListTag list, RegistryAccess registries) {
         List<ItemStack> result = new ArrayList<>();
         for (int i = 0; i < list.size(); i++) {
             result.add(ShopNbt.loadStack(list.getCompound(i), registries));
@@ -837,7 +837,7 @@ public final class ClientShopData {
         return result;
     }
 
-    private static List<ConfiguredOffer> parseOffers(ListTag list, HolderLookup.Provider registries) {
+    private static List<ConfiguredOffer> parseOffers(ListTag list, RegistryAccess registries) {
         List<ConfiguredOffer> result = new ArrayList<>();
         for (int i = 0; i < list.size(); i++) {
             result.add(ConfiguredOffer.load(list.getCompound(i), registries));

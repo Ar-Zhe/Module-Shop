@@ -1,6 +1,6 @@
 package cn.autoforged.module_shop.data;
 
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.ItemStack;
 
@@ -42,13 +42,13 @@ public final class ExchangeEntry {
         return !stack.isEmpty() && value > 0L;
     }
 
-    public CompoundTag save(HolderLookup.Provider registries) {
+    public CompoundTag save(RegistryAccess registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
         tag.putLong("value", value);
         return tag;
     }
 
-    public static ExchangeEntry load(CompoundTag tag, HolderLookup.Provider registries) {
+    public static ExchangeEntry load(CompoundTag tag, RegistryAccess registries) {
         ExchangeEntry entry = new ExchangeEntry();
         entry.stack = ShopNbt.loadStack(tag, registries);
         entry.value = tag.getLong("value");

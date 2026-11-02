@@ -1,6 +1,6 @@
 package cn.autoforged.module_shop;
 
-import net.neoforged.neoforge.common.ModConfigSpec;
+import net.minecraftforge.common.ForgeConfigSpec;
 import java.util.List;
 import org.apache.commons.lang3.tuple.Pair;
 
@@ -10,140 +10,140 @@ import org.apache.commons.lang3.tuple.Pair;
  */
 public final class Config {
     public static final Config INSTANCE;
-    public static final ModConfigSpec SPEC;
+    public static final ForgeConfigSpec SPEC;
 
     static {
-        Pair<Config, ModConfigSpec> pair = new ModConfigSpec.Builder().configure(Config::new);
+        Pair<Config, ForgeConfigSpec> pair = new ForgeConfigSpec.Builder().configure(Config::new);
         INSTANCE = pair.getLeft();
         SPEC = pair.getRight();
     }
 
     // ---- 钱包 ----
-    public final ModConfigSpec.ConfigValue<String> currencyName;
-    public final ModConfigSpec.ConfigValue<String> currencySymbol;
-    public final ModConfigSpec.LongValue initialBalance;
-    public final ModConfigSpec.LongValue maxBalance;
-    public final ModConfigSpec.IntValue transferCooldownTicks;
-    public final ModConfigSpec.BooleanValue allowPlayerTransfer;
+    public final ForgeConfigSpec.ConfigValue<String> currencyName;
+    public final ForgeConfigSpec.ConfigValue<String> currencySymbol;
+    public final ForgeConfigSpec.LongValue initialBalance;
+    public final ForgeConfigSpec.LongValue maxBalance;
+    public final ForgeConfigSpec.IntValue transferCooldownTicks;
+    public final ForgeConfigSpec.BooleanValue allowPlayerTransfer;
 
     // ---- 每日商店 ----
-    public final ModConfigSpec.IntValue dailyShopSlots;
+    public final ForgeConfigSpec.IntValue dailyShopSlots;
     /** 每日商店里“普通”档位最多出现几个（0=不限制）。 */
-    public final ModConfigSpec.IntValue dailyShopCommonLimit;
+    public final ForgeConfigSpec.IntValue dailyShopCommonLimit;
     /** 付费刷新每日商店的价格表（按次数顺序取用：第 1 次、第 2 次…），用完即不可再刷新。 */
-    public final ModConfigSpec.ConfigValue<List<? extends String>> dailyRefreshCosts;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> dailyRefreshCosts;
     /** 每日收购的付费刷新价格表（与每日商店**完全分开**：价格、次数各自独立）。 */
-    public final ModConfigSpec.ConfigValue<List<? extends String>> buybackRefreshCosts;
-    public final ModConfigSpec.IntValue weightLegendary;
-    public final ModConfigSpec.IntValue weightEpic;
-    public final ModConfigSpec.IntValue weightRare;
-    public final ModConfigSpec.IntValue weightCommon;
-    public final ModConfigSpec.IntValue limitLegendary;
-    public final ModConfigSpec.IntValue limitEpic;
-    public final ModConfigSpec.IntValue limitRare;
-    public final ModConfigSpec.IntValue limitCommon;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> buybackRefreshCosts;
+    public final ForgeConfigSpec.IntValue weightLegendary;
+    public final ForgeConfigSpec.IntValue weightEpic;
+    public final ForgeConfigSpec.IntValue weightRare;
+    public final ForgeConfigSpec.IntValue weightCommon;
+    public final ForgeConfigSpec.IntValue limitLegendary;
+    public final ForgeConfigSpec.IntValue limitEpic;
+    public final ForgeConfigSpec.IntValue limitRare;
+    public final ForgeConfigSpec.IntValue limitCommon;
 
     // ---- 每日收购 ----
-    public final ModConfigSpec.IntValue buybackSlots;
-    public final ModConfigSpec.IntValue buybackCapacity;
+    public final ForgeConfigSpec.IntValue buybackSlots;
+    public final ForgeConfigSpec.IntValue buybackCapacity;
     /** 当日把收购清单全部卖完的一次性奖励（0=关闭，默认 1000）。 */
-    public final ModConfigSpec.LongValue buybackAllBonus;
+    public final ForgeConfigSpec.LongValue buybackAllBonus;
 
     // ---- 拍卖（时长全部按现实时间，单位秒）----
-    public final ModConfigSpec.IntValue auctionDurationSeconds;
-    public final ModConfigSpec.LongValue auctionMinIncrement;
-    public final ModConfigSpec.IntValue maxConcurrentAuctions;
+    public final ForgeConfigSpec.IntValue auctionDurationSeconds;
+    public final ForgeConfigSpec.LongValue auctionMinIncrement;
+    public final ForgeConfigSpec.IntValue maxConcurrentAuctions;
     /** 需求 2：拍卖成交后从卖家所得中扣除的手续费百分比（默认 5%）。 */
-    public final ModConfigSpec.DoubleValue auctionFeePercent;
-    public final ModConfigSpec.BooleanValue antiSnipe;
-    public final ModConfigSpec.IntValue antiSnipeSeconds;
-    public final ModConfigSpec.IntValue antiSnipeExtensionSeconds;
+    public final ForgeConfigSpec.DoubleValue auctionFeePercent;
+    public final ForgeConfigSpec.BooleanValue antiSnipe;
+    public final ForgeConfigSpec.IntValue antiSnipeSeconds;
+    public final ForgeConfigSpec.IntValue antiSnipeExtensionSeconds;
 
     // ---- 邮箱 ----
     /** 邮箱上限（默认 100；界面每页 45 封，可翻页）。达到上限时系统资产返还优先改为掉落入包，防止溢出刷物品。 */
-    public final ModConfigSpec.IntValue maxMailboxSize;
-    public final ModConfigSpec.IntValue mailExpireDays;
+    public final ForgeConfigSpec.IntValue maxMailboxSize;
+    public final ForgeConfigSpec.IntValue mailExpireDays;
     /** 每名玩家保留的交易流水条数（管理员用 /shop admin history 查看）。 */
-    public final ModConfigSpec.IntValue transactionHistorySize;
+    public final ForgeConfigSpec.IntValue transactionHistorySize;
 
     // ---- 摊位 ----
-    public final ModConfigSpec.IntValue stallSlots;
-    public final ModConfigSpec.DoubleValue stallListingFeePercent;
+    public final ForgeConfigSpec.IntValue stallSlots;
+    public final ForgeConfigSpec.DoubleValue stallListingFeePercent;
     /** 玩家摊位自动下架方式：permanent=永久 / game=按游戏时间 / real=按现实时间。 */
     /** 购物城：库存刷新方式（off / real / game）与周期（real=小时、game=天）。 */
-    public final ModConfigSpec.ConfigValue<String> mallRefreshMode;
-    public final ModConfigSpec.IntValue mallRefreshAmount;
+    public final ForgeConfigSpec.ConfigValue<String> mallRefreshMode;
+    public final ForgeConfigSpec.IntValue mallRefreshAmount;
     /** 购物城库存模式：global = 全服共用一份库存 / personal = 每个玩家各自一份库存。 */
-    public final ModConfigSpec.ConfigValue<String> mallStockMode;
-    public final ModConfigSpec.ConfigValue<String> stallExpireMode;
+    public final ForgeConfigSpec.ConfigValue<String> mallStockMode;
+    public final ForgeConfigSpec.ConfigValue<String> stallExpireMode;
     /** 限时时长：game 按游戏天数，real 按现实小时（0 = 永不自动下架）。 */
-    public final ModConfigSpec.IntValue stallExpireAmount;
+    public final ForgeConfigSpec.IntValue stallExpireAmount;
 
     // ---- 玩家求购（悬赏）----
     /** 是否开启玩家求购模块。 */
-    public final ModConfigSpec.BooleanValue demandEnabled;
+    public final ForgeConfigSpec.BooleanValue demandEnabled;
     /** 每名玩家最多同时发布几条求购。 */
-    public final ModConfigSpec.IntValue demandSlots;
+    public final ForgeConfigSpec.IntValue demandSlots;
     /** 发布手续费百分比（按悬赏金币算，0 = 免费）。 */
-    public final ModConfigSpec.DoubleValue demandFeePercent;
+    public final ForgeConfigSpec.DoubleValue demandFeePercent;
     /** 单笔悬赏金币上限（0 = 不限）。 */
-    public final ModConfigSpec.IntValue demandMaxReward;
+    public final ForgeConfigSpec.IntValue demandMaxReward;
     /** 全服最多保留多少条求购（超出时最老的自动下架并退款）。 */
-    public final ModConfigSpec.IntValue demandMaxListed;
+    public final ForgeConfigSpec.IntValue demandMaxListed;
     /** 求购自动下架方式：permanent=永久 / game=按游戏时间 / real=按现实时间。 */
-    public final ModConfigSpec.ConfigValue<String> demandExpireMode;
+    public final ForgeConfigSpec.ConfigValue<String> demandExpireMode;
     /** 限时时长：game 按游戏天数，real 按现实小时（0 = 永不自动下架）。 */
-    public final ModConfigSpec.IntValue demandExpireAmount;
+    public final ForgeConfigSpec.IntValue demandExpireAmount;
 
     // ---- 玩家交易（现实时间，单位秒）----
-    public final ModConfigSpec.IntValue tradeCountdownSeconds;
+    public final ForgeConfigSpec.IntValue tradeCountdownSeconds;
     /** 需求 1：交易请求失效时间（现实秒），超时自动清理。 */
-    public final ModConfigSpec.IntValue tradeRequestExpireSeconds;
+    public final ForgeConfigSpec.IntValue tradeRequestExpireSeconds;
     /** 已接受的交易多久没有任何操作就自动结束并退回物品（现实秒，默认 10 分钟）。 */
-    public final ModConfigSpec.IntValue tradeSessionTimeoutSeconds;
+    public final ForgeConfigSpec.IntValue tradeSessionTimeoutSeconds;
 
     // ---- 出货箱（新增模块，参考星露谷售货箱）----
-    public final ModConfigSpec.BooleanValue shippingEnabled;
+    public final ForgeConfigSpec.BooleanValue shippingEnabled;
     /** 兑换规则（每行一条：物品ID=价格 / #标签=价格 / 命名空间:*=价格，价格后可加 x数量 限定每日份数）。 */
-    public final ModConfigSpec.ConfigValue<List<? extends String>> shippingRules;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> shippingRules;
     /** 每个等级的槽位数（列表长度 = 等级数）。 */
-    public final ModConfigSpec.ConfigValue<List<? extends String>> shippingLevelSlots;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> shippingLevelSlots;
     /** 升级花费（第 1 项 = 1→2 级）。 */
-    public final ModConfigSpec.ConfigValue<List<? extends String>> shippingUpgradeCosts;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> shippingUpgradeCosts;
     /** 每个等级的每日结算上限（现实 0 点刷新）。 */
-    public final ModConfigSpec.ConfigValue<List<? extends String>> shippingDailyLimits;
+    public final ForgeConfigSpec.ConfigValue<List<? extends String>> shippingDailyLimits;
     /** 每天结算的游戏刻（0 = 早上 06:00）。 */
-    public final ModConfigSpec.IntValue shippingSettleTick;
+    public final ForgeConfigSpec.IntValue shippingSettleTick;
     /** 结算窗口长度（刻）。 */
-    public final ModConfigSpec.IntValue shippingSettleWindow;
+    public final ForgeConfigSpec.IntValue shippingSettleWindow;
     /** 每日额度按**现实时间**在几点重置（HH:mm，默认 00:00）。 */
-    public final ModConfigSpec.ConfigValue<String> shippingResetTime;
+    public final ForgeConfigSpec.ConfigValue<String> shippingResetTime;
 
     // ---- 购物城（新增模块）----
     /** 购物城是否定时补货（默认关；管理员可在游戏内「补货设置」里打开）。 */
-    public final ModConfigSpec.BooleanValue mallRestockEnabled;
+    public final ForgeConfigSpec.BooleanValue mallRestockEnabled;
     /** 补货时刻的时间口径：{@code real} = 现实时间，{@code game} = 游戏时间。 */
-    public final ModConfigSpec.ConfigValue<String> mallRestockMode;
+    public final ForgeConfigSpec.ConfigValue<String> mallRestockMode;
     /** 补货时刻（HH:mm）。 */
-    public final ModConfigSpec.ConfigValue<String> mallRestockTime;
+    public final ForgeConfigSpec.ConfigValue<String> mallRestockTime;
     /** 补货数量：0 = 每件商品补回各自原量；>0 = 所有商品统一补到该数量。 */
-    public final ModConfigSpec.IntValue mallRestockAmount;
+    public final ForgeConfigSpec.IntValue mallRestockAmount;
 
     // ---------------------------------------------------------------- HTTP / REST API（默认关闭）
     /** 是否启用 HTTP API（默认关闭；启用前请务必设置 token 并保持只监听 127.0.0.1）。 */
-    public final ModConfigSpec.BooleanValue httpApiEnabled;
+    public final ForgeConfigSpec.BooleanValue httpApiEnabled;
     /** 监听地址（默认 127.0.0.1；填 0.0.0.0 会把经济接口暴露到网络，除非你很清楚在做什么）。 */
-    public final ModConfigSpec.ConfigValue<String> httpApiBind;
+    public final ForgeConfigSpec.ConfigValue<String> httpApiBind;
     /** 监听端口。 */
-    public final ModConfigSpec.IntValue httpApiPort;
+    public final ForgeConfigSpec.IntValue httpApiPort;
     /** 访问令牌（Bearer）。为空时 HTTP API 拒绝启动。 */
-    public final ModConfigSpec.ConfigValue<String> httpApiToken;
+    public final ForgeConfigSpec.ConfigValue<String> httpApiToken;
     /** 是否允许写操作（加钱/扣钱/发奖/发邮件）。默认 false = 只读。 */
-    public final ModConfigSpec.BooleanValue httpApiAllowWrite;
+    public final ForgeConfigSpec.BooleanValue httpApiAllowWrite;
     /** 每个 IP 每分钟最多请求数（0 = 不限，不建议）。 */
-    public final ModConfigSpec.IntValue httpApiRateLimit;
+    public final ForgeConfigSpec.IntValue httpApiRateLimit;
 
-    private Config(ModConfigSpec.Builder builder) {
+    private Config(ForgeConfigSpec.Builder builder) {
         builder.push("wallet");
         currencyName = builder.comment("货币名称（需求：币种统一为星币，所有金额显示统一追加该后缀）").define("currencyName", "星币");
         currencySymbol = builder.comment("货币符号，留空则只显示数字").define("currencySymbol", "");
@@ -161,9 +161,9 @@ public final class Config {
         dailyShopCommonLimit = builder.comment("每日商店“普通”档位最多出现数量（0=不限制，默认 3）")
                 .defineInRange("dailyShopCommonLimit", 3, 0, 6);
         dailyRefreshCosts = builder.comment("付费刷新【每日商店】的价格表（按次数顺序：默认第 1 次 200、第 2 次 500；列表长度=每天可刷新次数）")
-                .defineList("dailyRefreshCosts", List.of("200", "500"), () -> "200", o -> o instanceof String);
+                .defineList("dailyRefreshCosts", List.of("200", "500"), o -> o instanceof String);
         buybackRefreshCosts = builder.comment("付费刷新【每日收购】的价格表（与每日商店相互独立：可分别设置价格与每天次数）")
-                .defineList("buybackRefreshCosts", List.of("200", "500"), () -> "200", o -> o instanceof String);
+                .defineList("buybackRefreshCosts", List.of("200", "500"), o -> o instanceof String);
         weightLegendary = builder.comment("传说权重").defineInRange("weightLegendary", 5, 0, 100000);
         weightEpic = builder.comment("史诗权重").defineInRange("weightEpic", 15, 0, 100000);
         weightRare = builder.comment("稀有权重").defineInRange("weightRare", 30, 0, 100000);
@@ -274,14 +274,13 @@ public final class Config {
                         "minecraft:iron_ingot=60",
                         "minecraft:gold_ingot=80",
                         "minecraft:diamond=300",
-                        "minecraft:emerald=260"),
-                        () -> "minecraft:wheat=4", o -> o instanceof String);
+                        "minecraft:emerald=260"), o -> o instanceof String);
         shippingLevelSlots = builder.comment("每个等级的槽位数（列表长度 = 等级数；默认 9/18/27，最后一项是最大格数）")
-                .defineList("shippingLevelSlots", List.of("9", "18", "27"), () -> "9", o -> o instanceof String);
+                .defineList("shippingLevelSlots", List.of("9", "18", "27"), o -> o instanceof String);
         shippingUpgradeCosts = builder.comment("升级花费（第 1 项 = 1→2 级，第 2 项 = 2→3 级；列表比等级数少 1）")
-                .defineList("shippingUpgradeCosts", List.of("2000", "10000"), () -> "2000", o -> o instanceof String);
+                .defineList("shippingUpgradeCosts", List.of("2000", "10000"), o -> o instanceof String);
         shippingDailyLimits = builder.comment("每个等级的每日结算金额上限（现实时间 0 点刷新；0 = 不限）")
-                .defineList("shippingDailyLimits", List.of("1000", "2500", "6000"), () -> "1000", o -> o instanceof String);
+                .defineList("shippingDailyLimits", List.of("1000", "2500", "6000"), o -> o instanceof String);
         shippingSettleTick = builder.comment("每天结算的游戏刻（0 = 早上 06:00；结算窗口见下一项）")
                 .defineInRange("shippingSettleTick", 0, 0, 23999);
         shippingSettleWindow = builder.comment("结算窗口长度（刻，默认 180 = 游戏内 9 秒；窗口内只会结算一次）")

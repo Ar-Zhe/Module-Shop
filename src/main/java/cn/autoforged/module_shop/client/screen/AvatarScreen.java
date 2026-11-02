@@ -8,7 +8,6 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
-import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * 摊位列表：按序号排列所有拥有摊位的玩家（已按需求取消头像…保留头像），点击即可进入选购。
@@ -130,15 +129,15 @@ public class AvatarScreen extends Screen {
 
     /** 鼠标滚轮：整行上下滚动（与收购 / 货币兑换列表同一套逻辑）。 */
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (scrollY != 0.0D) {
-            int next = Math.max(0, Math.min(maxScroll(), this.scrollRow + (scrollY > 0.0D ? -1 : 1)));
+    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
+        if (delta != 0.0D) {
+            int next = Math.max(0, Math.min(maxScroll(), this.scrollRow + (delta > 0.0D ? -1 : 1)));
             if (next != this.scrollRow) {
                 this.scrollRow = next;
                 return true;
             }
         }
-        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        return super.mouseScrolled(mouseX, mouseY, delta);
     }
 
     @Override

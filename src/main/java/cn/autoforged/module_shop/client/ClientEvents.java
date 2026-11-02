@@ -1,5 +1,7 @@
 package cn.autoforged.module_shop.client;
 
+
+import net.minecraftforge.fml.common.Mod;
 import cn.autoforged.module_shop.ModuleShopMod;
 import cn.autoforged.module_shop.client.screen.BatchAddScreen;
 import cn.autoforged.module_shop.client.screen.DepositScreen;
@@ -10,43 +12,44 @@ import cn.autoforged.module_shop.client.screen.ShippingBinScreen;
 import cn.autoforged.module_shop.menu.ModMenus;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
-import net.neoforged.api.distmarker.Dist;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
-import net.neoforged.neoforge.client.event.RegisterMenuScreensEvent;
-import net.neoforged.neoforge.client.settings.KeyConflictContext;
-import net.neoforged.neoforge.common.util.Lazy;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod.EventBusSubscriber;
+import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
+import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
+import net.minecraft.client.gui.screens.MenuScreens;
+import net.minecraftforge.client.settings.KeyConflictContext;
+import net.minecraftforge.common.util.LazyOptional;
 import org.lwjgl.glfw.GLFW;
 
-@EventBusSubscriber(modid = ModuleShopMod.MODID, value = Dist.CLIENT)
+@Mod.EventBusSubscriber(modid = ModuleShopMod.MODID, value = Dist.CLIENT)
 public final class ClientEvents {
     public static final String CATEGORY = "key.categories." + ModuleShopMod.MODID;
-    public static final Lazy<KeyMapping> OPEN_SHOP = Lazy.of(() -> new KeyMapping(
+    public static KeyMapping OPEN_SHOP;
+    private static final java.util.function.Supplier<KeyMapping> OPEN_SHOP_SUPPLIER = () -> new KeyMapping(
             "key." + ModuleShopMod.MODID + ".open_shop",
             KeyConflictContext.IN_GAME,
             InputConstants.Type.KEYSYM,
             GLFW.GLFW_KEY_K,
-            CATEGORY));
+            CATEGORY);
 
-    private ClientEvents() {
-    }
 
     @SubscribeEvent
-    public static void registerScreens(RegisterMenuScreensEvent event) {
-        event.register(ModMenus.DEPOSIT.get(), DepositScreen::new);
-        event.register(ModMenus.GRANT.get(), GrantScreen::new);
-        event.register(ModMenus.SCHEDULE_REWARD.get(), ScheduleRewardItemsScreen::new);
-        event.register(ModMenus.REDEEM_REWARD.get(), RedeemRewardEditorScreen::new);
-        // 出货箱（新增模块）：每个玩家自己的容器界面
-        event.register(ModMenus.SHIPPING.get(), ShippingBinScreen::new);
-        // 管理页「添加条目」的批量界面（27 个幽灵槽）
-        event.register(ModMenus.BATCH_ADD.get(), BatchAddScreen::new);
+    public static void registerScreens(net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent event) {
+        event.enqueueWork(() -> {
+            net.minecraft.client.gui.screens.MenuScreens.register(ModMenus.DEPOSIT.get(), DepositScreen::new);
+            net.minecraft.client.gui.screens.MenuScreens.register(ModMenus.GRANT.get(), GrantScreen::new);
+            net.minecraft.client.gui.screens.MenuScreens.register(ModMenus.SCHEDULE_REWARD.get(), ScheduleRewardItemsScreen::new);
+            net.minecraft.client.gui.screens.MenuScreens.register(ModMenus.REDEEM_REWARD.get(), RedeemRewardEditorScreen::new);
+            net.minecraft.client.gui.screens.MenuScreens.register(ModMenus.SHIPPING.get(), ShippingBinScreen::new);
+            net.minecraft.client.gui.screens.MenuScreens.register(ModMenus.BATCH_ADD.get(), BatchAddScreen::new);
+        });
     }
 
     @SubscribeEvent
     public static void registerKeys(RegisterKeyMappingsEvent event) {
-        event.register(OPEN_SHOP.get());
+        OPEN_SHOP = OPEN_SHOP_SUPPLIER.get();
+        event.register(OPEN_SHOP);
     }
 
     /**
@@ -58,7 +61,7 @@ public final class ClientEvents {
      */
     @SubscribeEvent
     public static void onScreenKeyPressed(
-            net.neoforged.neoforge.client.event.ScreenEvent.KeyPressed.Pre event) {
+            net.minecraftforge.client.event.ScreenEvent.KeyPressed.Pre event) {
         if (cn.autoforged.module_shop.client.screen.JeiBridge
                 .handleKey(event.getScreen(), event.getKeyCode())) {
             event.setCanceled(true);
@@ -74,7 +77,7 @@ public final class ClientEvents {
      * 只有在「解析出来的整句里仍然含默认货币名」时才动手，不影响任何已经正确的消息。
      */
     @SubscribeEvent
-    public static void onChatReceived(net.neoforged.neoforge.client.event.ClientChatReceivedEvent event) {
+    public static void onChatReceived(net.minecraftforge.client.event.ClientChatReceivedEvent event) {
         String name = ClientShopData.currencyName();
         if (name == null || name.isEmpty() || ClientShopData.DEFAULT_CURRENCY.equals(name)) {
             return;
@@ -99,13 +102,16 @@ public final class ClientEvents {
      * 换掉之后我们那层包装就没了。这里每帧检查一次，被换掉时立刻重新包上（代价只是两次类型判断）。
      */
     @SubscribeEvent
-    public static void onClientTick(net.neoforged.neoforge.client.event.ClientTickEvent.Post event) {
+    public static void onClientTick(net.minecraftforge.event.TickEvent.ClientTickEvent event) {
+        if (event.phase != net.minecraftforge.event.TickEvent.Phase.END) {
+            return;
+        }
         cn.autoforged.module_shop.client.CurrencyNames.apply(ClientShopData.moneySuffix);
     }
 
     /** 退出世界时清空界面层级与「已关闭界面」记录（返回栈是纯客户端状态，不能跨存档残留）。 */
     @SubscribeEvent
-    public static void onClientLogout(net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingOut event) {
+    public static void onClientLogout(net.minecraftforge.client.event.ClientPlayerNetworkEvent.LoggingOut event) {
         cn.autoforged.module_shop.client.screen.Nav.clear();
     }
 }

@@ -1,6 +1,6 @@
 package cn.autoforged.module_shop.data;
 
-import net.minecraft.core.HolderLookup;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 
 /**
@@ -68,7 +68,7 @@ public final class ActivityDay {
         return rewards.isEmpty() && (itemGranted.contains(id) || giftGranted.contains(id));
     }
 
-    public CompoundTag save(HolderLookup.Provider registries) {
+    public CompoundTag save(RegistryAccess registries) {
         CompoundTag tag = new CompoundTag();
         tag.putLong("day", day);
         tag.putString("title", title == null ? "" : title);
@@ -112,7 +112,7 @@ public final class ActivityDay {
         return tag;
     }
 
-    public static ActivityDay load(CompoundTag tag, HolderLookup.Provider registries) {
+    public static ActivityDay load(CompoundTag tag, RegistryAccess registries) {
         ActivityDay day = new ActivityDay();
         day.day = tag.getLong("day");
         day.title = tag.getString("title");

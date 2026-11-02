@@ -1,0 +1,6 @@
+{
+  "pack": {
+    "description": {"translate": "resourcepack.module_shop", "fallback": "Module-Shop resources"},
+    "pack_format": 15
+  }
+}
