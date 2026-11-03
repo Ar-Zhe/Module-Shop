@@ -2012,14 +2012,15 @@ public final class ShopManager {
         ShippingBin bin = account.shipping;
         int slots = Config.shippingSlotsFor(bin.level);
         bin.resize(slots);
-        // 规则写错时先在聊天栏提醒一次（格式错的规则不会生效，对应物品放不进去）。
+        // 规则写错时先在聊天栏提醒一次（格式错的规则不生效，对应物品放不进去）。
         warnShippingRules(player);
-        // Forge 1.20.1 的 openMenu 没有「额外写入 buf」的重载：槽位数直接由服务端构造的容器决定，
-        // 客户端创建菜单时从容器读（ShippingBinMenu.clientSide 里用默认槽位，随后由快照刷新）。
-        player.openMenu(new SimpleMenuProvider(
+        // 槽位数必须随「打开菜单」一起发给客户端：客户端工厂要 readVarInt() 才知道建几个槽。
+        // Forge 1.20.1 的 ServerPlayer#openMenu 没有额外数据重载，用 NetworkHooks.openScreen 写入。
+        net.minecraftforge.network.NetworkHooks.openScreen(player, new SimpleMenuProvider(
                 (id, inventory, p) -> new ShippingBinMenu(id, inventory,
                         new ShippingBinContainer(player, slots), slots),
-                Component.translatable("gui.module_shop.shipping.title", bin.level, slots)));
+                Component.translatable("gui.module_shop.shipping.title", bin.level, slots)),
+                buf -> buf.writeVarInt(slots));
     }
 
     /** 规则有错时给玩家一条说明（同一条错误 30 秒内只提醒一次）。 */

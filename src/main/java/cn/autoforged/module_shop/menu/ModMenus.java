@@ -41,7 +41,7 @@ public final class ModMenus {
     public static final RegistryObject<MenuType<ShippingBinMenu>> SHIPPING =
             MENUS.register("shipping_bin", () -> IForgeMenuType.<ShippingBinMenu>create(
                     (id, inventory, data) -> ShippingBinMenu.clientSide(id, inventory,
-                            Math.max(9, data.readVarInt()))));
+                            Math.max(9, data != null && data.readableBytes() > 0 ? data.readVarInt() : 9))));
 
     /** 管理页「添加条目」的批量幽灵槽界面（最多 27 种物品）。 */
     public static final RegistryObject<MenuType<BatchAddMenu>> BATCH_ADD =

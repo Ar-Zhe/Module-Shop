@@ -18,24 +18,27 @@
   同物品判定用 `isSameItemSameTags`（1.21 是数据组件）。
 * 皮肤绘制用 `getSkinTextureLocation()`（`PlayerSkin` 是 1.20.2+ 才有的类型）。
 * 滚轮事件为 3 参、`Screen#renderBackground(GuiGraphics)` 单参。
-* **KubeJS 桥接**改为可选源集：`-PkubejsJar=<kubejs-forge jar>` 才编译，
+* **KubeJS 桥接**是可选源集：`-PkubejsJar=<kubejs-forge jar>` 才编译，
   API 适配 KubeJS 2001（`KubeJSPlugin` 是 class 要 `extends`、`registerBindings(BindingsEvent)`）。
 
 ### 已修复
 
-* **客户端进游戏即崩溃**：日志里是
-  `NullPointerException: Cannot invoke "KeyMapping.m_90859_()"`，`ClientEvents.OPEN_SHOP` 为 `null`。
-  根因是 Forge 1.20.1 的 `@Mod.EventBusSubscriber` **默认订阅游戏总线**，而
-  `RegisterKeyMappingsEvent` / `FMLClientSetupEvent` 是 **MOD 总线**事件 —— 按键注册与界面注册两件事
-  都没执行到。现在拆出 `ClientModEvents`（显式 `bus = MOD`）负责按键与 6 个容器界面注册，
-  并给按键加了懒创建兜底，任何加载顺序都不会再崩。
+* **客户端进游戏即崩溃**（`NullPointerException: Cannot invoke "KeyMapping..."`）：
+  Forge 1.20.1 的 `@Mod.EventBusSubscriber` **默认订阅游戏总线**，而
+  `RegisterKeyMappingsEvent` / `FMLClientSetupEvent` 是 **MOD 总线**事件，按键注册没执行到。
+  现在拆出 `ClientModEvents`（显式 `bus = MOD`）负责按键与容器界面注册，并给按键加了懒创建兜底。
 * **容器界面打不开**（发放物品 / 添加条目 / 放入物品 / 出货箱 / 兑换码 / 日程奖励）：
-  同一个根因，已随上面一起修好。
+  同一个根因（界面注册没跑到），已随上面一起修好。
+* **出货箱无法打开**：客户端菜单工厂要 `readVarInt()` 读槽位数，但移植时给
+  `ServerPlayer#openMenu` 去掉了「额外写 buf」的重载（1.20.1 没有这个重载），
+  服务端不再写、客户端却在读 —— 建菜单时直接抛异常。
+  现在改用 Forge 的 `NetworkHooks.openScreen(player, provider, buf -> buf.writeVarInt(slots))`
+  把槽位数发过去，并给客户端工厂加了「读不到就用默认 9 格」的兜底。
 
 ### 验证状态
 
 * 编译 0 错误；`runServer` 启动 `Done`、模组 0 报错；
-* `runClient` 正常进游戏、无 NPE；
+* `runClient` 正常进游戏、无 NPE；6 个容器界面注册代码已走到；
 * 待人工点验：12 个模块界面逐个操作、网络分片联调、KubeJS 运行期验证。
 
 ## [1.0.2]
