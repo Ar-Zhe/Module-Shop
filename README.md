@@ -1,8 +1,8 @@
 # Module Shop · 模块商店
 
 > **这个分支是 1.20.1 / Forge 版本**（分支 `forge-1.20.1`）。
-> 版本号 **1.1.0**，依赖 **Minecraft 1.20.1 + Forge 47.4.9 + Java 17**。
-> 1.21.1 / NeoForge 版本在 `main` 分支（1.0.x），两个分支各自维护、互不影响。
+> 版本号 **1.0.2-beta**（测试版），依赖 **Minecraft 1.20.1 + Forge 47.4.9 + Java 17**。
+> 1.21.1 / NeoForge 版本在 `main` 分支（同号 1.0.2，无 beta 后缀），两个分支各自维护、互不影响。
 
 ## 1.20.1 / Forge 版怎么构建
 
@@ -21,11 +21,11 @@ ForgeGradle 需要一个**完整 JDK 17**（`bin/javac.exe` 必须存在；指�
 .\build.ps1 -JdkPath 'C:\Path\To\jdk-17' -Task runClient
 ```
 
-产物：`build/libs/module_shop-1.1.0-forge-1.20.1.jar`
+产物：`build/libs/module_shop-1.0.2-beta-forge-1.20.1.jar`
 
 - 客户端要装同一个 jar；只装服务端不会有界面。
 - KubeJS 桥接是**可选模块**：不传 `-KubejsJar` 时完全不编译，主模组不依赖 KubeJS。
-- 与 1.21.1 版本的差异（纯平台适配）见 [CHANGELOG.md](CHANGELOG.md) 的 1.1.0 条目。
+- 与 1.21.1 版本的差异（纯平台适配）见 [CHANGELOG.md](CHANGELOG.md) 的 1.0.2-beta 条目。
 
 ---
 

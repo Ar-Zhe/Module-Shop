@@ -2,21 +2,10 @@
 
 遵循 [语义化版本](https://semver.org/lang/zh-CN/)。模组版本与 API 版本独立维护（当前 API `1.0.0`）。
 
-## [1.1.1] · 1.20.1 / Forge 分支
-
-### 修复
-
-* **客户端进游戏即崩溃**：`ClientEvents.OPEN_SHOP` 为 `null` 时按 tick 访问导致
-  `NullPointerException: Cannot invoke "KeyMapping.m_90859_()"`。
-  根因是 Forge 1.20.1 的 `@Mod.EventBusSubscriber` **默认订阅游戏总线**，而
-  `RegisterKeyMappingsEvent` / `FMLClientSetupEvent` 是 **MOD 总线**事件 —— 按键注册与容器界面注册
-  两件事都没执行到。现在拆出 `ClientModEvents`（显式 `bus = MOD`）专门注册按键与 6 个容器界面，
-  并给按键加了懒创建兜底，任何加载顺序都不会再崩。
-* **容器界面（发放物品 / 添加条目 / 放入物品 / 出货箱 / 兑换码 / 日程奖励）无法打开**：同一个根因，
-  界面注册没跑到；已随上面一起修好。
-## [1.1.0] · 1.20.1 / Forge 分支
+## [1.0.2-beta] · 1.20.1 / Forge 分支（测试版）
 
 面向 **Minecraft 1.20.1 + Forge 47.4.9 + Java 17** 的移植版本，功能与 1.0.2 对齐。
+版本号跟 `main` 保持一致，`-beta` 表示**尚未经过完整实测**。
 
 ### 与 1.21.1 版本的差异（纯平台适配，无玩法改动）
 
@@ -28,17 +17,26 @@
 * 1.20.1 物品序列化仍是 NBT：`ItemStack.save(CompoundTag)` / `ItemStack.of(tag)`，
   同物品判定用 `isSameItemSameTags`（1.21 是数据组件）。
 * 皮肤绘制用 `getSkinTextureLocation()`（`PlayerSkin` 是 1.20.2+ 才有的类型）。
-* 容器界面在 `FMLClientSetupEvent` 里用 `MenuScreens.register` 注册
-  （Forge 1.20.1 没有 `RegisterMenuScreensEvent`）。
 * 滚轮事件为 3 参、`Screen#renderBackground(GuiGraphics)` 单参。
 * **KubeJS 桥接**改为可选源集：`-PkubejsJar=<kubejs-forge jar>` 才编译，
   API 适配 KubeJS 2001（`KubeJSPlugin` 是 class 要 `extends`、`registerBindings(BindingsEvent)`）。
 
+### 已修复
+
+* **客户端进游戏即崩溃**：日志里是
+  `NullPointerException: Cannot invoke "KeyMapping.m_90859_()"`，`ClientEvents.OPEN_SHOP` 为 `null`。
+  根因是 Forge 1.20.1 的 `@Mod.EventBusSubscriber` **默认订阅游戏总线**，而
+  `RegisterKeyMappingsEvent` / `FMLClientSetupEvent` 是 **MOD 总线**事件 —— 按键注册与界面注册两件事
+  都没执行到。现在拆出 `ClientModEvents`（显式 `bus = MOD`）负责按键与 6 个容器界面注册，
+  并给按键加了懒创建兜底，任何加载顺序都不会再崩。
+* **容器界面打不开**（发放物品 / 添加条目 / 放入物品 / 出货箱 / 兑换码 / 日程奖励）：
+  同一个根因，已随上面一起修好。
+
 ### 验证状态
 
-* 编译 0 错误；`runServer` 启动 `Done (6.144s)`、模组 0 报错；
-* `runClient` 正常进游戏，6 个容器界面注册无误；
-* 待人工点验：12 个模块界面、网络分片联调、KubeJS 运行期验证。
+* 编译 0 错误；`runServer` 启动 `Done`、模组 0 报错；
+* `runClient` 正常进游戏、无 NPE；
+* 待人工点验：12 个模块界面逐个操作、网络分片联调、KubeJS 运行期验证。
 
 ## [1.0.2]
 
