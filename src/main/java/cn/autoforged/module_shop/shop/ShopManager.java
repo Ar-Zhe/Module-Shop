@@ -736,6 +736,17 @@ public final class ShopManager {
 
     // =========================================================== 快照与输入界面
 
+    /**
+     * 只把最新的界面数据推给这个玩家（**不弹界面**）。
+     *
+     * <p>用在容器界面（出货箱 / 放入物品）关闭之后：客户端会回到缓存的商店界面，
+     * 如果不推一次，界面上「箱内物品 / 本次结算」还是打开容器之前的旧数字，要切模块才更新。
+     */
+    public static void pushSnapshot(ServerPlayer player) {
+        if (player != null) {
+            sendSnapshot(player, null, true);
+        }
+    }
     public static void sendSnapshot(ServerPlayer player, @Nullable String tab) {
         // ⚠ 默认**不自动打开界面**：以前是"客户端没开界面就弹出来"，于是关掉商店后，
         // 任何一次数据推送（午夜刷新、邮件合并、自动签到发奖…）都会把界面又弹回来，玩家会以为"关不掉"。

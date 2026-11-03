@@ -39,6 +39,10 @@
   1.20.1 的 `Screen#render` **不会**自动调用 `renderBackground`（1.20.2 才改成自动调），
   而这几个界面把「面板 + 世界压暗」画在 `renderBackground` 里。现在在自己的 `render` 开头
   显式调用一次 `this.renderBackground(g)`，面板与压暗恢复正常。
+* **出货箱 / 放入物品关闭后界面数字不刷新**（箱内件数、本次结算、余额要切模块才更新）：
+  客户端关闭容器后会回到缓存的商店界面，而服务端没有推送新数据。现在
+  `ShippingBinMenu` / `DepositMenu` 在 `removed(...)` 里调用 `ShopManager.pushSnapshot(player)`
+  只推数据、不弹界面，回到商店时数字已经是新的。
 ### 验证状态
 
 * 编译 0 错误；`runServer` 启动 `Done`、模组 0 报错；

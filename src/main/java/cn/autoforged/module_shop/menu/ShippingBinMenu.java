@@ -125,6 +125,20 @@ public class ShippingBinMenu extends AbstractContainerMenu {
         return result;
     }
 
+    /**
+     * 容器关闭：把最新的界面数据推给玩家。
+     *
+     * <p>客户端关掉容器会回到缓存的商店界面；不推一次的话上面显示的还是打开容器前的旧数字
+     *（出货箱的「箱内物品 N 件 / 本次结算可得 N 星币」），必须切模块才刷新。
+     */
+    @Override
+    public void removed(Player player) {
+        super.removed(player);
+        if (player instanceof net.minecraft.server.level.ServerPlayer server) {
+            cn.autoforged.module_shop.shop.ShopManager.pushSnapshot(server);
+        }
+    }
+
     @Override
     public boolean stillValid(Player player) {
         return true;

@@ -122,6 +122,9 @@ public class DepositMenu extends AbstractContainerMenu {
                 }
             }
         }
+        if (player instanceof net.minecraft.server.level.ServerPlayer serverSnapshot) {
+            cn.autoforged.module_shop.shop.ShopManager.pushSnapshot(serverSnapshot);
+        }
     }
 
     public static DepositMenu clientSide(int id, Inventory playerInventory) {
