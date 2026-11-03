@@ -120,6 +120,7 @@ public class AuctionBidScreen extends Screen {
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         refreshFromCache();
+        this.renderBackground(g);
         super.render(g, mouseX, mouseY, partialTick);
         int cx = this.left + PANEL_W / 2;
         IOStyle.centerAt(g, this.font, this.title, cx, this.top + 10, COLOR_GOLD);

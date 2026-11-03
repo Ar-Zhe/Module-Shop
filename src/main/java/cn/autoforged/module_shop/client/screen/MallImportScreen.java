@@ -99,6 +99,7 @@ public class MallImportScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        this.renderBackground(g);
         super.render(g, mouseX, mouseY, partialTick);
         this.rowRects.clear();
         int x = this.left;

@@ -35,6 +35,10 @@
   现在改用 Forge 的 `NetworkHooks.openScreen(player, provider, buf -> buf.writeVarInt(slots))`
   把槽位数发过去，并给客户端工厂加了「读不到就用默认 9 格」的兜底。
 
+* **部分界面背景透明**（添加条目的「设置商品」框、拍卖出价、导入模组、交易请求 / 选择界面）：
+  1.20.1 的 `Screen#render` **不会**自动调用 `renderBackground`（1.20.2 才改成自动调），
+  而这几个界面把「面板 + 世界压暗」画在 `renderBackground` 里。现在在自己的 `render` 开头
+  显式调用一次 `this.renderBackground(g)`，面板与压暗恢复正常。
 ### 验证状态
 
 * 编译 0 错误；`runServer` 启动 `Done`、模组 0 报错；

@@ -85,6 +85,7 @@ public class TradeSelectScreen extends Screen {
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         this.rowRects.clear();
+        this.renderBackground(g);
         super.render(g, mouseX, mouseY, partialTick);
         int x = this.left;
         int y = this.top;

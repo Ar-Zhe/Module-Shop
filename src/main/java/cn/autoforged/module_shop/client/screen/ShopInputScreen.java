@@ -329,6 +329,7 @@ public class ShopInputScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        this.renderBackground(g);
         super.render(g, mouseX, mouseY, partialTick);
         // 标题/提示过长时截断，避免顶出面板（货币名可能很长，例如别的模组的“银币锭”）。
         int maxTextW = this.panelW - 20;
