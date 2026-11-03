@@ -2,6 +2,18 @@
 
 遵循 [语义化版本](https://semver.org/lang/zh-CN/)。模组版本与 API 版本独立维护（当前 API `1.0.0`）。
 
+## [1.1.1] · 1.20.1 / Forge 分支
+
+### 修复
+
+* **客户端进游戏即崩溃**：`ClientEvents.OPEN_SHOP` 为 `null` 时按 tick 访问导致
+  `NullPointerException: Cannot invoke "KeyMapping.m_90859_()"`。
+  根因是 Forge 1.20.1 的 `@Mod.EventBusSubscriber` **默认订阅游戏总线**，而
+  `RegisterKeyMappingsEvent` / `FMLClientSetupEvent` 是 **MOD 总线**事件 —— 按键注册与容器界面注册
+  两件事都没执行到。现在拆出 `ClientModEvents`（显式 `bus = MOD`）专门注册按键与 6 个容器界面，
+  并给按键加了懒创建兜底，任何加载顺序都不会再崩。
+* **容器界面（发放物品 / 添加条目 / 放入物品 / 出货箱 / 兑换码 / 日程奖励）无法打开**：同一个根因，
+  界面注册没跑到；已随上面一起修好。
 ## [1.1.0] · 1.20.1 / Forge 分支
 
 面向 **Minecraft 1.20.1 + Forge 47.4.9 + Java 17** 的移植版本，功能与 1.0.2 对齐。

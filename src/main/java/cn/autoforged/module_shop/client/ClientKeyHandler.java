@@ -26,7 +26,7 @@ public final class ClientKeyHandler {
         if (minecraft.player == null) {
             return;
         }
-        while (ClientEvents.OPEN_SHOP.consumeClick()) {
+        while (ClientEvents.openShopKey().consumeClick()) {
             if (minecraft.screen == null) {
                 CompoundTag tag = new CompoundTag();
                 tag.putString("action", "request_data");

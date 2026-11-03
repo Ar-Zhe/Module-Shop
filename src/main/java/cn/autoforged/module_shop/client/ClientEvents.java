@@ -26,30 +26,27 @@ import org.lwjgl.glfw.GLFW;
 public final class ClientEvents {
     public static final String CATEGORY = "key.categories." + ModuleShopMod.MODID;
     public static KeyMapping OPEN_SHOP;
-    private static final java.util.function.Supplier<KeyMapping> OPEN_SHOP_SUPPLIER = () -> new KeyMapping(
-            "key." + ModuleShopMod.MODID + ".open_shop",
-            KeyConflictContext.IN_GAME,
-            InputConstants.Type.KEYSYM,
-            GLFW.GLFW_KEY_K,
-            CATEGORY);
 
-
-    @SubscribeEvent
-    public static void registerScreens(net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent event) {
-        event.enqueueWork(() -> {
-            net.minecraft.client.gui.screens.MenuScreens.register(ModMenus.DEPOSIT.get(), DepositScreen::new);
-            net.minecraft.client.gui.screens.MenuScreens.register(ModMenus.GRANT.get(), GrantScreen::new);
-            net.minecraft.client.gui.screens.MenuScreens.register(ModMenus.SCHEDULE_REWARD.get(), ScheduleRewardItemsScreen::new);
-            net.minecraft.client.gui.screens.MenuScreens.register(ModMenus.REDEEM_REWARD.get(), RedeemRewardEditorScreen::new);
-            net.minecraft.client.gui.screens.MenuScreens.register(ModMenus.SHIPPING.get(), ShippingBinScreen::new);
-            net.minecraft.client.gui.screens.MenuScreens.register(ModMenus.BATCH_ADD.get(), BatchAddScreen::new);
-        });
+    /** 按键的创建器（真正注册在 {@link ClientModEvents} 的 MOD 总线事件里）。 */
+    static KeyMapping createOpenShopKey() {
+        return new KeyMapping("key." + ModuleShopMod.MODID + ".open_shop",
+                KeyConflictContext.IN_GAME,
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_K,
+                CATEGORY);
     }
 
-    @SubscribeEvent
-    public static void registerKeys(RegisterKeyMappingsEvent event) {
-        OPEN_SHOP = OPEN_SHOP_SUPPLIER.get();
-        event.register(OPEN_SHOP);
+    /**
+     * 取「打开商店」按键。
+     *
+     * <p>正常情况下由 {@code ClientModEvents#registerKeys} 在 MOD 总线事件里赋值；
+     * 这里再兜一层懒创建：万一加载顺序导致事件没跑到，也不会在 tick 里因为 null 把客户端崩掉。
+     */
+    public static KeyMapping openShopKey() {
+        if (OPEN_SHOP == null) {
+            OPEN_SHOP = createOpenShopKey();
+        }
+        return OPEN_SHOP;
     }
 
     /**
