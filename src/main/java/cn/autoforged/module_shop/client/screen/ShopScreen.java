@@ -22,7 +22,9 @@ import cn.autoforged.module_shop.client.screen.shop.ShopHost;
 import cn.autoforged.module_shop.client.screen.shop.ShopPage;
 import cn.autoforged.module_shop.client.screen.shop.ShippingPage;
 import cn.autoforged.module_shop.client.ui.AtomUi;
+import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.ItemOverlay;
+import cn.autoforged.module_shop.client.ui.render.Text;
 import cn.autoforged.module_shop.client.ui.render.SkiaFrame;
 import cn.autoforged.module_shop.client.ui.widget.Motion;
 import cn.autoforged.module_shop.data.ConfiguredOffer;
@@ -821,11 +823,16 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         int x = left();
         int y = top();
         boolean editing = this.layoutEdit && ClientShopData.canAdmin;
-        // 扁平直角版式：整块面板，左栏（导航）比右栏（内容）深一档。
-        Bricks.panel(g, x, y, PANEL_W, PANEL_H);
-        IOStyle.sections(g, x, y, PANEL_W, PANEL_H, SIDEBAR_W);
-        drawSidebar(g, x, y, mouseX, mouseY);
-        drawProfileBlock(g, x, y, mouseX, mouseY);
+        // 阶段 4：AtomLib 可用且不在编辑布局时，外壳（面板 / 侧栏 / 资料块 / 标题栏）与页面一起用 Skija 画
+        // （见 drawShellSkia）；编辑布局与 AtomLib 不可用时仍走下面的旧绘制。
+        boolean skiaShell = !editing && activePage() != null;
+        if (!skiaShell) {
+            // 扁平直角版式：整块面板，左栏（导航）比右栏（内容）深一档。
+            Bricks.panel(g, x, y, PANEL_W, PANEL_H);
+            IOStyle.sections(g, x, y, PANEL_W, PANEL_H, SIDEBAR_W);
+            drawSidebar(g, x, y, mouseX, mouseY);
+            drawProfileBlock(g, x, y, mouseX, mouseY);
+        }
         int contentX = contentX();
         int contentY = contentY();
         int contentW = contentW();
@@ -841,7 +848,9 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             }
             return;
         }
-        drawHeader(g, x, y, contentX, contentY, contentW, mouseX, mouseY);
+        if (!skiaShell) {
+            drawHeader(g, x, y, contentX, contentY, contentW, mouseX, mouseY);
+        }
         this.pageDtMs = this.pageClock.tick();
         ShopPage page = activePage();
         if (page != this.lastPage) {
@@ -851,7 +860,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             this.lastPage = page;
         }
         if (page != null) {
-            renderPage(g, page, mouseX, mouseY);
+            renderPage(g, page, mouseX, mouseY, skiaShell);
         } else switch (currentTab) {
             case "daily" -> drawDaily(g, contentX, contentY, contentW, contentH, mouseX, mouseY, partialTick);
             case "buyback" -> drawBuyback(g, contentX, contentY, contentW, contentH, mouseX, mouseY);
@@ -893,16 +902,248 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
      * 用 Skija 绘制已迁移页面的内容区：Skija 内容 → 原版物品层；
      * 悬停物品交给原有的统一 tooltip 出口（pendingItemTip）与 JEI 桥接（jeiHover）。
      */
-    private void renderPage(GuiGraphics g, ShopPage page, int mouseX, int mouseY) {
+    private void renderPage(GuiGraphics g, ShopPage page, int mouseX, int mouseY, boolean shell) {
         PageFrame frame = pageFrame(mouseX, mouseY);
         this.pageItems.begin(mouseX, mouseY, true);
-        SkiaFrame.draw(g, canvas -> page.render(canvas, frame));
+        SkiaFrame.draw(g, canvas -> {
+            if (shell) {
+                drawShellSkia(canvas, mouseX, mouseY);
+            }
+            page.render(canvas, frame);
+        });
         this.pageItems.flush(g, this.font);
         ItemStack hovered = this.pageItems.hovered();
         if (!hovered.isEmpty()) {
             this.jeiHover = hovered;
             this.pendingItemTip = hovered;
         }
+    }
+
+    // ================= 阶段 4：外壳（面板 / 侧栏 / 资料块 / 标题栏）的 Skija 版 =================
+    // 几何、命中区（addRegion）、滚动与换位动画都与旧绘制完全一致，只换绘制；点击仍走原有的 regions。
+    // 头像、通知红点、铃铛图标是原版绘制，登记到页面物品层（Skija 之后统一画）。
+
+    /** 外壳控件的悬停动画值（key → 0..1）。 */
+    private final Map<String, Float> shellAnim = new HashMap<>();
+
+    private float shellAnim(String key, boolean on, float tauMs) {
+        float v = Motion.approach(this.shellAnim.getOrDefault(key, on ? 1.0F : 0.0F), on ? 1.0F : 0.0F,
+                this.pageDtMs, tauMs);
+        this.shellAnim.put(key, v);
+        return v;
+    }
+
+    private void drawShellSkia(io.github.humbleui.skija.Canvas c, int mouseX, int mouseY) {
+        int x = left();
+        int y = top();
+        Draw.fill(c, x, y, PANEL_W, PANEL_H, 0.0F, IOStyle.SHEET);
+        Draw.fill(c, x + 1, y + 1, SIDEBAR_W - 1, PANEL_H - 2, 0.0F, IOStyle.SIDEBAR);
+        Draw.fill(c, x + SIDEBAR_W, y + 1, PANEL_W - SIDEBAR_W - 1, PANEL_H - 2, 0.0F, IOStyle.CONTENT);
+        Draw.fill(c, x + SIDEBAR_W, y + 1, 1.0F, PANEL_H - 2, 0.0F, IOStyle.BORDER);
+        Draw.stroke(c, x, y, PANEL_W, PANEL_H, 0.0F, 1.0F, IOStyle.BORDER);
+        drawSidebarSkia(c, x, y, mouseX, mouseY);
+        drawProfileSkia(c, x, y, mouseX, mouseY);
+        drawHeaderSkia(c, x, y, mouseX, mouseY);
+    }
+
+    private void drawSidebarSkia(io.github.humbleui.skija.Canvas c, int x, int y, int mouseX, int mouseY) {
+        String brand = ClientShopData.shopTitle == null || ClientShopData.shopTitle.isBlank()
+                ? Component.translatable("gui.module_shop.title").getString() : ClientShopData.shopTitle;
+        Text.drawLine(c, brand, AtomUi.BOLD, 9.0F, IOStyle.BLUE, x + 4, y + 12, SIDEBAR_W - 8, Text.Align.CENTER);
+
+        List<String> tabs = visibleTabs();
+        int rowsFit = sidebarRowsFit();
+        int pitch = TAB_H + GRID_GAP_Y;
+        ensureSidebarVisible(tabs);
+        this.sidebarScroll = Mth.clamp(this.sidebarScroll, 0, sidebarMaxScroll());
+        float dt = this.frameDeltaSeconds();
+        float k = approach(dt, 20.0F);
+        float targetPx = this.sidebarScroll * (float) pitch;
+        if (this.sidebarScrollPx < 0.0F) {
+            this.sidebarScrollPx = targetPx;
+        }
+        float distance = targetPx - this.sidebarScrollPx;
+        float scrollRate = 26.0F * (1.0F + Math.min(0.6F, Math.abs(distance) / pitch * 0.12F));
+        this.sidebarScrollPx += distance * approach(dt, scrollRate);
+        if (Math.abs(targetPx - this.sidebarScrollPx) < 0.02F) {
+            this.sidebarScrollPx = targetPx;
+        }
+        int bandTop = y + GRID_Y;
+        int bandBottom = bandTop + rowsFit * pitch - GRID_GAP_Y;
+
+        // 滚动条（模块多于一屏时）
+        int maxScroll = sidebarMaxScroll();
+        if (maxScroll > 0) {
+            float trackX = x + SIDEBAR_W - 5;
+            float trackH = bandBottom - bandTop;
+            Draw.fill(c, trackX, bandTop, 2.0F, trackH, 1.0F, Draw.alpha(IOStyle.BORDER_DIM, 0.75F));
+            float thumbH = Math.max(12.0F, trackH * rowsFit / Math.max(1, tabs.size()));
+            float progress = Mth.clamp(this.sidebarScrollPx / (maxScroll * (float) pitch), 0.0F, 1.0F);
+            Draw.fill(c, trackX, bandTop + (trackH - thumbH) * progress, 2.0F, thumbH, 1.0F, IOStyle.BLUE);
+        }
+
+        int saved = c.save();
+        Draw.clip(c, x + 1, bandTop, SIDEBAR_W - 2, bandBottom - bandTop + 1);
+        this.pageItems.pushClip(x + 1, bandTop, SIDEBAR_W - 2, bandBottom - bandTop + 1);
+        try {
+            int first = Math.max(0, (int) Math.floor(this.sidebarScrollPx / pitch) - 1);
+            int last = Math.min(tabs.size() - 1,
+                    (int) Math.ceil((this.sidebarScrollPx + rowsFit * (float) pitch) / pitch));
+            for (int i = first; i <= last; i++) {
+                String id = tabs.get(i);
+                float slot = easeSlot(id, i, k);
+                float tx = x + slotX(0);
+                float ty = bandTop + slot * pitch - this.sidebarScrollPx;
+                if (ty > bandBottom || ty + TAB_H < bandTop) {
+                    continue;
+                }
+                boolean selected = id.equals(currentTab);
+                boolean hover = !selected && mouseX >= tx && mouseX < tx + TAB_W && mouseY >= ty && mouseY < ty + TAB_H
+                        && mouseY >= bandTop && mouseY <= bandBottom;
+                float ht = shellAnim("nav.h." + id, hover, Motion.HOVER_MS);
+                float st = shellAnim("nav.s." + id, selected, 80.0F);
+                int bg = Draw.lerp(Draw.lerp(IOStyle.SIDEBAR, IOStyle.ROW_HOVER, ht), IOStyle.BLUE, st);
+                Draw.fill(c, tx, ty, TAB_W, TAB_H, 2.0F, bg);
+                Draw.stroke(c, tx, ty, TAB_W, TAB_H, 2.0F, 1.0F,
+                        Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, Math.max(ht, st)));
+                int fg = Draw.lerp(IOStyle.TEXT, 0xFFFFFFFF, Math.max(st, ht * 0.4F));
+                Text.drawLine(c, tabLabel(id).getString(), selected ? AtomUi.BOLD : AtomUi.REGULAR, Text.BODY, fg,
+                        tx + 9.0F, ty + TAB_H / 2.0F, TAB_W - 17.0F, Text.Align.LEFT);
+                NotificationType badge = switch (id) {
+                    case "daily" -> NotificationType.SHOP;
+                    case "buyback" -> NotificationType.BUYBACK;
+                    case "auction" -> NotificationType.AUCTION;
+                    case "stall" -> NotificationType.STALL;
+                    case "mail" -> NotificationType.MAIL;
+                    default -> null;
+                };
+                int itx = Math.round(tx);
+                int ity = Math.round(ty);
+                if (badge != null) {
+                    this.pageItems.addCustom(itx + TAB_W - 12, ity, 12.0F, 12.0F,
+                            (g, font) -> ClientNotifications.drawBadge(g, font, badge, itx + TAB_W - 2, ity + 1));
+                }
+                // 命中区裁到列表带内：滑出一半的条目不会盖住资料块的点击
+                int top = Math.max(ity, bandTop);
+                int bottom = Math.min(ity + TAB_H, bandBottom + 1);
+                if (bottom > top) {
+                    CompoundTag extra = new CompoundTag();
+                    extra.putString("tab", id);
+                    addRegion(itx, top, TAB_W, bottom - top, "set_tab", null, extra);
+                }
+            }
+        } finally {
+            this.pageItems.popClip();
+            c.restoreToCount(saved);
+        }
+    }
+
+    private void drawProfileSkia(io.github.humbleui.skija.Canvas c, int x, int y, int mouseX, int mouseY) {
+        int bx = x + 7;
+        int by = y + PANEL_H - PROFILE_H - 6;
+        int bw = SIDEBAR_W - 12;
+        Draw.fill(c, bx, by, bw, PROFILE_H, 3.0F, IOStyle.CARD);
+        Draw.stroke(c, bx, by, bw, PROFILE_H, 3.0F, 1.0F, IOStyle.BORDER_DIM);
+        int avatar = 18;
+        int ax = bx + 5;
+        int ay = by + (PROFILE_H - avatar) / 2;
+        Draw.fill(c, ax - 1, ay - 1, avatar + 2, avatar + 2, 3.0F, 0x33FFFFFF);
+        this.pageItems.addCustom(ax, ay, avatar, avatar, (g, font) -> {
+            var player = Minecraft.getInstance().player;
+            if (player != null) {
+                net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, player.getSkin(), ax, ay, avatar);
+            } else {
+                g.fill(ax, ay, ax + avatar, ay + avatar, IOStyle.GRAY_BTN);
+            }
+        });
+        float textX = ax + avatar + 6;
+        float textMax = bx + bw - 5 - textX;
+        String name = ClientShopData.playerName.isEmpty() ? "-" : ClientShopData.playerName;
+        Text.drawLine(c, name, AtomUi.REGULAR, Text.BODY, IOStyle.TEXT, textX, by + 11.5F, textMax, Text.Align.LEFT);
+        if (ClientShopData.balance != this.lastShownBalance) {
+            if (this.lastShownBalance != Long.MIN_VALUE) {
+                IOStyle.flash("balance");
+            }
+            this.lastShownBalance = ClientShopData.balance;
+        }
+        float flash = IOStyle.flashProgress("balance", 600L);
+        String balance = Component.translatable("gui.module_shop.balance_prefix",
+                ClientShopData.money(ClientShopData.balance)).getString();
+        boolean balanceHover = shellRectHover(textX - 2, by + 17, textMax + 4, 12, mouseX, mouseY);
+        float hb = shellAnim("balance", balanceHover, Motion.HOVER_MS);
+        int color = Draw.lerp(Draw.lerp(IOStyle.BLUE, IOStyle.BLUE_HOVER, hb), 0xFFFFFFFF, flash * 0.6F);
+        float bwidth = Text.drawLine(c, balance, AtomUi.BOLD, 7.0F, color, textX, by + 23.0F, textMax, Text.Align.LEFT);
+        if (hb > 0.01F) {
+            Draw.fill(c, textX, by + 27.5F, bwidth * hb, 0.8F, 0.0F, Draw.alpha(color, 0.7F));
+        }
+        if (balanceHover) {
+            this.pendingTextTip = Component.translatable("gui.module_shop.bill.open_tip");
+        }
+        addRegion(Math.round(textX) - 2, by + 17, Math.round(bwidth) + 4, 12, "open_bill", null, null);
+    }
+
+    private static boolean shellRectHover(float x, float y, float w, float h, int mx, int my) {
+        return mx >= x && mx < x + w && my >= y && my < y + h;
+    }
+
+    private void drawHeaderSkia(io.github.humbleui.skija.Canvas c, int x, int y, int mouseX, int mouseY) {
+        // 关闭（×）
+        int closeX = x + PANEL_W - 22;
+        int closeY = y + 7;
+        float hc = shellAnim("close", shellRectHover(closeX, closeY, 14, 14, mouseX, mouseY), Motion.HOVER_MS);
+        Draw.fill(c, closeX, closeY, 14, 14, 2.0F, Draw.lerp(IOStyle.GRAY_BTN, IOStyle.RED_TINT_HOVER, hc));
+        Draw.stroke(c, closeX, closeY, 14, 14, 2.0F, 1.0F, Draw.lerp(IOStyle.BORDER_DIM, IOStyle.RED, hc));
+        Draw.cross(c, closeX + 7.0F, closeY + 7.0F, 2.5F, 1.2F, Draw.lerp(IOStyle.TEXT_2, IOStyle.RED, hc));
+        addRegion(closeX, closeY, 14, 14, "close_ui", null, null);
+
+        // 提醒音效（铃铛，原版像素图标）
+        int bellX = closeX - 20;
+        boolean bellHover = shellRectHover(bellX, closeY, 14, 14, mouseX, mouseY);
+        float hb = shellAnim("bell", bellHover, Motion.HOVER_MS);
+        Draw.fill(c, bellX, closeY, 14, 14, 2.0F, Draw.lerp(IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER, hb));
+        Draw.stroke(c, bellX, closeY, 14, 14, 2.0F, 1.0F, Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, hb));
+        int bellColor = bellHover ? IOStyle.BLUE : IOStyle.TEXT;
+        this.pageItems.addCustom(bellX, closeY, 14.0F, 14.0F, (g, font) -> Icons.bell(g, bellX + 1, closeY + 1, bellColor));
+        addRegion(bellX, closeY, 14, 14, "notif_settings", null, null);
+        if (bellHover) {
+            this.pendingTextTip = Component.translatable("gui.module_shop.notify.settings_title");
+        }
+
+        // 管理员药丸：编辑布局 / 商店设置（从右往左排）
+        int pillH = 16;
+        int pillY = y + 6;
+        float px = closeX - 26;
+        if (ClientShopData.canAdmin) {
+            for (String action : new String[]{"sidebar_edit", "admin_open"}) {
+                String label = Component.translatable("sidebar_edit".equals(action)
+                        ? "gui.module_shop.layout_edit" : "gui.module_shop.admin_open").getString();
+                float w = Text.width(label, AtomUi.REGULAR, Text.BODY) + 14.0F;
+                px -= w;
+                boolean selected = "sidebar_edit".equals(action) ? this.layoutEdit : "admin".equals(currentTab);
+                float h = shellAnim("pill." + action, shellRectHover(px, pillY, w, pillH, mouseX, mouseY), Motion.HOVER_MS);
+                Draw.fill(c, px, pillY, w, pillH, 2.0F, selected ? IOStyle.BLUE
+                        : Draw.lerp(IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER, h));
+                Draw.stroke(c, px, pillY, w, pillH, 2.0F, 1.0F, selected ? IOStyle.BORDER_HOVER
+                        : Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, h));
+                Text.drawLine(c, label, AtomUi.REGULAR, Text.BODY, selected ? 0xFFFFFFFF : IOStyle.TEXT,
+                        px, pillY + pillH / 2.0F, w, Text.Align.CENTER);
+                int ipx = Math.round(px);
+                int iw = Math.round(w);
+                addRegion(ipx, pillY, iw, pillH, action, null, null);
+                if ("admin_open".equals(action)) {
+                    this.pageItems.addCustom(ipx + iw - 12, pillY, 12.0F, 12.0F,
+                            (g, font) -> ClientNotifications.drawBadge(g, font, NotificationType.MAIL, ipx + iw, pillY));
+                }
+                px -= 4.0F;
+            }
+        }
+
+        // 标题（管理页带上当前编辑的模块）；宽度让给右侧按钮
+        String title = ("admin".equals(currentTab)
+                ? Component.translatable("gui.module_shop.admin_title", tabLabelWithOriginal(adminMode))
+                : tabLabel(currentTab)).getString();
+        int cx = contentX();
+        Text.drawLine(c, title, AtomUi.BOLD, 9.5F, IOStyle.TEXT, cx, y + 14.0F, px - 6.0F - cx, Text.Align.LEFT);
     }
 
     /**
