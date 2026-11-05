@@ -53,7 +53,7 @@ public final class ModNetwork {
         if (raw == null) {
             return;
         }
-        CompoundTag tag = decompress(raw, "clientbound");
+        CompoundTag tag = decompress(raw, "clientbound", NbtTransport.MAX_TAG_BYTES);
         if (tag == null) {
             return;
         }
@@ -66,7 +66,8 @@ public final class ModNetwork {
             return;
         }
         UUID key = player.getUUID();
-        ChunkAssembler assembler = SERVER_ASSEMBLERS.computeIfAbsent(key, k -> new ChunkAssembler());
+        ChunkAssembler assembler = SERVER_ASSEMBLERS.computeIfAbsent(key,
+                k -> new ChunkAssembler(NbtTransport.SERVERBOUND_MAX_BYTES));
         byte[] raw = assembler.accept(payload.syncId(), payload.index(), payload.total(), payload.data());
         if (raw == null) {
             return;
@@ -74,9 +75,16 @@ public final class ModNetwork {
         if (assembler.isEmpty()) {
             SERVER_ASSEMBLERS.remove(key, assembler);
         }
-        CompoundTag tag = decompress(raw, "serverbound");
+        CompoundTag tag = decompress(raw, "serverbound", NbtTransport.SERVERBOUND_MAX_BYTES);
         if (tag != null) {
             ShopManager.handleAction(player, tag);
+        }
+    }
+
+    /** 玩家下线：丢掉他还没收齐的上报分片（否则半截数据会一直挂在静态表里，直到下次他再发包）。 */
+    public static void forgetPlayer(UUID playerId) {
+        if (playerId != null) {
+            SERVER_ASSEMBLERS.remove(playerId);
         }
     }
 
@@ -87,9 +95,9 @@ public final class ModNetwork {
      * 以前这种异常会在解码阶段直接把玩家踢下线（Network Protocol Error），
      * 现在最多是这一次操作没生效，玩家重开界面/重试即可，不会掉线。
      */
-    private static CompoundTag decompress(byte[] raw, String direction) {
+    private static CompoundTag decompress(byte[] raw, String direction, long maxTagBytes) {
         try {
-            return NbtTransport.decompress(raw);
+            return NbtTransport.decompress(raw, maxTagBytes);
         } catch (IOException | RuntimeException e) {
             LOGGER.warn("模块商店：忽略一个无法解析的 {} 数据包（{} 字节）：{}", direction, raw.length, e.toString());
             return null;

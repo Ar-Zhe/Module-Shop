@@ -130,11 +130,14 @@ public final class MallItem {
      * 客户端只认 {@code stock} 字段，所以界面代码不需要区分两种模式。
      */
     public CompoundTag saveForView(HolderLookup.Provider registries, java.util.UUID viewer, boolean personal) {
-        CompoundTag tag = save(registries);
-        tag.remove("personalUsed");
-        if (personal) {
-            tag.putInt("stock", remainingFor(viewer));
-        }
+        // 直接按字段拼，不走 save()：save() 会把 personalUsed（每个买过的玩家一条）整表序列化，
+        // 这里又马上删掉 —— 货架上千件、买家上百人时，每次下发快照都要白白构造几十万个 NBT 节点。
+        CompoundTag tag = ShopNbt.saveStack(stack, registries);
+        tag.putLong("price", price);
+        tag.putString("rarity", rarity.id());
+        tag.putInt("stock", personal ? remainingFor(viewer) : stock);
+        tag.putInt("stockMax", stockMax);
+        tag.putInt("sort", sort);
         return tag;
     }
 
