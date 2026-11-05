@@ -128,6 +128,9 @@ configurations {
     runtimeClasspath.extendsFrom localRuntime
 }
 
+// AtomLib 客户端 UI 前置（版本固定、自动下载与 SHA-256 校验），详见 gradle/atomlib.gradle。
+apply from: 'gradle/atomlib.gradle'
+
 dependencies {
     // JEI 软依赖：只在编译期用 API（运行时不打包、不硬依赖）。
     // 刻意编译**最早的 1.21.1 版本**，这样任何 19.x 的 JEI 都能兼容（只用到最稳定的那几个接口）。
@@ -167,6 +170,7 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
             mod_name               : mod_name,
             mod_license            : mod_license,
             mod_version            : mod_version,
+            atomlib_version_range  : atomlibVersionRange,
     ]
     inputs.properties replaceProperties
     expand replaceProperties

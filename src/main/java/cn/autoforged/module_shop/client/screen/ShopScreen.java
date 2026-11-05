@@ -5,6 +5,26 @@ import cn.autoforged.module_shop.client.ClientNotifications;
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.MallFavorites;
 import cn.autoforged.module_shop.client.UITheme;
+import cn.autoforged.module_shop.client.screen.shop.AuctionPage;
+import cn.autoforged.module_shop.client.screen.shop.BuybackPage;
+import cn.autoforged.module_shop.client.screen.shop.DemandPage;
+import cn.autoforged.module_shop.client.screen.shop.DailyPage;
+import cn.autoforged.module_shop.client.screen.shop.SignInPage;
+import cn.autoforged.module_shop.client.screen.shop.MallPage;
+import cn.autoforged.module_shop.client.screen.shop.AdminPage;
+import cn.autoforged.module_shop.client.screen.shop.ExchangePage;
+import cn.autoforged.module_shop.client.screen.shop.PlayerPickerPage;
+import cn.autoforged.module_shop.client.screen.shop.StallPage;
+import cn.autoforged.module_shop.client.screen.shop.MailFormat;
+import cn.autoforged.module_shop.client.screen.shop.MailPage;
+import cn.autoforged.module_shop.client.screen.shop.PageFrame;
+import cn.autoforged.module_shop.client.screen.shop.ShopHost;
+import cn.autoforged.module_shop.client.screen.shop.ShopPage;
+import cn.autoforged.module_shop.client.screen.shop.ShippingPage;
+import cn.autoforged.module_shop.client.ui.AtomUi;
+import cn.autoforged.module_shop.client.ui.render.ItemOverlay;
+import cn.autoforged.module_shop.client.ui.render.SkiaFrame;
+import cn.autoforged.module_shop.client.ui.widget.Motion;
 import cn.autoforged.module_shop.data.ConfiguredOffer;
 import cn.autoforged.module_shop.data.NotificationType;
 import cn.autoforged.module_shop.data.Rarity;
@@ -31,9 +51,123 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import org.lwjgl.glfw.GLFW;
 
 /** 单界面、标签页切换的商店主界面。没有真实槽位，所有操作通过操作包发给服务端。 */
-public class ShopScreen extends Screen implements JeiHoverSource {
+public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     /** JEI 桥接用：本帧鼠标悬停的物品（换页签/离开图标即清空）。 */
     private net.minecraft.world.item.ItemStack jeiHover = net.minecraft.world.item.ItemStack.EMPTY;
+
+    // ================= AtomLib 迁移：已迁移的页面 =================
+    // 迁移期新旧并存：页签 id 在这里注册了页面、且 AtomLib 可用时，内容区由页面用 Skija 绘制；
+    // 否则走下面原有的 drawXxx 方法（非 Windows 等 AtomLib 不可用的环境因此仍可正常使用）。
+    /** 已迁移页面（页签 id → 页面）。每次迁移一个模块就在这里加一行。 */
+    private final Map<String, ShopPage> pages = registerPages(
+            new DailyPage(),
+            new SignInPage(),
+            new MallPage(),
+            new AdminPage(),
+            new ExchangePage(),
+            new ShippingPage(),
+            new MailPage(),
+            new BuybackPage(),
+            new AuctionPage(),
+            new StallPage(),
+            new DemandPage(),
+            new PlayerPickerPage(false),
+            new PlayerPickerPage(true));
+    /** 上一帧显示的页面：切换页签时让旧页面取消未完成的操作（输入框失焦等）。 */
+    private ShopPage lastPage;
+
+    private static Map<String, ShopPage> registerPages(ShopPage... list) {
+        Map<String, ShopPage> map = new HashMap<>();
+        for (ShopPage p : list) {
+            map.put(p.id(), p);
+        }
+        return java.util.Collections.unmodifiableMap(map);
+    }
+    /** 页面物品层：Skija 画完内容区后统一用原版绘制物品。 */
+    private final ItemOverlay pageItems = new ItemOverlay();
+    private final Motion.Clock pageClock = new Motion.Clock();
+    private float pageDtMs;
+
+    /** 当前页签对应的已迁移页面；没迁移、编辑布局中或 AtomLib 不可用时返回 null（走旧绘制）。 */
+    private ShopPage activePage() {
+        if (this.layoutEdit || !AtomUi.available()) {
+            return null;
+        }
+        return this.pages.get(this.currentTab);
+    }
+
+    /** 页面的内容区几何（绘制与输入共用）。 */
+    private PageFrame pageFrame(double mouseX, double mouseY) {
+        return new PageFrame(this, contentX(), contentY(), contentW(), contentH(),
+                (float) mouseX, (float) mouseY, this.pageDtMs);
+    }
+
+    @Override
+    public void action(String action, CompoundTag extra) {
+        onAction(action, extra);
+    }
+
+    @Override
+    public ItemOverlay items() {
+        return this.pageItems;
+    }
+
+    @Override
+    public net.minecraft.client.gui.Font font() {
+        return this.font;
+    }
+
+    /** 页面上报的文字提示（本帧），在 render 最后统一画出。 */
+    private Component pendingTextTip;
+
+    @Override
+    public void textTooltip(Component text) {
+        this.pendingTextTip = text;
+    }
+
+    @Override
+    public Screen screen() {
+        return this;
+    }
+
+    @Override
+    public void registerInput(net.minecraft.client.gui.components.EditBox box) {
+        addWidget(box);
+    }
+
+    @Override
+    public String adminMode() {
+        return this.adminMode;
+    }
+
+    @Override
+    public int adminPage() {
+        return this.adminPage;
+    }
+
+    @Override
+    public void clampAdminPage(int pages) {
+        this.adminPage = Mth.clamp(this.adminPage, 0, Math.max(0, pages - 1));
+    }
+
+    @Override
+    public boolean signInEditing() {
+        return this.signInEdit;
+    }
+
+    @Override
+    public List<String> adminModules() {
+        List<String> ids = new ArrayList<>();
+        for (AdminModule m : ADMIN_MODULES) {
+            ids.add(m.id());
+        }
+        return ids;
+    }
+
+    @Override
+    public Component moduleName(String id) {
+        return tabLabelWithOriginal(id);
+    }
 
     @Override
     public net.minecraft.world.item.ItemStack jeiHoveredStack(double mouseX, double mouseY) {
@@ -420,6 +554,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         this.tradeSearchBox.setResponder(text -> this.tradePage = 0);
         this.tradeSearchBox.setVisible(false);
         this.addRenderableWidget(this.tradeSearchBox);
+        // 已迁移的页面：创建 / 重新挂上它们自己的（不绘制的）输入框
+        this.pages.values().forEach(p -> p.init(this));
     }
 
     private void sendAdminType() {
@@ -606,13 +742,15 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         // 购物城搜索框：位置跟着面板走；只有购物城页、非编辑模式、非「最近购买」视图时显示。
         if (this.mallSearchBox != null) {
             this.mallSearchBox.setPosition(contentX() + 5, contentY() + 4);
+            // 购物城已迁移时由页面自己的 Skija 输入框负责，旧输入框隐藏
             this.mallSearchBox.setVisible("mall".equals(currentTab) && !this.layoutEdit
-                    && !ClientShopData.mallViewRecent);
+                    && !ClientShopData.mallViewRecent && activePage() == null);
         }
         if (this.tradeSearchBox != null) {
             this.tradeSearchBox.setPosition(contentX() + 5, contentY() + 2);
+            // 交易 / 转账页已迁移时由页面自己的 Skija 输入框负责，旧输入框隐藏
             this.tradeSearchBox.setVisible(("trade".equals(currentTab) || "transfer".equals(currentTab))
-                    && !this.layoutEdit);
+                    && !this.layoutEdit && activePage() == null);
         }
         super.render(g, mouseX, mouseY, partialTick);
         int x = left();
@@ -639,7 +777,17 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             return;
         }
         drawHeader(g, x, y, contentX, contentY, contentW, mouseX, mouseY);
-        switch (currentTab) {
+        this.pageDtMs = this.pageClock.tick();
+        ShopPage page = activePage();
+        if (page != this.lastPage) {
+            if (this.lastPage != null) {
+                this.lastPage.cancelInput();
+            }
+            this.lastPage = page;
+        }
+        if (page != null) {
+            renderPage(g, page, mouseX, mouseY);
+        } else switch (currentTab) {
             case "daily" -> drawDaily(g, contentX, contentY, contentW, contentH, mouseX, mouseY, partialTick);
             case "buyback" -> drawBuyback(g, contentX, contentY, contentW, contentH, mouseX, mouseY);
             case "mall" -> drawMall(g, contentX, contentY, contentW, contentH, mouseX, mouseY);
@@ -670,6 +818,25 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         if (!this.pendingItemTip.isEmpty()) {
             g.renderTooltip(this.font, this.pendingItemTip, mouseX, mouseY);
             this.pendingItemTip = ItemStack.EMPTY;
+        } else if (this.pendingTextTip != null) {
+            g.renderTooltip(this.font, this.font.split(this.pendingTextTip, 200), mouseX, mouseY);
+        }
+        this.pendingTextTip = null;
+    }
+
+    /**
+     * 用 Skija 绘制已迁移页面的内容区：Skija 内容 → 原版物品层；
+     * 悬停物品交给原有的统一 tooltip 出口（pendingItemTip）与 JEI 桥接（jeiHover）。
+     */
+    private void renderPage(GuiGraphics g, ShopPage page, int mouseX, int mouseY) {
+        PageFrame frame = pageFrame(mouseX, mouseY);
+        this.pageItems.begin(mouseX, mouseY, true);
+        SkiaFrame.draw(g, canvas -> page.render(canvas, frame));
+        this.pageItems.flush(g, this.font);
+        ItemStack hovered = this.pageItems.hovered();
+        if (!hovered.isEmpty()) {
+            this.jeiHover = hovered;
+            this.pendingItemTip = hovered;
         }
     }
 
@@ -1413,6 +1580,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+        ShopPage page = activePage();
+        if (page != null && page.mouseDragged(pageFrame(mouseX, mouseY), mouseX, mouseY, button, dragX, dragY)) {
+            return true;
+        }
         // 从「模块库」拖模块：拖到左侧列表任意位置松手即加入。
         if (this.poolDrag != null && this.layoutEdit) {
             if (!this.poolMoved
@@ -1451,6 +1622,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        ShopPage page = activePage();
+        if (page != null && page.mouseReleased(pageFrame(mouseX, mouseY), mouseX, mouseY, button)) {
+            return true;
+        }
         // 模块库拖拽结束：落在左侧列表里 → 按最近的槽位加入；只是点一下 → 直接加到末尾。
         if (this.poolDrag != null) {
             String id = this.poolDrag;
@@ -2760,49 +2935,25 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     }
 
     /** 第七轮：按邮件业务类型取配色（列表状态点与标题色）。 */
+    // 邮件展示规则已提取到 MailFormat（新旧邮箱界面共用）；这里保留同名方法供旧代码调用。
     private static int kindColor(cn.autoforged.module_shop.data.MailEntry entry) {
-        String kind = entry.kind == null ? "" : entry.kind;
-        return switch (kind) {
-            case "auction" -> 0xFFB388FF;
-            case "stall" -> IOStyle.BLUE;
-            case "trade" -> 0xFF4DD0E1;
-            case "redeem" -> IOStyle.ORANGE;
-            case "activity" -> IOStyle.GREEN;
-            case "refund" -> IOStyle.TEXT_2;
-            default -> IOStyle.ORANGE;
-        };
+        return MailFormat.kindColor(entry);
     }
 
     /** 邮箱排序：星标优先，其次按时间倒序（最新在上）。 */
     private static List<cn.autoforged.module_shop.data.MailEntry> sortedMails() {
-        List<cn.autoforged.module_shop.data.MailEntry> list =
-                new ArrayList<>(ClientShopData.mail);
-        list.sort((a, b) -> {
-            if (a.starred != b.starred) {
-                return a.starred ? -1 : 1;
-            }
-            return Long.compare(b.sentAt, a.sentAt);
-        });
-        return list;
+        return MailFormat.sorted();
     }
 
     /** 当前选中的邮件（没有则返回 null）。 */
     private static cn.autoforged.module_shop.data.MailEntry selectedMail(
             List<cn.autoforged.module_shop.data.MailEntry> mails) {
-        for (var entry : mails) {
-            if (entry.mailId.equals(ClientShopData.mailSelected)) {
-                return entry;
-            }
-        }
-        return mails.isEmpty() ? null : mails.get(0);
+        return MailFormat.selected(mails);
     }
 
     /** 邮件标题：优先模板标题（自动转颜色代码），否则按来源生成说明。 */
     private static String mailTitle(cn.autoforged.module_shop.data.MailEntry entry) {
-        if (entry.title != null && !entry.title.isEmpty()) {
-            return entry.title;
-        }
-        return mailDescription(entry);
+        return MailFormat.title(entry);
     }
 
     /** 把 & 颜色代码转成 §（客户端渲染用）。 */
@@ -2812,12 +2963,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     /** 邮件时间文本。 */
     private static String mailTime(cn.autoforged.module_shop.data.MailEntry entry) {
-        if (entry.sentAt <= 0L) {
-            return "-";
-        }
-        return java.time.Instant.ofEpochMilli(entry.sentAt)
-                .atZone(java.time.ZoneId.systemDefault())
-                .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"));
+        return MailFormat.time(entry);
     }
 
     /** 按宽度自动换行绘制正文（支持 \n 与 § 颜色代码），最多画 5 行。 */
@@ -2853,35 +2999,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     /** 需求：根据邮件来源生成说明文字（物品退还 / 星币到账 / 管理员发放）。 */
     private static String mailDescription(cn.autoforged.module_shop.data.MailEntry entry) {
-        // 第八轮：一封邮件可带多件物品，说明文字用第一件代表（多件时加「等 N 件」）。
-        java.util.List<net.minecraft.world.item.ItemStack> items = entry.itemStacks();
-        String item = items.isEmpty() ? "-" : items.get(0).getHoverName().getString();
-        String itemWithCount = items.isEmpty() ? "-"
-                : items.get(0).getHoverName().getString() + "×" + items.get(0).getCount()
-                        + (items.size() > 1 ? " 等 " + items.size() + " 件" : "");
-        String sender = entry.sender == null || entry.sender.isEmpty() ? "-" : entry.sender;
-        // 管理员发放的邮件单独说明：物品类显示物品名，金额类显示星币数。
-        if ("admin_grant".equals(entry.source)) {
-            return entry.type == cn.autoforged.module_shop.data.MailType.MONEY
-                    ? Component.translatable("gui.module_shop.mail.desc.admin_grant_money", sender,
-                            ClientShopData.money(entry.currencyAmount)).getString()
-                    : Component.translatable("gui.module_shop.mail.desc.admin_grant_item", sender, itemWithCount)
-                            .getString();
-        }
-        String key = switch (entry.source == null ? "" : entry.source) {
-            case "stall_unsold" -> "gui.module_shop.mail.desc.stall_unsold";
-            case "stall_bought" -> "gui.module_shop.mail.desc.stall_bought";
-            case "auction_refund" -> "gui.module_shop.mail.desc.auction_refund";
-            case "auction_unsold" -> "gui.module_shop.mail.desc.auction_unsold";
-            case "auction_won" -> "gui.module_shop.mail.desc.auction_won";
-            case "stall_sold" -> "gui.module_shop.mail.desc.stall_sold";
-            case "auction_sold" -> "gui.module_shop.mail.desc.auction_sold";
-            default -> "gui.module_shop.mail.desc.default";
-        };
-        if (entry.type == cn.autoforged.module_shop.data.MailType.MONEY) {
-            return Component.translatable(key, sender, item, ClientShopData.money(entry.currencyAmount)).getString();
-        }
-        return Component.translatable(key, item).getString();
+        return MailFormat.description(entry);
     }
 
     // =========================================================== 管理员配置（仅 /shop admin 打开）
@@ -3969,13 +4087,13 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     // =========================================================== 购物城（新增模块）
 
     /** 一件商品的注册名（收藏 key）。 */
-    private static String mallItemId(ClientShopData.MallView view) {
+    public static String mallItemId(ClientShopData.MallView view) {
         var id = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(view.stack.getItem());
         return id == null ? "" : id.toString();
     }
 
     /** 模组的显示名（拿不到就退回命名空间）。 */
-    private static String mallModName(String namespace) {
+    public static String mallModName(String namespace) {
         if (namespace == null || namespace.isEmpty()) {
             return "";
         }
@@ -3989,7 +4107,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     }
 
     /** 货架上出现过的模组（按显示名排序，缓存；货架变化时重建）。 */
-    private static List<String> mallCategories() {
+    public static List<String> mallCategories() {
         if (mallModCacheSize == ClientShopData.mall.size()) {
             return mallModCache;
         }
@@ -4005,7 +4123,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     }
 
     /** 当前搜索 / 分类 / 收藏过滤 + 排序后的商品列表（带缓存：货架上万件时不必每帧重排）。 */
-    private static List<ClientShopData.MallView> mallFiltered() {
+    public static List<ClientShopData.MallView> mallFiltered() {
         String key = ClientShopData.mallVersion + "|" + ClientShopData.mall.size() + "|" + ClientShopData.mallSearch + "|"
                 + ClientShopData.mallCategory + "|" + ClientShopData.mallFavOnly + "|"
                 + ClientShopData.mallSort + "|" + MallFavorites.size();
@@ -4049,7 +4167,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     }
 
     /** 库存文字：无限 / 售罄 / 剩余。 */
-    private Component mallStockText(ClientShopData.MallView view) {
+    public static Component mallStockText(ClientShopData.MallView view) {
         if (view.unlimited()) {
             return Component.translatable("gui.module_shop.mall.stock_unlimited");
         }
@@ -4062,7 +4180,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     }
 
     /** 排序项的名称（0 默认 / 1 价格升 …）。 */
-    private static Component mallSortName(int sort) {
+    public static Component mallSortName(int sort) {
         return Component.translatable(switch (sort) {
             case 1 -> "gui.module_shop.mall.sort_price_asc";
             case 2 -> "gui.module_shop.mall.sort_price_desc";
@@ -4411,7 +4529,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     }
 
     /** 最近购买的时间：MM-dd HH:mm。 */
-    private static String mallTimeText(long millis) {
+    public static String mallTimeText(long millis) {
         return java.time.Instant.ofEpochMilli(millis)
                 .atZone(java.time.ZoneId.systemDefault())
                 .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"));
@@ -4513,7 +4631,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         int dir = scrollY > 0 ? -1 : 1;
         // 交易 / 转账页：滚轮翻在线玩家列表。
-        if (scrollY != 0.0D && !this.layoutEdit
+        if (scrollY != 0.0D && !this.layoutEdit && activePage() == null
                 && ("trade".equals(currentTab) || "transfer".equals(currentTab))
                 && mouseX >= contentX() && mouseX < contentX() + contentW()
                 && mouseY >= contentY() && mouseY < contentY() + contentH()) {
@@ -4556,6 +4674,13 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 return true;
             }
             // 编辑模式下滚轮不再翻内容区的列表（内容本来就没绘制）。
+            return true;
+        }
+        // 已迁移的页面：内容区里的滚轮交给页面（平滑滚动）
+        ShopPage page = activePage();
+        if (page != null && scrollY != 0.0D
+                && IOStyle.inside(contentX(), contentY(), contentW(), contentH(), mouseX, mouseY)
+                && page.mouseScrolled(pageFrame(mouseX, mouseY), mouseX, mouseY, scrollY)) {
             return true;
         }
         // 购物城：分类下拉 / 最近购买列表 / 货架翻页，各自吃自己的滚轮。
@@ -4696,6 +4821,19 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         if (this.layoutEdit && ClientShopData.canAdmin && button == 0 && handleLayoutClick(mouseX, mouseY)) {
             return true;
         }
+        // 已迁移的页面只处理落在内容区里的点击；侧栏 / 标题栏的点击绝不交给页面
+        // （防止页面里“只按 y 判断”的命中区误吞侧栏点击）
+        ShopPage page = activePage();
+        if (page != null) {
+            PageFrame frame = pageFrame(mouseX, mouseY);
+            if (frame.contains(mouseX, mouseY)) {
+                if (page.mouseClicked(frame, mouseX, mouseY, button)) {
+                    return true;
+                }
+            } else {
+                page.clickedOutside();
+            }
+        }
         for (Region region : this.regions) {
             if (mouseX < region.x || mouseX >= region.x + region.w || mouseY < region.y || mouseY >= region.y + region.h) {
                 continue;
@@ -4723,6 +4861,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         }
         // 交易 / 转账的玩家搜索框同理：输入时别让数字键跑去切页。
         if (this.tradeSearchBox != null && this.tradeSearchBox.isVisible() && this.tradeSearchBox.isFocused()) {
+            return super.keyPressed(keyCode, scanCode, modifiers);
+        }
+        // 已迁移页面的输入框（隐藏的 EditBox）聚焦时同理：按键全部交给输入框
+        if (this.getFocused() instanceof net.minecraft.client.gui.components.EditBox box && box.isFocused()) {
             return super.keyPressed(keyCode, scanCode, modifiers);
         }
         if (keyCode >= GLFW.GLFW_KEY_1 && keyCode <= GLFW.GLFW_KEY_9) {
@@ -5510,6 +5652,13 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     }
 
     private record Region(int x, int y, int w, int h, String action, String rightAction, CompoundTag extra) {
+    }
+
+    @Override
+    public void removed() {
+        // 界面被关闭 / 被服务端重建替换：取消页面里按下中的按钮、拖拽中的滚动条
+        this.pages.values().forEach(ShopPage::cancelInput);
+        super.removed();
     }
 
     @Override

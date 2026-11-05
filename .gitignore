@@ -38,3 +38,6 @@ run/
 **/src/generated/**/.cache/
 repo/
 !**/src/**/repo/
+
+### AtomLib 本地 Maven 输入（gradle/atomlib.gradle 自动下载） ###
+.atomlib/
