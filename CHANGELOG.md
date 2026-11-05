@@ -13,7 +13,7 @@
   见《公共API-使用文档》第 10 节。公共 API 版本 1.0.0 → **1.1.0**（只增不改）。
 * **公共 API 独立 jar**：构建时额外产出 `module_shop-<版本>-api.jar`（只含 `api` 包、不含 `api.internal`），
   附属模组对它编译即可，从构建层面隔离内部实现。
-* 第一个使用该接口的附属：[module-shop: Red envelope（拼手气红包）](https://github.com/ChatMiaoPT-Meow/Module-Shop/tree/main/addons/red-packet)，独立仓库 / 独立 jar。
+* 第一个使用该接口的附属：[module-shop: Red envelope（拼手气红包）](https://github.com/ChatMiaoPT-Meow/Module-Shop-RedPacket)，独立仓库 / 独立 jar。
 
 ### 修复（界面迁移过程中的 QA 问题）
 

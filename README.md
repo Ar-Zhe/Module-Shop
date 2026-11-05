@@ -18,7 +18,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 
 > **1.0.3 起界面改用 [AtomLib](https://github.com/NoWordz/AtomLib)（Skija）绘制**：12 个页面全部重绘（翻牌动画、签到月历、
 > 购物城、管理面板等），支持中文输入法；AtomLib 只带 Windows 原生库，其它平台自动回退到旧版界面，功能不受影响。
-> 同时开放了**附属模组接口**：附属可以把自己的功能挂进商店侧栏、直接画在内容区（示例：[module-shop: Red envelope](https://github.com/ChatMiaoPT-Meow/Module-Shop/tree/main/addons/red-packet)）。
+> 同时开放了**附属模组接口**：附属可以把自己的功能挂进商店侧栏、直接画在内容区（示例：[module-shop: Red envelope](https://github.com/ChatMiaoPT-Meow/Module-Shop-RedPacket)）。
 
 ---
 
