@@ -16,6 +16,10 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 
 [![Build](https://github.com/Ar-Zhe/Module-Shop/actions/workflows/build.yml/badge.svg)](https://github.com/Ar-Zhe/Module-Shop/actions/workflows/build.yml)
 
+> **1.0.3 起界面改用 [AtomLib](https://github.com/NoWordz/AtomLib)（Skija）绘制**：12 个页面全部重绘（翻牌动画、签到月历、
+> 购物城、管理面板等），支持中文输入法；AtomLib 只带 Windows 原生库，其它平台自动回退到旧版界面，功能不受影响。
+> 同时开放了**附属模组接口**：附属可以把自己的功能挂进商店侧栏、直接画在内容区（示例：[module-shop: Red envelope](https://github.com/ChatMiaoPT-Meow/Module-Shop-RedPacket)）。
+
 ---
 
 ## 功能一览
@@ -38,7 +42,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | **管理员发放** | `/shop admin money <金额> [目标...]` 发星币（不填目标 = 所有已知玩家，含离线；目标可写玩家名 / UUID / `all` / `@a`），`/shop admin money set <目标> <金额>` 直接改余额（0 = 清零），`/shop admin send` 打开图形发放界面：放入物品 + 勾选玩家或全体 + 可选金额 → 发送，玩家在邮箱领取；也可用 `/shop wallet give <在线玩家> <金额>` 只发一个人 |
 | **交易流水** | 所有资产变动都记流水（买卖 / 摊位 / 拍卖 / 转账 / 交易 / 邮箱 / 管理员发放 / 刷新商店 / 刷新收购 / 全清奖励），管理员用 `/shop admin history <玩家>` 翻页查看 |
 
-## 公共 API（1.0.0 起）
+## 公共 API（当前 1.1.0）
 
 模组现在对外提供**稳定的公共 API**，供其他模组、KubeJS 脚本与外部服务调用：
 
@@ -52,21 +56,24 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | 幂等发奖 | `ModuleShopApi.reward()` | 同一个 `requestId` 对同一玩家只发一次，**重启后仍防重复** |
 | 商店 | `ModuleShopApi.shop()` | 只读商品/价格/库存 + 受校验的购买/出售 + 拍卖出价 / 求购发布 / 摊位上架 |
 | 事件 | `ModuleShopApi.events()` | 余额变更 / 邮件创建 / 奖励发放 / 签到 / 成交 …（业务成功后通知，不可取消） |
+| **附属页面**（1.1.0） | `api.client.ShopModules` | 客户端：附属模组在商店侧栏注册条目，`registerPage` 画在内容区（`AddonPage` + `ShopTheme` + UI 套件），`register` 弹出自己的界面 |
 
 三条硬规则：**只在服务端主线程调用**、**只用 `ApiResult` 判断成败**、**写操作必须带幂等键**。
 
 三种接入方式：
 
-1. **Java**：`compileOnly` 依赖本模组 jar（见 [API 使用文档](docs/公共API-使用文档.md)）；
+1. **Java**：`compileOnly` 依赖 `module_shop-<版本>-api.jar`（只含公共 API 与 UI 套件，碰不到内部实现；见 [API 使用文档](docs/公共API-使用文档.md)）；
 2. **KubeJS**：脚本里直接用全局 `ModuleShop`（示例：[examples/kubejs](examples/kubejs)）；
 3. **HTTP / REST**：可选、**默认关闭**，需显式开启并设置 token（默认只监听 `127.0.0.1`、默认只读）。
 
-> API 版本 `1.0.0` 与模组版本独立；同一主版本内只增不改。
+> API 版本 `1.1.0` 与模组版本独立；同一主版本内只增不改（UI 套件同样适用）。附属页面出错时商店会停用该页面并改用附属的回退界面，不会崩溃。
 
 ## 安装
 
-1. 服务端：把 `module_shop-1.0.0.jar` 放进 `mods/`，重启。
-2. 客户端：**玩家也必须安装同一个 jar**（商店界面是客户端代码）。
+1. 服务端：把 `module_shop-1.0.3.jar` 放进 `mods/`，重启（服务端**不需要** AtomLib）。
+2. 客户端：**玩家也必须安装同一个 jar**（商店界面是客户端代码），另外安装前置
+   [AtomLib 0.1.0-beta](https://github.com/NoWordz/AtomLib/releases/tag/v0.1.0-beta-beta3)（`atomlib-1.21.1-neoforge-0.1.0-beta.jar`）。
+   AtomLib 只支持 Windows x64 / ARM64；macOS / Linux 客户端会自动使用旧版界面。
 3. 客户端与服务端都启动后执行 `/shop` 打开界面；管理员用 `/shop admin` 打开设置页，
    或在商店界面**右下角**点小按钮「商店设置」。
 
@@ -78,13 +85,33 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 
 ```bash
 ./gradlew build          # Windows: gradlew.bat build
-# 产物：build/libs/module_shop-1.0.0.jar
+# 产物：build/libs/module_shop-1.0.3.jar      主模组
+#       build/libs/module_shop-1.0.3-api.jar  公共 API + UI 套件（给附属编译用）
+# 首次构建会自动下载 AtomLib 发布包到 .atomlib/ 并做 SHA-256 校验（版本与校验值见 gradle.properties）
 
 # 需要一个带 KubeJS 桥接（脚本全局 ModuleShop）的 jar：
 ./gradlew build -PkubejsJar=/path/to/kubejs-neoforge-2101.x-build.xxx.jar
 ```
 
 需要 JDK 21。
+
+## 使用的库
+
+| 库 | 版本 | 用途 | 依赖方式 | 许可 |
+| --- | --- | --- | --- | --- |
+| NeoForge | 21.1.248 | 模组加载器、事件、网络、配置 | 运行环境 | LGPL-2.1 |
+| Minecraft | 1.21.1 | 游戏本体 | 运行环境 | — |
+| **AtomLib** | 0.1.0-beta（发布标签 `v0.1.0-beta-beta3`） | 客户端 UI：Minecraft ↔ Skija 渲染桥（`MinecraftRenderBridge`）、字体与文字排版（`FontRegistry` / `TextService`）、设计包 `design.atomchat`（`SkiaDraw`、`Design` 主题注入） | **客户端必需前置**；构建时从 GitHub Release 下载并校验，**不打包进本模组** | Apache-2.0 |
+| Skija | 0.143.18 | Skia 的 Java 绑定，所有新界面的 `Canvas` 绘制 | 运行时由 AtomLib 以 Jar-in-Jar 内置（只带 Windows x64 / ARM64 原生库）；编译期作为 AtomLib 的传递依赖从 Maven Central 取 | Apache-2.0 |
+| Noto Sans SC（子集） | 随 AtomLib | 界面中文字体（常规 / 粗体） | 由 AtomLib 内置 | OFL-1.1 |
+| AtomChat 组件（移植） | — | `UiComponent`、`ScrollController`、`SkiaTextField`（隐藏 EditBox + Skija 绘制的输入框思路）、帧编排 `SkiaFrame` | 源码移植进 `client/ui/`，保留出处注释 | MIT |
+| JEI API | 19.8.4.110 | 商店里悬停物品按 R / U 查配方 | `compileOnly` 软依赖，不装 JEI 时完全不影响 | MIT |
+| KubeJS | 2101.7.x | 脚本全局 `ModuleShop` 桥接 | 可选，`-PkubejsJar=...` 时才编译 | LGPL-3.0 |
+| ModDevGradle | 2.0.144 | 构建插件 | Gradle | LGPL-2.1 |
+| Parchment | 2024.11.17 | 参数名映射（只影响开发） | Gradle | CC0 |
+
+界面相关的 AtomLib / Skija 调用全部收口在 `client/ui/`（薄适配层），各页面在 `client/screen/shop/`，
+迁移方案与进度见 [docs/atomlib-migration.md](docs/atomlib-migration.md)。
 
 ## 常用指令
 
@@ -132,7 +159,8 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | --- | --- |
 | [使用教程.md](docs/使用教程.md) | 服主上手：安装、模块、权限、常用流程 |
 | [模组介绍.md](docs/模组介绍.md) | 面向玩家的功能说明 |
-| [公共API-使用文档.md](docs/公共API-使用文档.md) | 开发者接入：接口、返回码、事件、KubeJS、HTTP |
+| [公共API-使用文档.md](docs/公共API-使用文档.md) | 开发者接入：接口、返回码、事件、KubeJS、HTTP、附属页面（第 10 节） |
+| [atomlib-migration.md](docs/atomlib-migration.md) | AtomLib 界面迁移方案、进度与游戏内 QA 清单 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
 
 另外还有两份可直接使用的文案：`DESCRIPTION.md`（完整介绍，适合发帖）与本文件（README）。
@@ -142,3 +170,6 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 本项目使用 [MIT 许可证](LICENSE)。
 
 > 本项目基于 NeoForge MDK 模板开发；`TEMPLATE_LICENSE.txt` 为上游模板自带说明。
+>
+> 第三方：AtomLib（Apache-2.0）不随本模组分发，由玩家单独安装；`client/ui/` 中移植自 AtomChat 的组件遵循 MIT 许可，
+> 源文件内保留了出处说明。AtomLib 自带的 Skija / Skia / Noto Sans SC 等许可见 AtomLib jar 的 `META-INF/licenses/`。

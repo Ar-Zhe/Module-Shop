@@ -1,13 +1,15 @@
-# Module Shop 公共 API · 开发者使用文档（API 1.0.0）
+# Module Shop 公共 API · 开发者使用文档（API 1.1.0）
 
 > 适用：`module_shop` **1.0.0**（MC 1.21.1 / NeoForge 21.1.248）
-> API 版本：`1.0.0`（`ApiVersion.API_VERSION`，与模组版本独立）
+> API 版本：`1.1.0`（`ApiVersion.API_VERSION`，与模组版本独立；1.1.0 新增客户端扩展点 `ShopModules`，见第 10 节）
 
 ## 1. 接入方式
 
 ```groovy
 // 你的模组 build.gradle：只编译期依赖，运行期由服务端提供
-compileOnly files('libs/module_shop-1.0.0.jar')
+// 推荐只对「公共 API jar」编译（构建主体时自动产出 build/libs/module_shop-<版本>-api.jar，
+// 只含 cn.autoforged.module_shop.api.**）：这样你的代码在编译期就碰不到内部实现。
+compileOnly files('libs/module_shop-1.0.3-api.jar')
 
 // neoforge.mods.toml：声明依赖，保证加载顺序
 [[dependencies.yourmod]]
@@ -182,3 +184,67 @@ ModuleShopApi.events().addListener((SignInCompletedEvent e) -> { ... });
 
 > 已知边界：商店内部**扣钱**（购买/收购）不走 `credit`，目前**不**发布 `BalanceChangedEvent`；
 > 第二批只覆盖「加钱」与 API 扣钱。若需要覆盖全部扣款，需要把各业务扣款统一到一个 `debit()` 入口（列入后续批次）。
+
+## 10. 客户端扩展点：把附属功能挂进商店侧栏（1.0.3+ / API 1.1.0）
+
+附属模组可以在商店主界面左侧功能区注册一个条目。两种形式：
+
+| 形式 | 方法 | 效果 |
+| --- | --- | --- |
+| **内容区页面（推荐）** | `ShopModules.registerPage(id, name, pageFactory, fallbackScreen)` | 和内置模块一样画在商店右侧内容区（AtomLib / Skija）；AtomLib 不可用时打开 `fallbackScreen` |
+| 弹出式界面 | `ShopModules.register(id, name, screenFactory)` | 点击后以二级界面打开你的 Screen，返回 / ESC 回到商店 |
+
+```java
+import cn.autoforged.module_shop.api.client.*;
+
+// 仅客户端：FMLClientSetupEvent 里注册
+modBus.addListener((FMLClientSetupEvent e) -> e.enqueueWork(() ->
+        ShopModules.registerPage("mymod_feature",                  // 全局唯一，建议带 modid 前缀
+                () -> Component.translatable("tab.mymod.feature"),  // 侧栏显示名
+                MyFeaturePage::new,                                 // AddonPage 实现（只创建一次，实例常驻）
+                MyFeatureScreen::new)));                            // AtomLib 不可用时的回退界面
+
+public final class MyFeaturePage implements AddonPage {
+    private SkiaTextField input;
+
+    @Override public void init(AddonPageHost host) {            // 每次商店界面 init 都会调用
+        input = new SkiaTextField(host.screen(), host.font(), 32);
+        host.registerInput(input.editBox());                    // 隐藏 EditBox 负责键盘与输入法
+    }
+
+    @Override public void render(Canvas canvas, AddonFrame f) {
+        Text.drawLine(canvas, "Hello", ShopTheme.bold(), Text.TITLE, ShopTheme.text(),
+                f.x(), f.y() + 10, f.w(), Text.Align.LEFT);
+        input.bounds(f.x(), f.y() + 24, 120, 14).visible(true);
+        input.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
+    }
+
+    @Override public boolean mouseClicked(AddonFrame f, double x, double y, int b) {
+        return input.mouseClicked(x, y, b);
+    }
+
+    @Override public void cancelInput() { input.blur(); input.visible(false); }
+}
+```
+
+| 类型 | 说明 |
+| --- | --- |
+| `AddonPage` | 页面：`init` / `render` / 鼠标事件 / `clickedOutside` / `cancelInput`（与内置页面同一套路由） |
+| `AddonFrame` | 一帧的内容区几何（x / y / w / h / 鼠标 / 帧时长）；`listBottom()`、`barTop()` 与内置页面的底栏对齐 |
+| `AddonPageHost` | `screen()`、`font()`、`registerInput(EditBox)`、`textTooltip(...)`、`balance()`、`currencyName()` |
+| `ShopTheme` | 配色（随日 / 夜主题变化，**每帧取值**）与字体 `regular()` / `bold()`；`atomLibAvailable()` |
+| **UI 套件** | `client.ui.render.Draw / Text / SkiaFrame`、`client.ui.widget.Button / SkiaTextField / Motion / ScrollController`：内置页面用的同一套控件，已打进公共 API jar |
+
+| 规则 | 说明 |
+| --- | --- |
+| 只在客户端调用 | 专用服务器不要加载 `api.client` 与 UI 套件（它们引用了 `Screen` / Skija） |
+| id | `[a-z0-9_]{1,48}`；与内置模块重名时内置优先，附属条目被忽略 |
+| 排序 / 移除 | 新条目默认排在侧栏末尾；管理员可在「编辑布局」里拖动或移除，和内置模块一样持久化 |
+| AtomLib | 只带 Windows 原生库；其它平台商店整体走旧版绘制，附属页面也随之改用回退界面 |
+| 编译依赖 | `module_shop-<版本>-api.jar` + AtomLib jar + Skija jar（均 `compileOnly`）；可参考红包附属的 `build.gradle`：通过 `module_shop_version` 指定主体版本，API jar 放进 `libs/` 或用 `-Pmodule_shop_root` 指向本地主体仓库 |
+| 服务端逻辑 | 扩展点只负责入口；收发数据用你自己的网络包，动钱 / 发物品走上面的公共 API |
+| 版本检查 | `ApiVersion` 的常量会被 javac 内联成编译时的值；运行时判断请用 `ApiVersion.describe()` |
+| **跨版本兼容** | API 与 UI 套件在同一主版本（1.x）内**只增不改**：附属对 1.0.3 编译，在之后的 1.x 主体上不用重新发布 |
+| 出错兜底 | 附属页面抛异常或调用了不存在的方法（`LinkageError`）时，商店停用该页面、记日志并打开回退界面，商店本身不受影响 |
+
+完整示例：[module-shop: Red envelope（拼手气红包）](https://github.com/ChatMiaoPT-Meow/Module-Shop-RedPacket)。
