@@ -16,6 +16,7 @@
 | [公共API-使用文档.md](公共API-使用文档.md) | **先看这个**：接口清单、返回码、事件、KubeJS、HTTP、权限与线程 |
 | [../examples/minimal-task-mod](../examples/minimal-task-mod) | 最小示例模组（只调公共 API 完成「查余额→发奖→发邮件」） |
 | [../examples/kubejs](../examples/kubejs) | KubeJS 桥接用法与现成脚本 |
+| [module-shop: Red envelope](https://github.com/ChatMiaoPT-Meow/Module-Shop/tree/main/addons/red-packet) | 附属「拼手气红包」：侧栏页面接口 + 公共 API 的完整实战示例（外部仓库） |
 
 ## 版本与变更
 

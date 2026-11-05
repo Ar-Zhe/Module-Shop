@@ -81,6 +81,19 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         for (ShopPage p : list) {
             map.put(p.id(), p);
         }
+        // 附属模组通过 ShopModules.registerPage 注册的内容区页面：和内置页面走同一套路由（内置 id 优先）。
+        for (cn.autoforged.module_shop.api.client.ShopModules.Entry entry
+                : cn.autoforged.module_shop.api.client.ShopModules.entries()) {
+            if (entry.hasPage() && !map.containsKey(entry.id()) && !List.of(TAB_IDS).contains(entry.id())) {
+                try {
+                    map.put(entry.id(), new cn.autoforged.module_shop.client.screen.shop.AddonPageAdapter(
+                            entry.id(), entry.page(), entry.screen()));
+                } catch (Throwable error) {
+                    org.slf4j.LoggerFactory.getLogger("module_shop").error(
+                            "[module_shop] 附属页面 {} 创建失败，改用回退界面", entry.id(), error);
+                }
+            }
+        }
         return java.util.Collections.unmodifiableMap(map);
     }
     /** 页面物品层：Skija 画完内容区后统一用原版绘制物品。 */
@@ -227,7 +240,52 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
 
     /** 全部模块 id（侧栏、模块管理、服务端校验共用同一份）。 */
     static List<String> allModuleIds() {
-        return List.of(TAB_IDS);
+        // 内置模块 + 附属模组通过 ShopModules 注册的功能条目（排在内置后面，同名的忽略）。
+        List<String> ids = new ArrayList<>(List.of(TAB_IDS));
+        for (cn.autoforged.module_shop.api.client.ShopModules.Entry entry
+                : cn.autoforged.module_shop.api.client.ShopModules.entries()) {
+            if (!ids.contains(entry.id()) && !"admin".equals(entry.id())) {
+                ids.add(entry.id());
+            }
+        }
+        return ids;
+    }
+
+    /** 某个 id 是否是附属模组注册的功能条目（内置模块优先，不会被覆盖）。 */
+    private static cn.autoforged.module_shop.api.client.ShopModules.Entry extensionOf(String id) {
+        if (id == null || List.of(TAB_IDS).contains(id) || "admin".equals(id)) {
+            return null;
+        }
+        return cn.autoforged.module_shop.api.client.ShopModules.get(id);
+    }
+
+    /**
+     * 附属条目是否是「弹出式」：只注册了界面，或注册了页面但 AtomLib 不可用 / 页面创建失败（走回退界面）。
+     * 弹出式条目点了是开界面，不能当作「当前页签」。
+     */
+    private boolean isPopupExtension(String id) {
+        cn.autoforged.module_shop.api.client.ShopModules.Entry entry = extensionOf(id);
+        return entry != null && !(entry.hasPage() && AtomUi.available() && this.pages.containsKey(id)
+                && !cn.autoforged.module_shop.client.screen.shop.AddonPageAdapter.failed(id));
+    }
+
+    /** 弹出式附属条目：打开它的界面（二级界面）；返回是否处理了。内容区页面返回 false（照常切页签）。 */
+    private boolean openExtension(String id) {
+        if (!isPopupExtension(id)) {
+            return false;
+        }
+        cn.autoforged.module_shop.api.client.ShopModules.Entry entry = extensionOf(id);
+        if (entry.screen() != null) {
+            Nav.open(entry.screen().get());
+        }
+        return true;
+    }
+
+    /** 侧栏里能当「当前页签」的模块（去掉弹出式附属条目）。 */
+    private List<String> builtInVisibleTabs() {
+        List<String> tabs = new ArrayList<>(visibleTabs());
+        tabs.removeIf(this::isPopupExtension);
+        return tabs;
     }
 
     /**
@@ -522,8 +580,9 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         this.adminMode = ClientShopData.lastAdminMode;
         // 管理页只能由 /shop admin 指令打开，不作为可见页签，但打开后不能被重置掉。
         // 当前页签已被移除（例如把「每日商店」删掉）时，退回到左侧第一个可见模块，避免停在一个不存在的页面上。
-        if (!"admin".equals(currentTab) && !visibleTabs().contains(currentTab)) {
-            List<String> tabs = visibleTabs();
+        if (!"admin".equals(currentTab)
+                && (!visibleTabs().contains(currentTab) || isPopupExtension(currentTab))) {
+            List<String> tabs = builtInVisibleTabs();
             currentTab = tabs.isEmpty() ? TAB_IDS[0] : tabs.get(0);
         }
         // 需求 11：进入管理页时把当前编辑模块同步给服务端，物品放入时据此归属列表。
@@ -626,6 +685,11 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
 
     /** 模块的**原始**名字（lang 里的默认翻译名，改名后仍然用它做括号里的说明）。 */
     private static Component tabOriginal(String id) {
+        cn.autoforged.module_shop.api.client.ShopModules.Entry extension = extensionOf(id);
+        if (extension != null) {
+            Component name = extension.name().get();
+            return name == null ? Component.literal(id) : name;
+        }
         return Component.translatable(tabKey(id));
     }
 
@@ -731,8 +795,9 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         this.pointerY = mouseY;
         // 每帧兜一层：当前页签被移除（自己删的，或别的管理员热同步过来）时，
         // 立刻退到左侧第一个可见模块，绝不停在一个侧栏里已经不存在的页面上。
-        if (!"admin".equals(currentTab) && !visibleTabs().contains(currentTab)) {
-            List<String> tabs = visibleTabs();
+        if (!"admin".equals(currentTab)
+                && (!visibleTabs().contains(currentTab) || isPopupExtension(currentTab))) {
+            List<String> tabs = builtInVisibleTabs();
             currentTab = tabs.isEmpty() ? TAB_IDS[0] : tabs.get(0);
         }
         // 主题取色：每帧刷新，切换日间/暗色后本界面所有文字立即跟随。
@@ -1721,7 +1786,12 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     }
 
     /** 切换页签（普通点击与快捷键共用）。 */
-    private void selectTab(String tab) {        if (tab == null || tab.isEmpty()) {
+    private void selectTab(String tab) {
+        if (tab == null || tab.isEmpty()) {
+            return;
+        }
+        // 弹出式附属条目：不切页签，直接打开它自己的界面（返回时回到当前页签）；内容区页面照常切页签。
+        if (openExtension(tab)) {
             return;
         }
         this.adminModuleOpen = false;
@@ -4873,7 +4943,9 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             if (index < tabs.size()) {
                 String tab = tabs.get(index);
                 // 需求 3：点击“玩家摊位”改为进入上架物品（摊位管理）界面，逛摊位走单独的按钮。
-                currentTab = tab;
+                if (!openExtension(tab)) {
+                    currentTab = tab;
+                }
                 return true;
             }
         }

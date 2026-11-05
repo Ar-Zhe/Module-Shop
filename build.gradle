@@ -208,6 +208,23 @@ tasks.withType(ProcessResources).configureEach {
     filteringCharset = 'UTF-8'
 }
 
+// 公共 API 单独打一个 jar（只含 cn.autoforged.module_shop.api.**）：附属模组只对它编译，
+// 从构建层面保证附属碰不到 ShopManager / ShopSavedData 等内部实现。运行时仍由完整的 module_shop jar 提供。
+def apiJar = tasks.register('apiJar', Jar) {
+    archiveClassifier = 'api'
+    from(sourceSets.main.output) {
+        include 'cn/autoforged/module_shop/api/**'
+        // UI 套件（AtomLib 薄适配层）：附属的内容区页面用它和内置页面保持同样的绘制与控件。
+        include 'cn/autoforged/module_shop/client/ui/AtomUi.class'
+        include 'cn/autoforged/module_shop/client/ui/render/Draw*.class'
+        include 'cn/autoforged/module_shop/client/ui/render/Text*.class'
+        include 'cn/autoforged/module_shop/client/ui/render/SkiaFrame*.class'
+        include 'cn/autoforged/module_shop/client/ui/widget/**'
+    }
+    exclude 'cn/autoforged/module_shop/api/internal/**'
+}
+tasks.named('assemble').configure { dependsOn apiJar }
+
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {
     module {
