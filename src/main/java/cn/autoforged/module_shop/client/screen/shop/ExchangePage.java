@@ -26,8 +26,9 @@ import net.minecraft.network.chat.Component;
  * admin_exchange_remove / admin_exchange_add）。
  */
 public final class ExchangePage implements ShopPage {
-    private static final float ROW_H = 22.0F;
-    private static final float OPEN_H = 46.0F;
+    // 卡片高 = ROW_H - 2：要比 18px 的物品槽（y+2 起）多出上下各 2px，否则槽框会顶出卡片
+    private static final float ROW_H = 24.0F;
+    private static final float OPEN_H = 48.0F;
     private static final float GAP = 4.0F;
     private static final float HEADER_HIT_H = 20.0F;
     private static final float SCROLLBAR_ROOM = 6.0F;

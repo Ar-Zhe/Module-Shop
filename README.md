@@ -19,6 +19,9 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 > **1.0.3 起界面改用 [AtomLib](https://github.com/NoWordz/AtomLib)（Skija）绘制**：12 个页面全部重绘（翻牌动画、签到月历、
 > 购物城、管理面板等），支持中文输入法；AtomLib 只带 Windows 原生库，其它平台自动回退到旧版界面，功能不受影响。
 > 同时开放了**附属模组接口**：附属可以把自己的功能挂进商店侧栏、直接画在内容区（示例：[module-shop: Red envelope](https://github.com/ChatMiaoPT-Meow/Module-Shop-RedPacket)）。
+>
+> **1.0.4**：外壳与 22 个次级界面也改用 AtomLib 绘制，加入动效；新增**界面皮肤**（日间 / 夜间 / 樱糖 / 薄荷 / 雾蓝 / 奶茶 / 夜樱，
+> 带渐变与柔光，右上角切换），主面板与弹窗改为半透明。
 
 ---
 
@@ -42,7 +45,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | **管理员发放** | `/shop admin money <金额> [目标...]` 发星币（不填目标 = 所有已知玩家，含离线；目标可写玩家名 / UUID / `all` / `@a`），`/shop admin money set <目标> <金额>` 直接改余额（0 = 清零），`/shop admin send` 打开图形发放界面：放入物品 + 勾选玩家或全体 + 可选金额 → 发送，玩家在邮箱领取；也可用 `/shop wallet give <在线玩家> <金额>` 只发一个人 |
 | **交易流水** | 所有资产变动都记流水（买卖 / 摊位 / 拍卖 / 转账 / 交易 / 邮箱 / 管理员发放 / 刷新商店 / 刷新收购 / 全清奖励），管理员用 `/shop admin history <玩家>` 翻页查看 |
 
-## 公共 API（当前 1.1.0）
+## 公共 API（当前 1.2.0）
 
 模组现在对外提供**稳定的公共 API**，供其他模组、KubeJS 脚本与外部服务调用：
 
@@ -57,6 +60,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | 商店 | `ModuleShopApi.shop()` | 只读商品/价格/库存 + 受校验的购买/出售 + 拍卖出价 / 求购发布 / 摊位上架 |
 | 事件 | `ModuleShopApi.events()` | 余额变更 / 邮件创建 / 奖励发放 / 签到 / 成交 …（业务成功后通知，不可取消） |
 | **附属页面**（1.1.0） | `api.client.ShopModules` | 客户端：附属模组在商店侧栏注册条目，`registerPage` 画在内容区（`AddonPage` + `ShopTheme` + UI 套件），`register` 弹出自己的界面 |
+| **皮肤**（1.2.0） | `api.client.ShopTheme` | 客户端：跟随玩家选择的界面皮肤取色；渐变端点、柔光，以及和主体一致的弹窗底板 `dialogPanel` |
 
 三条硬规则：**只在服务端主线程调用**、**只用 `ApiResult` 判断成败**、**写操作必须带幂等键**。
 
@@ -66,16 +70,16 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 2. **KubeJS**：脚本里直接用全局 `ModuleShop`（示例：[examples/kubejs](examples/kubejs)）；
 3. **HTTP / REST**：可选、**默认关闭**，需显式开启并设置 token（默认只监听 `127.0.0.1`、默认只读）。
 
-> API 版本 `1.1.0` 与模组版本独立；同一主版本内只增不改（UI 套件同样适用）。附属页面出错时商店会停用该页面并改用附属的回退界面，不会崩溃。
+> API 版本 `1.2.0` 与模组版本独立；同一主版本内只增不改（UI 套件同样适用）。附属页面出错时商店会停用该页面并改用附属的回退界面，不会崩溃。
 
 ## 安装
 
-1. 服务端：把 `module_shop-1.0.3.jar` 放进 `mods/`，重启（服务端**不需要** AtomLib）。
+1. 服务端：把 `module_shop-1.0.4.jar` 放进 `mods/`，重启（服务端**不需要** AtomLib）。
 2. 客户端：**玩家也必须安装同一个 jar**（商店界面是客户端代码），另外安装前置
    [AtomLib 0.1.0-beta](https://github.com/NoWordz/AtomLib/releases/tag/v0.1.0-beta-beta3)（`atomlib-1.21.1-neoforge-0.1.0-beta.jar`）。
    AtomLib 只支持 Windows x64 / ARM64；macOS / Linux 客户端会自动使用旧版界面。
 3. 客户端与服务端都启动后执行 `/shop` 打开界面；管理员用 `/shop admin` 打开设置页，
-   或在商店界面**右下角**点小按钮「商店设置」。
+   或在商店界面**右上角**点「商店设置」。界面皮肤在右上角的太阳 / 月亮按钮里切换（每个玩家各自保存）。
 
 > 版本要求：Minecraft 1.21.1 / NeoForge 21.1.x（已在 Arclight 1.21.1 混合服务端实测）。
 >
@@ -85,8 +89,8 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 
 ```bash
 ./gradlew build          # Windows: gradlew.bat build
-# 产物：build/libs/module_shop-1.0.3.jar      主模组
-#       build/libs/module_shop-1.0.3-api.jar  公共 API + UI 套件（给附属编译用）
+# 产物：build/libs/module_shop-1.0.4.jar      主模组
+#       build/libs/module_shop-1.0.4-api.jar  公共 API + UI 套件（给附属编译用）
 # 首次构建会自动下载 AtomLib 发布包到 .atomlib/ 并做 SHA-256 校验（版本与校验值见 gradle.properties）
 
 # 需要一个带 KubeJS 桥接（脚本全局 ModuleShop）的 jar：

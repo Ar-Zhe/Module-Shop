@@ -1,7 +1,8 @@
-# Module Shop 公共 API · 开发者使用文档（API 1.1.0）
+# Module Shop 公共 API · 开发者使用文档（API 1.2.0）
 
-> 适用：`module_shop` **1.0.0**（MC 1.21.1 / NeoForge 21.1.248）
-> API 版本：`1.1.0`（`ApiVersion.API_VERSION`，与模组版本独立；1.1.0 新增客户端扩展点 `ShopModules`，见第 10 节）
+> 适用：`module_shop` **1.0.0** 起（MC 1.21.1 / NeoForge 21.1.248）；附属页面需 1.0.3+，皮肤接口（API 1.2）需 1.0.4+
+> API 版本：`1.2.0`（`ApiVersion.API_VERSION`，与模组版本独立；1.1.0 新增客户端扩展点 `ShopModules`，见第 10 节；
+> 1.2.0 新增 `ShopTheme` 的皮肤支持：渐变端点、柔光、弹窗底板，见第 10 节「皮肤」）
 
 ## 1. 接入方式
 
@@ -9,7 +10,7 @@
 // 你的模组 build.gradle：只编译期依赖，运行期由服务端提供
 // 推荐只对「公共 API jar」编译（构建主体时自动产出 build/libs/module_shop-<版本>-api.jar，
 // 只含 cn.autoforged.module_shop.api.**）：这样你的代码在编译期就碰不到内部实现。
-compileOnly files('libs/module_shop-1.0.3-api.jar')
+compileOnly files('libs/module_shop-1.0.4-api.jar')
 
 // neoforge.mods.toml：声明依赖，保证加载顺序
 [[dependencies.yourmod]]
@@ -232,7 +233,7 @@ public final class MyFeaturePage implements AddonPage {
 | `AddonPage` | 页面：`init` / `render` / 鼠标事件 / `clickedOutside` / `cancelInput`（与内置页面同一套路由） |
 | `AddonFrame` | 一帧的内容区几何（x / y / w / h / 鼠标 / 帧时长）；`listBottom()`、`barTop()` 与内置页面的底栏对齐 |
 | `AddonPageHost` | `screen()`、`font()`、`registerInput(EditBox)`、`textTooltip(...)`、`balance()`、`currencyName()` |
-| `ShopTheme` | 配色（随日 / 夜主题变化，**每帧取值**）与字体 `regular()` / `bold()`；`atomLibAvailable()` |
+| `ShopTheme` | 配色（随皮肤变化，**每帧取值**）与字体 `regular()` / `bold()`；`atomLibAvailable()`；API 1.2 起支持皮肤的渐变与弹窗底板，见下方「皮肤」 |
 | **UI 套件** | `client.ui.render.Draw / Text / SkiaFrame`、`client.ui.widget.Button / SkiaTextField / Motion / ScrollController`：内置页面用的同一套控件，已打进公共 API jar |
 
 | 规则 | 说明 |
@@ -246,5 +247,39 @@ public final class MyFeaturePage implements AddonPage {
 | 版本检查 | `ApiVersion` 的常量会被 javac 内联成编译时的值；运行时判断请用 `ApiVersion.describe()` |
 | **跨版本兼容** | API 与 UI 套件在同一主版本（1.x）内**只增不改**：附属对 1.0.3 编译，在之后的 1.x 主体上不用重新发布 |
 | 出错兜底 | 附属页面抛异常或调用了不存在的方法（`LinkageError`）时，商店停用该页面、记日志并打开回退界面，商店本身不受影响 |
+
+### 皮肤（1.0.4+ / API 1.2）
+
+玩家可以在商店右上角切换界面皮肤：日间、夜间，以及柔彩系列（樱糖 / 薄荷 / 雾蓝 / 奶茶 / 夜樱）。
+皮肤除了换颜色，还会给面板、主按钮、选中块加上**渐变**和**柔光**。切换时所有颜色约 0.4 秒平滑过渡，
+所以颜色一律**每帧从 `ShopTheme` 取**，不要缓存到字段里。
+
+| 方法 | 说明 |
+| --- | --- |
+| `skin()` | 当前皮肤 id：`light / dark / rose / sage / haze / oat / dusk`（以后可能增加；不认识的 id 用 `dark()` 判断深浅） |
+| `lightness()` | 明度 0（深色底）～ 1（浅色底），过渡中为中间值；自己按深浅插值颜色时用它 |
+| `sheet()` / `sheet2()` | 弹窗底色的渐变两端（上 → 下） |
+| `sidebar()` / `sidebar2()` | 侧栏底色的渐变两端（上 → 下） |
+| `content()` / `content2()` | 内容区底色的渐变两端（左上 → 右下） |
+| `accent()` / `accent2()` / `accentHover()` | 强调色渐变两端（左 → 右）与悬停色 |
+| `grayButton()` / `grayButtonHover()` | 普通按钮底色 |
+| `shadow()` / `glow1()` / `glow2()` | 投影色、两团柔光的中心色（带透明度；日间 / 夜间为全透明） |
+| `dialogPanel(canvas, x, y, w, h)` | 画一块**和主体弹窗完全一样**的底板（半透明渐变 + 柔光 + 高光 + 边框 + 投影）；附属自己的弹窗用它当背景 |
+| `accentFill(canvas, x, y, w, h, radius)` | 强调色水平渐变填充（主按钮、选中块同款） |
+| `contentFill(canvas, x, y, w, h, radius, opacity)` | 内容区底色的对角渐变填充 |
+
+日间 / 夜间两套皮肤里，各组渐变的两端颜色相同，等于纯色，所以照这些方法写的界面在旧主题下外观不变。
+UI 套件里的 `Button`（`Kind.ACCENT`）会自动用强调色渐变，不需要额外处理。
+
+```java
+// 附属弹窗：底板与主体一致，标题条用强调色渐变
+ShopTheme.dialogPanel(canvas, x, y, W, H);
+ShopTheme.accentFill(canvas, x + 1, y + 1, W - 2, 24, 0);
+Text.drawLine(canvas, title, ShopTheme.bold(), Text.TITLE, 0xFFFFFFFF, x, y + 13, W, Text.Align.CENTER);
+```
+
+> 要同时兼容 API 1.1 的主体（还没有这些方法）：调用前判断 `ApiVersion.describe()`，
+> 或者直接调用并接受“在旧主体上触发 `LinkageError` → 改用回退界面”的兜底行为。
+> 想保留品牌色（例如红包的红色信封）的元素可以继续用固定颜色，皮肤只负责它周围的环境。
 
 完整示例：[module-shop: Red envelope（拼手气红包）](https://github.com/ChatMiaoPT-Meow/Module-Shop-RedPacket)。

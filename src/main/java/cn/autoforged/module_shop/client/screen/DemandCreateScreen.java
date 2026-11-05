@@ -23,7 +23,7 @@ import net.minecraft.world.item.ItemStack;
  * <p>右侧清单**固定行距 18px**（16px 图标不再互相压住），一屏显示 8 行，超出时**滚轮上下滑**
  * 并显示细滚动条；清单区有裁剪，绝不会画到底栏按钮上。
  */
-public class DemandCreateScreen extends Screen {
+public class DemandCreateScreen extends SkiaDialog {
     /** 一条求购最多几种物品（与服务端 {@code DemandEntry.MAX_LINES} 保持一致）。 */
     private static final int MAX_LINES = 12;
 
@@ -84,7 +84,9 @@ public class DemandCreateScreen extends Screen {
 
     @Override
     protected void init() {
-        super.init();
+        if (skiaInit()) {
+            return;
+        }
         int x = left();
         int y = top();
         this.searchBox = new EditBox(this.font, x + 10, y + 24, 148, 12,
@@ -215,6 +217,9 @@ public class DemandCreateScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         // 顺序：背景 → 原版组件（输入框）→ 底板 → 内容。内容永远在最上层。
         this.renderBackground(g, mouseX, mouseY, partialTick);
         super.render(g, mouseX, mouseY, partialTick);
@@ -315,6 +320,135 @@ public class DemandCreateScreen extends Screen {
                 this.status.isEmpty() ? IOStyle.TEXT_3 : IOStyle.RED);
     }
 
+    // ---------------------------------------------------------------- Skija
+
+    private final cn.autoforged.module_shop.client.ui.widget.ScrollController skGrid =
+            new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+    private final cn.autoforged.module_shop.client.ui.widget.ScrollController skPicked =
+            new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skSearch;
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skMoney;
+    private String skFilterKey;
+    private List<ItemStack> skFiltered = List.of();
+
+    @Override
+    protected void initSkia() {
+        String keepMoney = this.moneyBox == null ? "0" : this.moneyBox.getValue();
+        this.skSearch = field(32, Component.translatable("gui.module_shop.demand.search_hint").getString());
+        this.searchBox = this.skSearch.editBox();
+        this.searchBox.setValue(this.filter);
+        this.skSearch.onChange(text -> {
+            this.filter = text == null ? "" : text.trim();
+            this.skGrid.scrollTo(0, false);
+        });
+        this.skMoney = field(12, "0");
+        this.moneyBox = this.skMoney.editBox();
+        this.moneyBox.setFilter(t -> t.isEmpty() || t.matches("[0-9]{0,12}"));
+        this.moneyBox.setValue(keepMoney);
+        this.skSearch.focus();
+    }
+
+    private List<ItemStack> skFiltered() {
+        if (!this.filter.equals(this.skFilterKey)) {
+            this.skFilterKey = this.filter;
+            this.skFiltered = filtered();
+        }
+        return this.skFiltered;
+    }
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 380.0F;
+        float h = 246.0F;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        panel(c, x, y, w, h, this.title.getString());
+        // 左：搜索 + 物品网格
+        float gridW = COLS * CELL + 8;
+        float top = y + HEADER_H + 8;
+        this.skSearch.bounds(innerX, top, gridW, 16);
+        float gridY = top + 22;
+        float gridH = 7 * CELL;
+        card(c, innerX, gridY - 2, gridW, gridH + 4);
+        List<ItemStack> list = skFiltered();
+        int rows = (list.size() + COLS - 1) / COLS;
+        float oy = beginList(c, this.skGrid, innerX + 2, gridY, gridW - 2, gridH, rows * CELL);
+        int firstRow = Math.max(0, (int) ((gridY - oy) / CELL));
+        int lastRow = Math.min(rows, firstRow + 9);
+        for (int r = firstRow; r < lastRow; r++) {
+            for (int col = 0; col < COLS; col++) {
+                int i = r * COLS + col;
+                if (i >= list.size()) {
+                    break;
+                }
+                float cx = innerX + 2 + col * CELL;
+                float cy = oy + r * CELL;
+                ItemStack stack = list.get(i);
+                if (over(cx, cy, CELL, CELL)) {
+                    cn.autoforged.module_shop.client.ui.render.Draw.fill(c, cx, cy, CELL, CELL, 2,
+                            IOStyle.GRAY_BTN_HOVER);
+                }
+                item(stack, cx + 1, cy + 1);
+                hit(cx, cy, CELL, CELL, () -> add(stack), null);
+            }
+        }
+        endList(c);
+        small(c, Component.translatable("gui.module_shop.mall.count", list.size()).getString(), innerX,
+                gridY + gridH + 8, gridW, IOStyle.TEXT_3);
+        // 右：已选清单
+        float rx = innerX + gridW + 10;
+        float rw = x + w - PAD - rx;
+        text(c, Component.translatable("gui.module_shop.demand.picked", this.picked.size(), MAX_LINES).getString(),
+                rx, top + 8, rw, IOStyle.ORANGE);
+        float listY = gridY - 2;
+        float listH = gridH + 4;
+        card(c, rx, listY, rw, listH);
+        if (this.picked.isEmpty()) {
+            paragraph(c, Component.translatable("gui.module_shop.demand.pick_first").getString(), rx + 6,
+                    listY + listH / 2 - 6, rw - 12, cn.autoforged.module_shop.client.ui.render.Text.SMALL,
+                    IOStyle.TEXT_3, 3, true);
+        } else {
+            float rowH = 20.0F;
+            float py = beginList(c, this.skPicked, rx + 2, listY + 2, rw - 4, listH - 4, this.picked.size() * rowH);
+            for (int i = 0; i < this.picked.size(); i++) {
+                Entry entry = this.picked.get(i);
+                float ry = py + i * rowH;
+                if (ry + rowH < listY || ry > listY + listH) {
+                    continue;
+                }
+                item(entry.stack, rx + 4, ry + 2);
+                float bx = rx + rw - 4 - 8 - 14 * 3;
+                text(c, entry.stack.getHoverName().getString(), rx + 24, ry + 7, bx - rx - 46, IOStyle.TEXT);
+                small(c, "×" + entry.count, rx + 24, ry + 15, 40, IOStyle.TEXT_2);
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind n =
+                        cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL;
+                button(c, "dec" + i, "-", bx, ry + 4, 12, 12, n, entry.count > 1,
+                        () -> entry.count = Math.max(1, entry.count - 1));
+                button(c, "inc" + i, "+", bx + 14, ry + 4, 12, 12, n, entry.count < 64,
+                        () -> entry.count = Math.min(64, entry.count + 1));
+                button(c, "rm" + i, "×", bx + 28, ry + 4, 12, 12,
+                        cn.autoforged.module_shop.client.ui.widget.Button.Kind.DANGER, true,
+                        () -> this.picked.remove(entry));
+            }
+            endList(c);
+        }
+        // 底部：提示 / 悬赏 / 发布 / 取消
+        float by = y + h - PAD - 20;
+        boolean err = !this.status.isEmpty();
+        small(c, err ? this.status : Component.translatable("gui.module_shop.demand.offhand_hint").getString(),
+                innerX, by - 8, w - PAD * 2, err ? IOStyle.RED : IOStyle.TEXT_3);
+        button(c, "publish", Component.translatable("gui.module_shop.demand.publish").getString(), innerX, by, 76, 20,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, true, this::publish);
+        button(c, "cancel", Component.translatable("gui.module_shop.cancel").getString(), innerX + 82, by, 70, 20,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, Nav::back);
+        String moneyLabel = Component.translatable("gui.module_shop.field.reward_money").getString();
+        float fieldW = 70;
+        float fx = x + w - PAD - fieldW;
+        right(c, moneyLabel, innerX, by + 10, fx - innerX - 6, IOStyle.TEXT_2);
+        this.skMoney.bounds(fx, by + 1, fieldW, 18);
+    }
+
     /** 0.8 倍小字（左对齐）。 */
     private void drawSmallLabel(GuiGraphics g, int x, int y, Component text, int color) {
         g.pose().pushPose();
@@ -328,6 +462,9 @@ public class DemandCreateScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (skia()) {
+            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        }
         int x = left();
         int y = top();
         int rx = x + PICK_X_OFFSET;
@@ -344,6 +481,9 @@ public class DemandCreateScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         int x = left();
         int y = top();
         if (button == 0) {

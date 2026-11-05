@@ -15,7 +15,7 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /** 浏览某个玩家的摊位，物品按上架先后顺序排列。 */
-public class StallBrowseScreen extends Screen implements JeiHoverSource {
+public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
     /** JEI 桥接用：本帧鼠标悬停的物品。 */
     private net.minecraft.world.item.ItemStack jeiHover = net.minecraft.world.item.ItemStack.EMPTY;
 
@@ -82,6 +82,9 @@ public class StallBrowseScreen extends Screen implements JeiHoverSource {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         this.rowRects.clear();
         // JEI 桥接：每帧先清空，只有画了物品 tooltip 的那一行会重新赋值。
         this.jeiHover = net.minecraft.world.item.ItemStack.EMPTY;
@@ -147,6 +150,9 @@ public class StallBrowseScreen extends Screen implements JeiHoverSource {
     /** 鼠标滚轮翻页。 */
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (skia()) {
+            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        }
         if (scrollY != 0.0D) {
             int pages = Math.max(1, (this.entries.size() + PAGE_SIZE - 1) / PAGE_SIZE);
             int next = Math.max(0, Math.min(pages - 1, this.page + (scrollY > 0.0D ? -1 : 1)));
@@ -160,6 +166,9 @@ public class StallBrowseScreen extends Screen implements JeiHoverSource {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         int x = left();
         int y = top();
         if (mouseX >= x + 10 && mouseX < x + 80 && mouseY >= y + PANEL_H - 24 && mouseY < y + PANEL_H - 8) {
@@ -215,6 +224,113 @@ public class StallBrowseScreen extends Screen implements JeiHoverSource {
             }
         }
         return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    // ------------------------------------------------------------------ Skija
+
+    private final cn.autoforged.module_shop.client.ui.widget.ScrollController skScroll =
+            new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 270.0F;
+        float rowH = 30.0F;
+        float listH = rowH * 6;
+        float h = HEADER_H + 8 + listH + 8 + 20 + PAD;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        panel(c, x, y, w, h, this.ownerName);
+        if (this.ownerUuid != null) {
+            final UUID uuid = this.ownerUuid;
+            final int hx = (int) (x + PAD);
+            final int hy = (int) (y + (HEADER_H - 14) / 2);
+            this.items.addCustom(hx, hy, 14, 14, (g, font) -> Skins.drawHead(g, uuid, hx, hy, 14));
+        }
+        float listY = y + HEADER_H + 8;
+        if (this.entries.isEmpty()) {
+            center(c, Component.translatable("gui.module_shop.stall_empty").getString(), innerX, listY + listH / 2,
+                    innerW, IOStyle.TEXT_2);
+        } else {
+            float oy = beginList(c, this.skScroll, innerX, listY, innerW, listH, this.entries.size() * rowH);
+            for (int i = 0; i < this.entries.size(); i++) {
+                float ry = oy + i * rowH;
+                if (ry + rowH < listY || ry > listY + listH) {
+                    continue;
+                }
+                Entry e = this.entries.get(i);
+                float rw = innerW - 8;
+                boolean soldOut = e.stock <= 0;
+                float hv = soldOut ? 0 : hover("row" + i, innerX, ry, rw, rowH - 3);
+                cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX, ry, rw, rowH - 3, 3,
+                        cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.CARD, IOStyle.GRAY_BTN_HOVER, hv));
+                cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, innerX, ry, rw, rowH - 3, 3, 1,
+                        cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BLUE, hv));
+                cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX + 4, ry + 4, 19, 19, 2, IOStyle.FIELD_BG);
+                item(e.stack, innerX + 5.5F, ry + 5.5F);
+                float statusW = 64;
+                text(c, e.stack.getHoverName().getString(), innerX + 28, ry + 8, rw - 36 - statusW,
+                        soldOut ? IOStyle.TEXT_3 : IOStyle.TEXT);
+                small(c, Component.translatable("gui.module_shop.stall_unit_price",
+                                cn.autoforged.module_shop.client.ClientShopData.money(e.price)).getString(), innerX + 28,
+                        ry + 19, rw - 36 - statusW, IOStyle.ORANGE);
+                float sx = innerX + rw - statusW - 6;
+                if (soldOut) {
+                    cn.autoforged.module_shop.client.ui.render.Text.drawLine(c,
+                            Component.translatable("gui.module_shop.stall_sold_out").getString(),
+                            cn.autoforged.module_shop.client.ui.AtomUi.REGULAR,
+                            cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.RED, sx, ry + 8, statusW,
+                            cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
+                } else {
+                    cn.autoforged.module_shop.client.ui.render.Text.drawLine(c,
+                            Component.translatable("gui.module_shop.stall_stock", e.stock).getString(),
+                            cn.autoforged.module_shop.client.ui.AtomUi.REGULAR,
+                            cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_2, sx, ry + 8, statusW,
+                            cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
+                }
+                cn.autoforged.module_shop.client.ui.render.Text.drawLine(c,
+                        Component.translatable("gui.module_shop.stall_sold_count", e.sold).getString(),
+                        cn.autoforged.module_shop.client.ui.AtomUi.REGULAR,
+                        cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.BLUE, sx, ry + 19, statusW,
+                        cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
+                if (!soldOut) {
+                    hit(innerX, ry, rw, rowH - 3, () -> openBuy(e), null);
+                }
+            }
+            endList(c);
+        }
+        button(c, "back", Component.translatable("gui.module_shop.back").getString(), innerX, y + h - PAD - 20, 64,
+                20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, this::backToShop);
+        if (!this.entries.isEmpty()) {
+            right(c, Component.translatable("gui.module_shop.mall.count", this.entries.size()).getString(), innerX,
+                    y + h - PAD - 10, innerW, IOStyle.TEXT_3);
+        }
+    }
+
+    @Override
+    protected void paintOver(io.github.humbleui.skija.Canvas c) {
+        this.jeiHover = this.items.hovered();
+    }
+
+    private void openBuy(Entry entry) {
+        CompoundTag request = new CompoundTag();
+        request.putString("kind", "input");
+        request.putString("action", "stall_buy");
+        request.putString("title", "gui.module_shop.input.stall_buy");
+        request.putString("owner", this.owner);
+        request.putInt("index", entry.index);
+        request.putString("default_quantity", "1");
+        request.putBoolean("confirm_right", false);
+        request.putLong("unit_price", entry.price);
+        request.putLong("balance", cn.autoforged.module_shop.client.ClientShopData.balance);
+        request.putString("info", Component.translatable("gui.module_shop.stall_buy_info",
+                entry.stack.getHoverName(), cn.autoforged.module_shop.client.ClientShopData.money(entry.price),
+                entry.stock).getString());
+        ListTag fields = new ListTag();
+        fields.add(net.minecraft.nbt.StringTag.valueOf("quantity"));
+        request.put("fields", fields);
+        Nav.open(new ShopInputScreen(request));
     }
 
     @Override

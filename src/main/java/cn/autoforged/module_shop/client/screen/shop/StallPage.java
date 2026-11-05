@@ -29,8 +29,6 @@ public final class StallPage implements ShopPage {
     private static final float CELL_H = 26.0F;
     private static final float GAP_X = 6.0F;
     private static final float GAP_Y = 4.0F;
-    private static final int SOLD_COLOR = 0xFF88BBFF;
-    private static final int REMAIN_COLOR = 0xFFE0A34A;
 
     private static float savedScroll;
 
@@ -140,7 +138,7 @@ public final class StallPage implements ShopPage {
         if (remain != null) {
             float rw = Text.width(remain, AtomUi.REGULAR, Text.SMALL);
             if (left + pw + 4.0F + rw <= right) {
-                Text.drawLine(canvas, remain, AtomUi.REGULAR, Text.SMALL, REMAIN_COLOR, right - rw, top, rw + 1.0F,
+                Text.drawLine(canvas, remain, AtomUi.REGULAR, Text.SMALL, cn.autoforged.module_shop.client.screen.IOStyle.ORANGE, right - rw, top, rw + 1.0F,
                         Text.Align.LEFT);
             }
         }
@@ -152,7 +150,7 @@ public final class StallPage implements ShopPage {
         float soldX = left + sw + 6.0F;
         if (soldX < right - 10.0F) {
             Text.drawLine(canvas, Component.translatable("gui.module_shop.stall_sold_count", e.sold).getString(),
-                    AtomUi.REGULAR, Text.SMALL, SOLD_COLOR, soldX, bottom, right - soldX, Text.Align.LEFT);
+                    AtomUi.REGULAR, Text.SMALL, cn.autoforged.module_shop.client.screen.IOStyle.BLUE_HOVER, soldX, bottom, right - soldX, Text.Align.LEFT);
         }
     }
 

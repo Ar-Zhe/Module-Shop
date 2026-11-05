@@ -107,6 +107,21 @@ public final class IOStyle {
    public static int SHADOW_TINT = 0x66000000;
    /** 键盘焦点环。 */
    public static int FOCUS = 0x992B4BFF;
+   // ---- 皮肤用的渐变 / 氛围色（日间、夜间里与纯色相同，即“没有渐变”）----
+   /** 弹窗底的渐变终点（上 SHEET → 下 SHEET_2）。 */
+   public static int SHEET_2 = 0xFF0B0D13;
+   /** 侧栏的渐变终点（上 SIDEBAR → 下 SIDEBAR_2）。 */
+   public static int SIDEBAR_2 = 0xFF080A0F;
+   /** 内容区的渐变终点（左上 CONTENT → 右下 CONTENT_2）。 */
+   public static int CONTENT_2 = 0xFF12151C;
+   /** 强调色的渐变终点（左 BLUE → 右 ACCENT_2）：选中块、主按钮、开关。 */
+   public static int ACCENT_2 = 0xFF2B4BFF;
+   /** 面板里的两团柔光（径向渐变，带透明度；0 = 不画）。 */
+   public static int GLOW_1 = 0x00000000;
+   public static int GLOW_2 = 0x00000000;
+   /** 主面板 / 弹窗底色的不透明度：透出一点背后的模糊画面。 */
+   public static final float GLASS = 0.84F;
+   public static final float GLASS_DIALOG = 0.90F;
 
    private static final int WHITE = 0xFFFFFFFF;
    public static final int PANEL_R = 14;
@@ -116,21 +131,340 @@ public final class IOStyle {
    private IOStyle() {
    }
 
-   static {
-      // 默认按深色主题初始化；真实主题由 UITheme 读取客户端 config/module_shop_ui_theme.txt 后覆盖。
-      applyTheme(true);
+   // =========================================================== 日间 / 暗色主题
+   // 上面字段的初始值就是暗色主题；日间主题只在 LIGHT 表里列出不同的颜色（参照 AtomChat「极简」预设）。
+   // 切换时所有调色板字段在两套之间做 THEME_MS 的缓动插值，整个界面一起平滑变色。
+
+   private static final java.util.Map<String, Integer> LIGHT = java.util.Map.ofEntries(
+         // 日间主题：次级文字、边框都比初版深一档，白底上也看得清
+         java.util.Map.entry("TEXT", 0xFF111620), java.util.Map.entry("TEXT_2", 0xFF475061),
+         java.util.Map.entry("TEXT_3", 0xFF6B7484), java.util.Map.entry("SHEET", 0xFFF5F6F9),
+         java.util.Map.entry("SIDEBAR", 0xFFE7EAF0), java.util.Map.entry("CONTENT", 0xFFF1F3F7),
+         java.util.Map.entry("CARD", 0xFFFFFFFF), java.util.Map.entry("HAIR", 0xFFE3E6EB),
+         java.util.Map.entry("HAIR_DARK", 0xFFD5D9E0), java.util.Map.entry("BLUE", 0xFF2563D8),
+         java.util.Map.entry("BLUE_HOVER", 0xFF3B76E8), java.util.Map.entry("BLUE_TINT", 0xFFDCE7FA),
+         java.util.Map.entry("BLUE_TINT_HOVER", 0xFFCADBF7), java.util.Map.entry("ORANGE", 0xFFA4620C),
+         java.util.Map.entry("GREEN", 0xFF1F9D57), java.util.Map.entry("GREEN_HOVER", 0xFF27B465),
+         java.util.Map.entry("GREEN_DARK", 0xFF177A43), java.util.Map.entry("GREEN_TINT", 0xFFDDF3E6),
+         java.util.Map.entry("GREEN_TINT_HOVER", 0xFFC9EBD7), java.util.Map.entry("RED", 0xFFD64541),
+         java.util.Map.entry("RED_HOVER", 0xFFE5534F), java.util.Map.entry("RED_TINT", 0xFFFBE3E2),
+         java.util.Map.entry("RED_TINT_HOVER", 0xFFF6CDCB), java.util.Map.entry("GRAY_BTN", 0xFFE6E9EE),
+         java.util.Map.entry("GRAY_BTN_HOVER", 0xFFDADEE5), java.util.Map.entry("FIELD_BG", 0xFFFFFFFF),
+         java.util.Map.entry("FIELD_GRAY", 0xFFE3E6EB), java.util.Map.entry("DISABLED_TEXT", 0xFFA3AAB6),
+         java.util.Map.entry("DISABLED_BG", 0xFFF0F1F4), java.util.Map.entry("ROW_HOVER", 0xFFEDF1F7),
+         java.util.Map.entry("EPIC", 0xFF8B4FD1), java.util.Map.entry("SLOT_BORDER", 0xFFCDD2DA),
+         java.util.Map.entry("SLOT_INNER", 0xFFE8EBF0), java.util.Map.entry("SEG_TRACK", 0xFFECEEF2),
+         java.util.Map.entry("SEG_SLIDER", 0xFF2563D8), java.util.Map.entry("SEG_OFF", 0xFF596273),
+         java.util.Map.entry("TOGGLE_OFF", 0xFFD5D9E0), java.util.Map.entry("TOGGLE_OFF_RING", 0xFFC4CAD3),
+         java.util.Map.entry("KNOB", 0xFFFFFFFF), java.util.Map.entry("KNOB_RING", 0x22000000),
+         java.util.Map.entry("TAB_BG", 0xFFFFFFFF), java.util.Map.entry("TAB_BG_HOVER", 0xFFF1F4F9),
+         java.util.Map.entry("TAB_BORDER", 0xFFE3E6EB), java.util.Map.entry("TAB_BORDER_HOVER", 0xFFC4CAD3),
+         java.util.Map.entry("TAB_SEL_GLOW", 0x332563D8), java.util.Map.entry("TAB_SEL_BORDER", 0xFF2563D8),
+         java.util.Map.entry("DONE_WASH", 0x88F7F8FA), java.util.Map.entry("SHADOW_1", 0x14000000),
+         java.util.Map.entry("SHADOW_2", 0x1F000000), java.util.Map.entry("SHADOW_3", 0x29000000),
+         java.util.Map.entry("BORDER", 0xFFC6CBD4), java.util.Map.entry("BORDER_HOVER", 0xFF4A80E8),
+         java.util.Map.entry("BORDER_DIM", 0xFFD8DCE3), java.util.Map.entry("SHEET_TOP", 0xFFF7F8FA),
+         java.util.Map.entry("SHEET_BOTTOM", 0xFFF7F8FA), java.util.Map.entry("CARD_TOP", 0xFFFFFFFF),
+         java.util.Map.entry("CARD_BOTTOM", 0xFFFFFFFF), java.util.Map.entry("INNER_LIGHT", 0x80FFFFFF),
+         java.util.Map.entry("SHADOW_TINT", 0x30000000), java.util.Map.entry("FOCUS", 0x992563D8),
+         java.util.Map.entry("SHEET_2", 0xFFF5F6F9), java.util.Map.entry("SIDEBAR_2", 0xFFE7EAF0),
+         java.util.Map.entry("CONTENT_2", 0xFFF1F3F7), java.util.Map.entry("ACCENT_2", 0xFF2563D8));
+
+   // =========================================================== 皮肤
+   // 日间 / 夜间之外的皮肤只给一组“种子色”（底色、侧栏与内容区的渐变两端、卡片、三级文字、
+   // 强调色渐变、边框、两团柔光），其余几十个颜色（按钮、悬停、输入框、槽位、开关……）按规则推导，
+   // 保证每套皮肤内部协调；红 / 绿 / 品质色沿用同明暗的基础主题，语义不变。
+
+   /** 皮肤种子色。light = 是否浅色底（决定基础主题与推导方向）。 */
+   private record Seed(boolean light, int sheet, int sheet2, int sidebar, int sidebar2, int content, int content2,
+                       int card, int text, int text2, int text3, int accent, int accent2, int accentHover,
+                       int border, int glow1, int glow2, int orange) {
    }
 
-   public static void applyTheme(boolean toDark) {
+   /** 皮肤：id、是否浅色、种子（日间 / 夜间为 null，直接用基础主题）。 */
+   public record Skin(String id, boolean light, Seed seed) {
+      public String nameKey() {
+         return "gui.module_shop.skin." + id;
+      }
+   }
+
+   public static final java.util.List<Skin> SKINS = java.util.List.of(
+         new Skin("light", true, null),
+         new Skin("dark", false, null),
+         // ---- 柔彩系列：明亮、柔和但有颜色（比莫兰迪更有精神，比糖果色更克制）----
+         // 樱糖：糖果粉 → 薰衣草紫，柔光一粉一薄荷（参照粉发 + 薄荷卫衣的配色）
+         new Skin("rose", true, new Seed(true,
+               0xFFFFF4F8, 0xFFF8F0FD, 0xFFFDE6F1, 0xFFEFE5FB, 0xFFFFF6FA, 0xFFF4EEFD,
+               0xFFFFFFFF, 0xFF3A2440, 0xFF7A5A7E, 0xFFA98BAB,
+               0xFFE06A9F, 0xFFA486E6, 0xFFEA7DAE, 0xFFF1D3E2,
+               0x70FFA3CC, 0x5588E3C6, 0xFFC0742B)),
+         // 薄荷：薄荷绿 → 天蓝，清爽
+         new Skin("sage", true, new Seed(true,
+               0xFFF1FAF7, 0xFFEDF6F7, 0xFFE3F4EE, 0xFFE0EEF3, 0xFFF5FBF9, 0xFFEBF5F8,
+               0xFFFFFFFF, 0xFF1E3530, 0xFF50706A, 0xFF84A09A,
+               0xFF3FAE8C, 0xFF5E9FDA, 0xFF4FBE9C, 0xFFCDE6DE,
+               0x5C8FE6C8, 0x4DA3C6F2, 0xFFB07A2E)),
+         // 雾蓝：长春花蓝 → 淡紫
+         new Skin("haze", true, new Seed(true,
+               0xFFF2F4FC, 0xFFF2F0FC, 0xFFE7ECFA, 0xFFEDE6FA, 0xFFF5F6FD, 0xFFF1EEFC,
+               0xFFFFFFFF, 0xFF262B47, 0xFF585F88, 0xFF8C92B3,
+               0xFF6582DA, 0xFFA587E2, 0xFF7792E3, 0xFFD7DCF1,
+               0x5C97B1F2, 0x4DC6A6F2, 0xFFB0782F)),
+         // 奶茶：焦糖 → 蜜桃粉，暖调
+         new Skin("oat", true, new Seed(true,
+               0xFFFAF3EC, 0xFFF8EEEA, 0xFFF4E7DA, 0xFFF1E0DA, 0xFFFBF6F1, 0xFFF6ECE7,
+               0xFFFFFDFA, 0xFF3E2D22, 0xFF7B6151, 0xFFA98F7D,
+               0xFFCC8556, 0xFFDF8495, 0xFFD69466, 0xFFEBD9C9,
+               0x5CF5BE90, 0x4DF4A3B4, 0xFFB36B26)),
+         // 夜樱：深紫夜色上的粉 → 薰衣草，柔光粉 + 薄荷
+         new Skin("dusk", false, new Seed(false,
+               0xFF221E31, 0xFF1F1D34, 0xFF1D192B, 0xFF1A1A31, 0xFF262237, 0xFF21223B,
+               0xFF2F2A43, 0xFFF6EEFB, 0xFFC4B4D4, 0xFF8F82A2,
+               0xFFDF73A8, 0xFF9A82EA, 0xFFEA88BA, 0xFF443C5C,
+               0x4DFF98C8, 0x3888E3C6, 0xFFF0C27A)));
+
+   /** 主题切换的过渡时长（毫秒）。 */
+   private static final float THEME_MS = 380.0F;
+   private static java.lang.reflect.Field[] paletteFields;
+   private static int[] darkValues;
+   private static int[] lightValues;
+   private static final java.util.Map<String, int[]> skinValues = new java.util.HashMap<>();
+   /** 过渡：从 fromValues 到 toValues，themeT 0 → 1；fromLight / toLight 是两端的“明度”（0 暗 1 亮）。 */
+   private static int[] fromValues;
+   private static int[] toValues;
+   private static float fromLight = 0.0F;
+   private static float toLight = 0.0F;
+   private static float themeT = 1.0F;
+   private static long themeLastNs = 0L;
+   private static String currentSkin = "dark";
+
+   static {
+      java.util.List<java.lang.reflect.Field> list = new java.util.ArrayList<>();
+      for (java.lang.reflect.Field f : IOStyle.class.getDeclaredFields()) {
+         int mod = f.getModifiers();
+         if (f.getType() == int.class && java.lang.reflect.Modifier.isStatic(mod)
+               && java.lang.reflect.Modifier.isPublic(mod) && !java.lang.reflect.Modifier.isFinal(mod)) {
+            list.add(f);
+         }
+      }
+      paletteFields = list.toArray(new java.lang.reflect.Field[0]);
+      darkValues = new int[paletteFields.length];
+      lightValues = new int[paletteFields.length];
+      for (int i = 0; i < paletteFields.length; i++) {
+         try {
+            darkValues[i] = paletteFields[i].getInt(null);
+         } catch (IllegalAccessException e) {
+            darkValues[i] = 0;
+         }
+         lightValues[i] = LIGHT.getOrDefault(paletteFields[i].getName(), darkValues[i]);
+      }
+      for (Skin skin : SKINS) {
+         skinValues.put(skin.id(), buildSkin(skin));
+      }
+      fromValues = darkValues;
+      toValues = darkValues;
       dark = true;
-      // 只保留这一套深色主题（OneConfig 风格）；衍生色统一在这里算，避免各处硬编码。
-      BLUE_TINT = 0xFF1B2A6B;
-      BLUE_TINT_HOVER = 0xFF243689;
-      GREEN_TINT = 0xFF16321F;
-      GREEN_TINT_HOVER = 0xFF1E4429;
-      RED_TINT = 0xFF3A1D1C;
-      RED_TINT_HOVER = 0xFF4E2725;
-      ROW_HOVER = 0xFF222735;
+   }
+
+   private static int fieldIndex(String name) {
+      for (int i = 0; i < paletteFields.length; i++) {
+         if (paletteFields[i].getName().equals(name)) {
+            return i;
+         }
+      }
+      return -1;
+   }
+
+   /** 基础主题 + 由种子推导出的整套颜色。 */
+   private static int[] buildSkin(Skin skin) {
+      int[] base = (skin.light() ? lightValues : darkValues).clone();
+      Seed s = skin.seed();
+      if (s == null) {
+         return base;
+      }
+      boolean l = s.light();
+      java.util.Map<String, Integer> m = new java.util.HashMap<>();
+      m.put("TEXT", s.text());
+      m.put("TEXT_2", s.text2());
+      m.put("TEXT_3", s.text3());
+      m.put("SHEET", s.sheet());
+      m.put("SHEET_2", s.sheet2());
+      m.put("SHEET_TOP", s.sheet());
+      m.put("SHEET_BOTTOM", s.sheet2());
+      m.put("SIDEBAR", s.sidebar());
+      m.put("SIDEBAR_2", s.sidebar2());
+      m.put("CONTENT", s.content());
+      m.put("CONTENT_2", s.content2());
+      m.put("CARD", s.card());
+      m.put("CARD_TOP", s.card());
+      m.put("CARD_BOTTOM", s.card());
+      m.put("BLUE", s.accent());
+      m.put("BLUE_HOVER", s.accentHover());
+      m.put("ACCENT_2", s.accent2());
+      m.put("SEG_SLIDER", s.accent());
+      m.put("TAB_SEL_BORDER", s.accent());
+      m.put("BORDER_HOVER", mix(s.accent(), l ? 0xFFFFFFFF : s.text(), l ? 0.12F : 0.22F));
+      m.put("FOCUS", withAlpha(s.accent(), 0x99));
+      m.put("TAB_SEL_GLOW", withAlpha(s.accent(), 0x44));
+      m.put("BLUE_TINT", mix(s.card(), s.accent(), l ? 0.14F : 0.26F));
+      m.put("BLUE_TINT_HOVER", mix(s.card(), s.accent(), l ? 0.22F : 0.34F));
+      int gray = mix(s.card(), s.text(), l ? 0.07F : 0.08F);
+      m.put("GRAY_BTN", gray);
+      m.put("GRAY_BTN_HOVER", mix(s.card(), s.text(), l ? 0.13F : 0.14F));
+      m.put("ROW_HOVER", mix(s.card(), s.accent(), l ? 0.07F : 0.12F));
+      int borderDim = mix(s.border(), s.card(), 0.45F);
+      m.put("BORDER", s.border());
+      m.put("BORDER_DIM", borderDim);
+      m.put("HAIR", borderDim);
+      m.put("HAIR_DARK", s.border());
+      m.put("TAB_BG", s.card());
+      m.put("TAB_BG_HOVER", mix(s.card(), s.accent(), l ? 0.07F : 0.12F));
+      m.put("TAB_BORDER", borderDim);
+      m.put("TAB_BORDER_HOVER", s.border());
+      m.put("FIELD_BG", l ? s.card() : mix(s.sheet(), 0xFF000000, 0.3F));
+      m.put("FIELD_GRAY", borderDim);
+      m.put("SLOT_INNER", l ? mix(s.card(), s.text(), 0.06F) : mix(s.sheet(), 0xFF000000, 0.25F));
+      m.put("SLOT_BORDER", s.border());
+      m.put("SEG_TRACK", gray);
+      m.put("SEG_OFF", s.text2());
+      m.put("TOGGLE_OFF", mix(s.card(), s.text(), l ? 0.18F : 0.12F));
+      m.put("TOGGLE_OFF_RING", mix(s.card(), s.text(), l ? 0.26F : 0.20F));
+      m.put("DISABLED_BG", mix(s.card(), s.sheet(), 0.5F));
+      m.put("DISABLED_TEXT", s.text3());
+      m.put("DONE_WASH", withAlpha(s.sheet(), 0x88));
+      // 投影带一点强调色，比纯黑更“有气氛”
+      m.put("SHADOW_TINT", l ? withAlpha(mix(0xFF000000, s.accent(), 0.35F), 0x30)
+            : withAlpha(mix(0xFF000000, s.accent(), 0.15F), 0x70));
+      m.put("GLOW_1", s.glow1());
+      m.put("GLOW_2", s.glow2());
+      m.put("ORANGE", s.orange());
+      // 状态色 / 品质色换成同一套柔彩（色相不变，语义不变），和皮肤的明亮度一致
+      int green = l ? 0xFF3E9E73 : 0xFF8FD9B4;
+      int red = l ? 0xFFD0585A : 0xFFF08C93;
+      int epic = l ? 0xFF9466CC : 0xFFC2A5F0;
+      m.put("GREEN", green);
+      m.put("GREEN_HOVER", mix(green, 0xFFFFFFFF, 0.12F));
+      m.put("GREEN_DARK", mix(green, 0xFF000000, 0.2F));
+      m.put("GREEN_TINT", mix(s.card(), green, l ? 0.16F : 0.22F));
+      m.put("GREEN_TINT_HOVER", mix(s.card(), green, l ? 0.24F : 0.30F));
+      m.put("RED", red);
+      m.put("RED_HOVER", mix(red, 0xFFFFFFFF, 0.12F));
+      m.put("RED_TINT", mix(s.card(), red, l ? 0.14F : 0.22F));
+      m.put("RED_TINT_HOVER", mix(s.card(), red, l ? 0.22F : 0.30F));
+      m.put("EPIC", epic);
+      for (java.util.Map.Entry<String, Integer> e : m.entrySet()) {
+         int idx = fieldIndex(e.getKey());
+         if (idx >= 0) {
+            base[idx] = e.getValue();
+         }
+      }
+      return base;
+   }
+
+   private static Skin skinById(String id) {
+      for (Skin skin : SKINS) {
+         if (skin.id().equals(id)) {
+            return skin;
+         }
+      }
+      return SKINS.get(1);
+   }
+
+   /** 某套皮肤里某个调色板字段的颜色（菜单色块预览用）。 */
+   public static int skinColor(String id, String field) {
+      int idx = fieldIndex(field);
+      int[] values = skinValues.get(skinById(id).id());
+      return idx < 0 || values == null ? 0xFF000000 : values[idx];
+   }
+
+   public static String currentSkin() {
+      return currentSkin;
+   }
+
+   /** 立即切到指定皮肤（不播过渡，用于启动时读取配置）。 */
+   public static void applySkin(String id) {
+      Skin skin = skinById(id);
+      currentSkin = skin.id();
+      dark = !skin.light();
+      toValues = skinValues.get(skin.id());
+      fromValues = toValues;
+      toLight = skin.light() ? 1.0F : 0.0F;
+      fromLight = toLight;
+      themeT = 1.0F;
+      themeLastNs = 0L;
+      writePalette();
+   }
+
+   /** 切到指定皮肤并播放渐变过渡（过渡途中再切换，会从当前的中间色继续过渡）。 */
+   public static void animateSkin(String id) {
+      Skin skin = skinById(id);
+      if (skin.id().equals(currentSkin) && themeT >= 1.0F) {
+         return;
+      }
+      fromValues = snapshot();
+      fromLight = themeProgress();
+      currentSkin = skin.id();
+      dark = !skin.light();
+      toValues = skinValues.get(skin.id());
+      toLight = skin.light() ? 1.0F : 0.0F;
+      themeT = 0.0F;
+      themeLastNs = System.nanoTime();
+   }
+
+   private static int[] snapshot() {
+      int[] out = new int[paletteFields.length];
+      for (int i = 0; i < paletteFields.length; i++) {
+         try {
+            out[i] = paletteFields[i].getInt(null);
+         } catch (IllegalAccessException e) {
+            out[i] = toValues[i];
+         }
+      }
+      return out;
+   }
+
+   /** 兼容旧接口：日间 / 夜间。 */
+   public static void applyTheme(boolean toDark) {
+      applySkin(toDark ? "dark" : "light");
+   }
+
+   public static void animateTheme(boolean toDark) {
+      animateSkin(toDark ? "dark" : "light");
+   }
+
+   /** 过渡进行中时推进插值；每帧调用一次（多次调用也安全，按真实时间推进）。 */
+   public static void tickTheme() {
+      if (themeT >= 1.0F) {
+         return;
+      }
+      long now = System.nanoTime();
+      float dt = themeLastNs == 0L ? 16.0F : Math.min(50.0F, (now - themeLastNs) / 1_000_000.0F);
+      themeLastNs = now;
+      themeT = Math.min(1.0F, themeT + dt / THEME_MS);
+      writePalette();
+   }
+
+   /** 当前“明度”：0 = 深色底，1 = 浅色底（过渡中为中间值，已缓动）。 */
+   public static float themeProgress() {
+      float e = themeT * themeT * (3.0F - 2.0F * themeT);
+      return fromLight + (toLight - fromLight) * e;
+   }
+
+   /** 主题过渡是否还在进行。 */
+   public static boolean themeAnimating() {
+      return themeT < 1.0F;
+   }
+
+   private static void writePalette() {
+      // 缓入缓出：首尾慢、中间快，变色过程看起来更柔和
+      float e = themeT * themeT * (3.0F - 2.0F * themeT);
+      for (int i = 0; i < paletteFields.length; i++) {
+         int v = e >= 1.0F ? toValues[i] : mix(fromValues[i], toValues[i], e);
+         try {
+            paletteFields[i].setInt(null, v);
+         } catch (IllegalAccessException ignored) {
+         }
+      }
    }
 
    // =========================================================== 基础工具

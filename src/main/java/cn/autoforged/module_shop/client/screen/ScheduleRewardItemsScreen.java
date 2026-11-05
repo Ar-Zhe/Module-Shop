@@ -72,6 +72,19 @@ public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu
         super.init();
         int x = this.leftPos;
         int y = this.topPos;
+        this.skia = cn.autoforged.module_shop.client.ui.AtomUi.available();
+        if (this.skia) {
+            String keep = this.moneyBox == null ? Long.toString(Math.max(0L, currentMoney()))
+                    : this.moneyBox.getValue();
+            this.moneyBox = new EditBox(this.font, x + LIST_X + 5, y + 126, LIST_W - 10, 10,
+                    Component.translatable("gui.module_shop.grant.amount"));
+            this.moneyBox.setBordered(false);
+            this.moneyBox.setMaxLength(12);
+            this.moneyBox.setFilter(text -> text.isEmpty() || text.matches("\\d{1,12}"));
+            this.moneyBox.setValue(keep);
+            this.addRenderableWidget(this.moneyBox);
+            return;
+        }
         this.moneyBox = new EditBox(this.font, x + LIST_X + 1, y + 122, LIST_W - 2, 16,
                 Component.translatable("gui.module_shop.grant.amount"));
         this.moneyBox.setMaxLength(12);
@@ -136,6 +149,10 @@ public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu
     protected void renderBg(GuiGraphics g, float partialTick, int mouseX, int mouseY) {
         int x = this.leftPos;
         int y = this.topPos;
+        if (this.skia) {
+            skBg(g, x, y, mouseX, mouseY);
+            return;
+        }
         Bricks.panel(g, x, y, PANEL_W, PANEL_H);
         // 左侧：3×9 发放槽（与物品发放完全一致）
         for (int row = 0; row < 3; row++) {
@@ -157,6 +174,85 @@ public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu
         drawWrapped(g, x + LIST_X, y + 46, LIST_W, currentItemsText(), IOStyle.TEXT_2);
         small(g, x + LIST_X, y + 112, Component.translatable("gui.module_shop.grant.amount_label"));
         small(g, x + LIST_X, y + 140, Component.translatable("gui.module_shop.schedule.reward_save_hint"));
+    }
+
+    // ------------------------------------------------------------------ Skija（只换绘制）
+
+    private boolean skia;
+
+    private void skBg(GuiGraphics g, int x, int y, int mouseX, int mouseY) {
+        cn.autoforged.module_shop.client.ui.render.SkiaFrame.draw(g, c -> {
+            SkiaDialog.bare(c, x, y, PANEL_W, PANEL_H);
+            cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, Component.translatable(
+                            "gui.module_shop.schedule.reward_items_title", LocalDate.ofEpochDay(day()).toString())
+                            .getString(), cn.autoforged.module_shop.client.ui.AtomUi.BOLD,
+                    cn.autoforged.module_shop.client.ui.render.Text.BODY, IOStyle.TEXT, x + 8, y + 9, PANEL_W - 16,
+                    cn.autoforged.module_shop.client.ui.render.Text.Align.LEFT);
+            for (int i = 0; i < 27; i++) {
+                SkiaDialog.slotFrame(c, x + 8 + (i % 9) * 18, y + 18 + (i / 9) * 18);
+            }
+            SkiaDialog.paragraph(c, Component.translatable("gui.module_shop.schedule.reward_items_hint").getString(),
+                    x + 8, y + 78, 164, cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_2, 3,
+                    false);
+            SkiaDialog.small(c, this.playerInventoryTitle.getString(), x + 8, y + GrantMenu.INVENTORY_Y - 6, 160,
+                    IOStyle.TEXT_3);
+            SkiaDialog.playerSlots(c, x + 8, y + GrantMenu.INVENTORY_Y);
+            float rx = x + LIST_X;
+            SkiaDialog.card(c, rx - 4, y + 14, LIST_W + 8, 192);
+            SkiaDialog.small(c, Component.translatable("gui.module_shop.schedule.reward_current").getString(), rx,
+                    y + 24, LIST_W, IOStyle.TEXT_2);
+            float ty = y + 32;
+            ty += SkiaDialog.paragraph(c, Component.translatable("gui.module_shop.schedule.reward_money_line",
+                            ClientShopData.money(currentMoney())).getString(), rx, ty, LIST_W,
+                    cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.ORANGE, 2, false) + 2;
+            SkiaDialog.paragraph(c, currentItemsText(), rx, ty, LIST_W,
+                    cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_2, 6, false);
+            SkiaDialog.small(c, Component.translatable("gui.module_shop.grant.amount_label").getString(), rx, y + 114,
+                    LIST_W, IOStyle.TEXT_2);
+            SkiaDialog.fieldFrame(c, rx, y + 122, LIST_W, 16, this.moneyBox.isFocused()); SkiaDialog.themeBox(this.moneyBox);
+            SkiaDialog.paragraph(c, Component.translatable("gui.module_shop.schedule.reward_save_hint").getString(),
+                    rx, y + 142, LIST_W, cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_3, 3,
+                    false);
+            SkiaDialog.flatButton(c, rx, y + 178, 86, 20, Component.translatable("gui.module_shop.schedule.save")
+                    .getString(), cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, true, mouseX, mouseY);
+            SkiaDialog.flatButton(c, rx + 90, y + 178, 56, 20,
+                    Component.translatable("gui.module_shop.schedule.cancel").getString(),
+                    cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, mouseX, mouseY);
+        });
+    }
+
+    @Override
+    protected void renderLabels(GuiGraphics g, int mouseX, int mouseY) {
+        if (!this.skia) {
+            super.renderLabels(g, mouseX, mouseY);
+        }
+    }
+
+    @Override
+    public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        super.render(g, mouseX, mouseY, partialTick);
+        if (this.skia) {
+            this.renderTooltip(g, mouseX, mouseY);
+        }
+    }
+
+    @Override
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (this.skia && button == 0) {
+            int x = this.leftPos;
+            int y = this.topPos;
+            if (IOStyle.inside(x + LIST_X, y + 178, 86, 20, mouseX, mouseY)) {
+                Bricks.click();
+                save();
+                return true;
+            }
+            if (IOStyle.inside(x + LIST_X + 90, y + 178, 56, 20, mouseX, mouseY)) {
+                Bricks.click();
+                finish(false);
+                return true;
+            }
+        }
+        return super.mouseClicked(mouseX, mouseY, button);
     }
 
     /** 0.8 倍小字号，带自动换行（右侧栏只有 146px 宽）。 */
