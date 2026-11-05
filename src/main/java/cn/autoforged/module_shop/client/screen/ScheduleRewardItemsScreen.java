@@ -23,7 +23,19 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * 以及「发送」改成「保存」（写进该日程的奖励配置）。保存时服务端会先清空槽位再落库，
  * 所以既不会复制物品，也不会把已发放的物品退回管理员背包。
  */
-public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu> {
+public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu>
+        implements SkiaContainerBackground.Painter {
+
+    @Override
+    public boolean usesSkiaBackground() {
+        return this.skia;
+    }
+
+    @Override
+    public void paintSkiaBackground(GuiGraphics g, int mouseX, int mouseY) {
+        skBg(g, this.leftPos, this.topPos, mouseX, mouseY);
+    }
+
     private static final int PANEL_W = 336;
     private static final int PANEL_H = 236;
     private static final int LIST_X = 182;
@@ -150,8 +162,7 @@ public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu
         int x = this.leftPos;
         int y = this.topPos;
         if (this.skia) {
-            skBg(g, x, y, mouseX, mouseY);
-            return;
+            return;   // Skija 底板在 paintSkiaBackground 里画（见 SkiaContainerBackground）
         }
         Bricks.panel(g, x, y, PANEL_W, PANEL_H);
         // 左侧：3×9 发放槽（与物品发放完全一致）

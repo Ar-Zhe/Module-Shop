@@ -37,7 +37,19 @@ import net.minecraft.world.item.ItemStack;
  *     一眼就知道该往箱子里放什么。</li>
  * </ul>
  */
-public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> implements JeiHoverSource {
+public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu>
+        implements JeiHoverSource, SkiaContainerBackground.Painter {
+
+    @Override
+    public boolean usesSkiaBackground() {
+        return this.skia;
+    }
+
+    @Override
+    public void paintSkiaBackground(GuiGraphics g, int mouseX, int mouseY) {
+        skBg(g, this.leftPos, this.topPos);
+    }
+
     /** 面板宽度：左边 178（出货箱 + 背包）+ 间距 + 右边 160（可卖清单）。 */
     private static final int PANEL_W = 342;
     /** 右侧清单区域。 */
@@ -266,8 +278,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         int x = this.leftPos;
         int y = this.topPos;
         if (this.skia) {
-            skBg(g, x, y);
-            return;
+            return;   // Skija 底板在 SkiaContainerBackground 里画（避免被其它模组的暗色背景盖住）
         }
         Bricks.panel(g, x, y, this.imageWidth, this.imageHeight);
         int rows = Math.max(1, (getMenu().binSlots() + 8) / 9);
