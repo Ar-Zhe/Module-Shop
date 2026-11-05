@@ -1,6 +1,6 @@
 # Module Shop 公共 API · 开发者使用文档（API 1.2.0）
 
-> 适用：`module_shop` **1.0.0**（MC 1.21.1 / NeoForge 21.1.248）
+> 适用：`module_shop` **1.0.0** 起（MC 1.21.1 / NeoForge 21.1.248）；附属页面需 1.0.3+，皮肤接口（API 1.2）需 1.0.4+
 > API 版本：`1.2.0`（`ApiVersion.API_VERSION`，与模组版本独立；1.1.0 新增客户端扩展点 `ShopModules`，见第 10 节；
 > 1.2.0 新增 `ShopTheme` 的皮肤支持：渐变端点、柔光、弹窗底板，见第 10 节「皮肤」）
 
@@ -10,7 +10,7 @@
 // 你的模组 build.gradle：只编译期依赖，运行期由服务端提供
 // 推荐只对「公共 API jar」编译（构建主体时自动产出 build/libs/module_shop-<版本>-api.jar，
 // 只含 cn.autoforged.module_shop.api.**）：这样你的代码在编译期就碰不到内部实现。
-compileOnly files('libs/module_shop-1.0.3-api.jar')
+compileOnly files('libs/module_shop-1.0.4-api.jar')
 
 // neoforge.mods.toml：声明依赖，保证加载顺序
 [[dependencies.yourmod]]
@@ -248,7 +248,7 @@ public final class MyFeaturePage implements AddonPage {
 | **跨版本兼容** | API 与 UI 套件在同一主版本（1.x）内**只增不改**：附属对 1.0.3 编译，在之后的 1.x 主体上不用重新发布 |
 | 出错兜底 | 附属页面抛异常或调用了不存在的方法（`LinkageError`）时，商店停用该页面、记日志并打开回退界面，商店本身不受影响 |
 
-### 皮肤（API 1.2）
+### 皮肤（1.0.4+ / API 1.2）
 
 玩家可以在商店右上角切换界面皮肤：日间、夜间，以及柔彩系列（樱糖 / 薄荷 / 雾蓝 / 奶茶 / 夜樱）。
 皮肤除了换颜色，还会给面板、主按钮、选中块加上**渐变**和**柔光**。切换时所有颜色约 0.4 秒平滑过渡，

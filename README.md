@@ -19,6 +19,9 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 > **1.0.3 起界面改用 [AtomLib](https://github.com/NoWordz/AtomLib)（Skija）绘制**：12 个页面全部重绘（翻牌动画、签到月历、
 > 购物城、管理面板等），支持中文输入法；AtomLib 只带 Windows 原生库，其它平台自动回退到旧版界面，功能不受影响。
 > 同时开放了**附属模组接口**：附属可以把自己的功能挂进商店侧栏、直接画在内容区（示例：[module-shop: Red envelope](https://github.com/ChatMiaoPT-Meow/Module-Shop-RedPacket)）。
+>
+> **1.0.4**：外壳与 22 个次级界面也改用 AtomLib 绘制，加入动效；新增**界面皮肤**（日间 / 夜间 / 樱糖 / 薄荷 / 雾蓝 / 奶茶 / 夜樱，
+> 带渐变与柔光，右上角切换），主面板与弹窗改为半透明。
 
 ---
 
@@ -71,12 +74,12 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 
 ## 安装
 
-1. 服务端：把 `module_shop-1.0.3.jar` 放进 `mods/`，重启（服务端**不需要** AtomLib）。
+1. 服务端：把 `module_shop-1.0.4.jar` 放进 `mods/`，重启（服务端**不需要** AtomLib）。
 2. 客户端：**玩家也必须安装同一个 jar**（商店界面是客户端代码），另外安装前置
    [AtomLib 0.1.0-beta](https://github.com/NoWordz/AtomLib/releases/tag/v0.1.0-beta-beta3)（`atomlib-1.21.1-neoforge-0.1.0-beta.jar`）。
    AtomLib 只支持 Windows x64 / ARM64；macOS / Linux 客户端会自动使用旧版界面。
 3. 客户端与服务端都启动后执行 `/shop` 打开界面；管理员用 `/shop admin` 打开设置页，
-   或在商店界面**右下角**点小按钮「商店设置」。
+   或在商店界面**右上角**点「商店设置」。界面皮肤在右上角的太阳 / 月亮按钮里切换（每个玩家各自保存）。
 
 > 版本要求：Minecraft 1.21.1 / NeoForge 21.1.x（已在 Arclight 1.21.1 混合服务端实测）。
 >
@@ -86,8 +89,8 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 
 ```bash
 ./gradlew build          # Windows: gradlew.bat build
-# 产物：build/libs/module_shop-1.0.3.jar      主模组
-#       build/libs/module_shop-1.0.3-api.jar  公共 API + UI 套件（给附属编译用）
+# 产物：build/libs/module_shop-1.0.4.jar      主模组
+#       build/libs/module_shop-1.0.4-api.jar  公共 API + UI 套件（给附属编译用）
 # 首次构建会自动下载 AtomLib 发布包到 .atomlib/ 并做 SHA-256 校验（版本与校验值见 gradle.properties）
 
 # 需要一个带 KubeJS 桥接（脚本全局 ModuleShop）的 jar：
