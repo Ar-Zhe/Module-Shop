@@ -241,10 +241,10 @@ public final class MyFeaturePage implements AddonPage {
 | id | `[a-z0-9_]{1,48}`；与内置模块重名时内置优先，附属条目被忽略 |
 | 排序 / 移除 | 新条目默认排在侧栏末尾；管理员可在「编辑布局」里拖动或移除，和内置模块一样持久化 |
 | AtomLib | 只带 Windows 原生库；其它平台商店整体走旧版绘制，附属页面也随之改用回退界面 |
-| 编译依赖 | `module_shop-<版本>-api.jar` + AtomLib jar + Skija jar（均 `compileOnly`）；可参考红包附属的 `build.gradle`：从主体的 `gradle.properties` 自动推出版本与路径 |
+| 编译依赖 | `module_shop-<版本>-api.jar` + AtomLib jar + Skija jar（均 `compileOnly`）；可参考红包附属的 `build.gradle`：通过 `module_shop_version` 指定主体版本，API jar 放进 `libs/` 或用 `-Pmodule_shop_root` 指向本地主体仓库 |
 | 服务端逻辑 | 扩展点只负责入口；收发数据用你自己的网络包，动钱 / 发物品走上面的公共 API |
 | 版本检查 | `ApiVersion` 的常量会被 javac 内联成编译时的值；运行时判断请用 `ApiVersion.describe()` |
 | **跨版本兼容** | API 与 UI 套件在同一主版本（1.x）内**只增不改**：附属对 1.0.3 编译，在之后的 1.x 主体上不用重新发布 |
 | 出错兜底 | 附属页面抛异常或调用了不存在的方法（`LinkageError`）时，商店停用该页面、记日志并打开回退界面，商店本身不受影响 |
 
-完整示例：[module-shop: Red envelope（拼手气红包）](https://github.com/ChatMiaoPT-Meow/Module-Shop/tree/main/addons/red-packet)。
+完整示例：[module-shop: Red envelope（拼手气红包）](https://github.com/ChatMiaoPT-Meow/Module-Shop-RedPacket)。
