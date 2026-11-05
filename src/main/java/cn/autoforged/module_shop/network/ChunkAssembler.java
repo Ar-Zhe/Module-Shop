@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>同一组的每个包带 {@code syncId}（一次发送一个自增 id）+ {@code index}/{@code total}；</li>
  *   <li>网络线程按顺序投递，这里仍然按 index 落位，乱序也能拼；</li>
  *   <li>服务端要为**每个玩家**各留一份（多人同时操作时不能串包），客户端只需一份；</li>
- *   <li>超时（{@link #TIMEOUT_MS}）或超量（{@link #MAX_TOTAL}）就整组丢弃 ——
+ *   <li>超时（{@link #TIMEOUT_MS}）或超量（构造参数 maxTotal）就整组丢弃 ——
  *       宁可这次不同步（下一次快照会重发），也不要因为半截数据把客户端搞崩。</li>
  * </ul>
  */
@@ -21,9 +21,19 @@ public final class ChunkAssembler {
     /** 一组分片最多等多久（毫秒）。 */
     private static final long TIMEOUT_MS = 30_000L;
     /** 一组分片拼起来最多多少字节（压缩后）。 */
-    private static final long MAX_TOTAL = 64L * 1024L * 1024L;
+    private static final long DEFAULT_MAX_TOTAL = 64L * 1024L * 1024L;
 
     private final Map<Integer, Group> groups = new ConcurrentHashMap<>();
+    /** 本组装器允许的单组最大字节数（服务端收玩家上报时用更小的值，见 {@link NbtTransport#SERVERBOUND_MAX_BYTES}）。 */
+    private final long maxTotal;
+
+    public ChunkAssembler() {
+        this(DEFAULT_MAX_TOTAL);
+    }
+
+    public ChunkAssembler(long maxTotal) {
+        this.maxTotal = maxTotal;
+    }
 
     /**
      * 收下一片。
@@ -36,7 +46,7 @@ public final class ChunkAssembler {
         }
         if (total == 1) {
             // 单包（绝大多数操作都是）：不占缓存，直接给出去。
-            return part.length > MAX_TOTAL ? null : part;
+            return part.length > this.maxTotal ? null : part;
         }
         long now = System.currentTimeMillis();
         this.groups.entrySet().removeIf(e -> now - e.getValue().stamp > TIMEOUT_MS);
@@ -56,7 +66,7 @@ public final class ChunkAssembler {
                 group.received++;
                 group.size += part.length;
             }
-            if (group.size > MAX_TOTAL) {
+            if (group.size > this.maxTotal) {
                 this.groups.remove(id);
                 return null;
             }

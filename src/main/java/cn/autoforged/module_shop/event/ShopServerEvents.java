@@ -48,6 +48,8 @@ public final class ShopServerEvents {
             // 购物城：按「库存设置」的周期整店刷新库存（off 时立刻返回）。
             ShopManager.tickMallRefresh(server);
         }
+        // 放在最后：把本 tick 里所有 broadcastSnapshots 请求合并成一次下发。
+        ShopManager.flushBroadcastSnapshots(server);
     }
 
     @SubscribeEvent
@@ -61,6 +63,7 @@ public final class ShopServerEvents {
     public static void onLogout(PlayerEvent.PlayerLoggedOutEvent event) {
         if (event.getEntity() instanceof ServerPlayer player) {
             ShopManager.onLogout(player);
+            cn.autoforged.module_shop.network.ModNetwork.forgetPlayer(player.getUUID());
         }
     }
 
