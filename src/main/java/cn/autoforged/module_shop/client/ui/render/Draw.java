@@ -38,6 +38,26 @@ public final class Draw {
         canvas.drawRRect(RRect.makeXYWH(x + half, y + half, w - width, h - width, Math.max(0.0F, radius - half)), STROKE);
     }
 
+    private static final Paint SHADOW = new Paint().setAntiAlias(true);
+    private static final java.util.Map<Integer, io.github.humbleui.skija.MaskFilter> BLURS = new java.util.HashMap<>();
+
+    /**
+     * 柔和投影：在 (x, y + dy) 处画一块模糊过的圆角矩形。blur 为模糊半径（GUI 像素）。
+     * 调用方要在面板本体之前画。
+     */
+    public static void shadow(Canvas canvas, float x, float y, float w, float h, float radius, float blur, float dy,
+                              int color) {
+        if (w <= 0 || h <= 0 || (color >>> 24) == 0) {
+            return;
+        }
+        int key = Math.max(1, Math.round(blur * 4.0F));
+        io.github.humbleui.skija.MaskFilter mf = BLURS.computeIfAbsent(key, k ->
+                io.github.humbleui.skija.MaskFilter.makeBlur(io.github.humbleui.skija.FilterBlurMode.NORMAL, k / 8.0F));
+        SHADOW.setColor(color).setMaskFilter(mf);
+        canvas.drawRRect(RRect.makeXYWH(x, y + dy, w, h, Math.max(0.0F, radius)), SHADOW);
+        SHADOW.setMaskFilter(null);
+    }
+
     public static void line(Canvas canvas, float x1, float y1, float x2, float y2, float width, int color) {
         LINE.setColor(color).setStrokeWidth(width);
         canvas.drawLine(x1, y1, x2, y2, LINE);

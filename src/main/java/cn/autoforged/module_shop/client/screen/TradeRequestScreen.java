@@ -23,9 +23,6 @@ public class TradeRequestScreen extends SkiaDialog {
     private static final int PANEL_H = 210;
     private static final int ROW_H = 30;
     private static final int PAGE_SIZE = 5;
-    private static final int COLOR_TEXT = IOStyle.TEXT;
-    private static final int COLOR_MUTED = IOStyle.TEXT_2;
-    private static final int COLOR_GOLD = IOStyle.ORANGE;
 
     private int page;
     private int left;
@@ -69,7 +66,7 @@ public class TradeRequestScreen extends SkiaDialog {
         super.render(g, mouseX, mouseY, partialTick);
         int x = this.left;
         int y = this.top;
-        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 8, COLOR_GOLD);
+        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 8, IOStyle.ORANGE);
 
         var requests = ClientShopData.tradeRequests;
         int pages = Math.max(1, (requests.size() + PAGE_SIZE - 1) / PAGE_SIZE);
@@ -82,7 +79,7 @@ public class TradeRequestScreen extends SkiaDialog {
             ClientShopData.TradeRequest request = requests.get(index);
             int rowY = y + 24 + i * ROW_H;
             g.fill(x + 8, rowY, x + PANEL_W - 8, rowY + ROW_H - 4, 0xFF232427);
-            g.fill(x + 8, rowY, x + 10, rowY + ROW_H - 4, COLOR_GOLD);
+            g.fill(x + 8, rowY, x + 10, rowY + ROW_H - 4, IOStyle.ORANGE);
             if (request.from != null && !request.from.isEmpty()) {
                 PlayerInfo info = Minecraft.getInstance().getConnection() == null ? null
                         : Minecraft.getInstance().getConnection().getPlayerInfo(request.from);
@@ -92,33 +89,33 @@ public class TradeRequestScreen extends SkiaDialog {
             }
             // 需求二：整行展示“请求来自谁 + 剩余时间”，进入交易改由独立绿色【接受】按钮触发。
             g.drawString(this.font, Component.translatable("gui.module_shop.trade.request_from", request.from),
-                    x + 36, rowY + 3, COLOR_TEXT, true);
+                    x + 36, rowY + 3, IOStyle.TEXT, true);
             long expireMs = Config.INSTANCE.tradeRequestExpireSeconds.get() * 1000L;
             // 需求二：倒计时数字实时递减——快照里的 age 加上快照到达后的本地流逝时间。
             long elapsed = request.ageMs + Math.max(0L, System.currentTimeMillis() - request.receivedAt);
             long remainSec = Math.max(0L, (expireMs - elapsed + 999L) / 1000L);
             String remain = Component.translatable("gui.module_shop.trade.request_remaining", remainSec).getString();
-            g.drawString(this.font, remain, x + 36, rowY + 14, COLOR_GOLD, false);
+            g.drawString(this.font, remain, x + 36, rowY + 14, IOStyle.ORANGE, false);
             // 需求二：绿色【接受】按钮（进入交易）。
             int acceptX = x + PANEL_W - 112;
             g.fill(acceptX, rowY + 6, acceptX + 46, rowY + 20, 0xFF245E2A);
             g.fill(acceptX, rowY + 6, acceptX + 46, rowY + 7, 0xFF3E9E48);
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.accept"),
-                    acceptX + 23, rowY + 9, COLOR_TEXT);
+                    acceptX + 23, rowY + 9, IOStyle.TEXT);
             // 需求二：保留红色【拒绝】按钮。
             int rejectX = x + PANEL_W - 60;
             g.fill(rejectX, rowY + 6, rejectX + 46, rowY + 20, 0xFF5A2A2A);
             g.fill(rejectX, rowY + 6, rejectX + 46, rowY + 7, 0xFF8A4A4A);
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.decline"),
-                    rejectX + 23, rowY + 9, COLOR_TEXT);
+                    rejectX + 23, rowY + 9, IOStyle.TEXT);
         }
         if (requests.isEmpty()) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.request_empty"),
-                    x + PANEL_W / 2, y + 100, COLOR_MUTED);
+                    x + PANEL_W / 2, y + 100, IOStyle.TEXT_2);
         }
         if (pages > 1) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.page", this.page + 1, pages),
-                    x + PANEL_W / 2, y + PANEL_H - 34, COLOR_MUTED);
+                    x + PANEL_W / 2, y + PANEL_H - 34, IOStyle.TEXT_2);
         }
         drawButton(g, x + 10, y + PANEL_H - 24, 70, 16, Component.translatable("gui.module_shop.back"));
         if (pages > 1) {

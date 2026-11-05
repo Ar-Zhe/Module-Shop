@@ -59,6 +59,8 @@ public final class AtomUi {
             text = new TextService(registry);
             Design.host(ShopDesign.INSTANCE);
             LOGGER.info("[module_shop] AtomLib UI 已就绪");
+            // 读取保存的日间 / 暗色设置（不论最先打开的是商店还是出货箱等次级界面）
+            cn.autoforged.module_shop.client.UITheme.ensureLoaded();
             return true;
         } catch (Throwable t) {
             failure = t;

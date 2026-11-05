@@ -23,9 +23,6 @@ public class TradeSelectScreen extends SkiaDialog {
     private static final int PANEL_H = 224;
     private static final int ROW_H = 30;
     private static final int PAGE_SIZE = 5;
-    private static final int COLOR_TEXT = IOStyle.TEXT;
-    private static final int COLOR_MUTED = IOStyle.TEXT_2;
-    private static final int COLOR_GOLD = IOStyle.ORANGE;
 
     private final List<int[]> rowRects = new ArrayList<>();
     private final List<ClientShopData.OnlinePlayer> currentPagePlayers = new ArrayList<>();
@@ -97,8 +94,8 @@ public class TradeSelectScreen extends SkiaDialog {
         super.render(g, mouseX, mouseY, partialTick);
         int x = this.left;
         int y = this.top;
-        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 8, COLOR_GOLD);
-        g.drawString(this.font, Component.translatable("gui.module_shop.trade.search"), x + 6, y + 30, COLOR_MUTED, false);
+        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 8, IOStyle.ORANGE);
+        g.drawString(this.font, Component.translatable("gui.module_shop.trade.search"), x + 6, y + 30, IOStyle.TEXT_2, false);
 
         List<ClientShopData.OnlinePlayer> players = filtered();
         int pages = Math.max(1, (players.size() + PAGE_SIZE - 1) / PAGE_SIZE);
@@ -111,24 +108,24 @@ public class TradeSelectScreen extends SkiaDialog {
             ClientShopData.OnlinePlayer player = players.get(index);
             int rowY = y + 48 + i * ROW_H;
             g.fill(x + 8, rowY, x + PANEL_W - 8, rowY + ROW_H - 4, 0xFF232427);
-            g.fill(x + 8, rowY, x + 10, rowY + ROW_H - 4, COLOR_GOLD);
+            g.fill(x + 8, rowY, x + 10, rowY + ROW_H - 4, IOStyle.ORANGE);
             if (player.uuid != null) {
                 Skins.drawHead(g, player.uuid, x + 14, rowY + 3, 16);
             }
-            g.drawString(this.font, player.name, x + 36, rowY + 8, COLOR_TEXT, false);
+            g.drawString(this.font, player.name, x + 36, rowY + 8, IOStyle.TEXT, false);
             g.drawString(this.font, Component.translatable(transferMode
                             ? "gui.module_shop.transfer.click_to_transfer"
                             : "gui.module_shop.trade.click_to_trade"),
-                    x + PANEL_W - 100, rowY + 8, COLOR_MUTED, true);
+                    x + PANEL_W - 100, rowY + 8, IOStyle.TEXT_2, true);
             this.rowRects.add(new int[]{x + 8, rowY, PANEL_W - 16, ROW_H - 4, index});
         }
         if (players.isEmpty()) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.no_online"),
-                    x + PANEL_W / 2, y + 110, COLOR_MUTED);
+                    x + PANEL_W / 2, y + 110, IOStyle.TEXT_2);
         }
         if (pages > 1) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.page", this.page + 1, pages),
-                    x + PANEL_W / 2, y + PANEL_H - 34, COLOR_MUTED);
+                    x + PANEL_W / 2, y + PANEL_H - 34, IOStyle.TEXT_2);
         }
         drawButton(g, x + 10, y + PANEL_H - 24, 70, 16, Component.translatable("gui.module_shop.back"));
         // 需求 4：交易请求入口从交易界面移到“选择交易对象”界面（仅交易模式显示）。

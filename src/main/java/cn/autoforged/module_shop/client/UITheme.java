@@ -37,9 +37,11 @@ public final class UITheme {
          } catch (Exception var5) {
          }
 
-         // 需求 2：全界面统一暗色（已移除日间 / 暗色切换按钮），忽略历史上保存的主题设置。
-         dark = true;
-         IOStyle.applyTheme(true);
+         // 测试分支：恢复日间 / 暗色切换（默认暗色）。旧绘制路径只做过暗色，AtomLib 不可用时固定暗色。
+         if (!saved || !cn.autoforged.module_shop.client.ui.AtomUi.available()) {
+            dark = true;
+         }
+         IOStyle.applyTheme(dark);
       }
    }
 
@@ -55,7 +57,7 @@ public final class UITheme {
    public static void setDark(boolean value) {
       ensureLoaded();
       dark = value;
-      IOStyle.applyTheme(dark);
+      IOStyle.animateTheme(dark);
 
       try {
          Path path = configPath();

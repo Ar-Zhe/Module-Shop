@@ -101,6 +101,9 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     /** 页面物品层：Skija 画完内容区后统一用原版绘制物品。 */
     private final ItemOverlay pageItems = new ItemOverlay();
     private final Motion.Clock pageClock = new Motion.Clock();
+    /** 换页过渡时长与开始时间（0 = 没有在过渡）。 */
+    private static final float PAGE_SWITCH_MS = 200.0F;
+    private long pageSwitchNanos;
     private float pageDtMs;
 
     /** 当前页签对应的已迁移页面；没迁移、编辑布局中或 AtomLib 不可用时返回 null（走旧绘制）。 */
@@ -218,9 +221,6 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
      * 文字颜色：不是常量，每帧由 {@link Theme} 按日间/暗色主题刷新（见 render 开头），
      * 这样切换主题后原有全部绘制代码无需改动即可跟随换色。
      */
-    private static int COLOR_TEXT = IOStyle.TEXT;
-    private static int COLOR_MUTED = IOStyle.TEXT_2;
-    private static int COLOR_GOLD = IOStyle.ORANGE;
     private static final int GEAR_TEX_SIZE = 128;
     /** 需求 2：齿轮入口纹理（源文件 user-assets/577940.png，128×128）。 */
     private static final net.minecraft.resources.ResourceLocation GEAR_ICON =
@@ -802,10 +802,8 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             List<String> tabs = builtInVisibleTabs();
             currentTab = tabs.isEmpty() ? TAB_IDS[0] : tabs.get(0);
         }
-        // 主题取色：每帧刷新，切换日间/暗色后本界面所有文字立即跟随。
-        COLOR_TEXT = Theme.text();
-        COLOR_MUTED = Theme.muted();
-        COLOR_GOLD = Theme.gold();
+        // 主题取色：日间 / 暗色切换过渡中时，每帧推进调色板插值。
+        IOStyle.tickTheme();
         // 购物城搜索框：位置跟着面板走；只有购物城页、非编辑模式、非「最近购买」视图时显示。
         if (this.mallSearchBox != null) {
             this.mallSearchBox.setPosition(contentX() + 5, contentY() + 4);
@@ -856,6 +854,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         if (page != this.lastPage) {
             if (this.lastPage != null) {
                 this.lastPage.cancelInput();
+                this.pageSwitchNanos = System.nanoTime();
             }
             this.lastPage = page;
         }
@@ -905,13 +904,38 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     private void renderPage(GuiGraphics g, ShopPage page, int mouseX, int mouseY, boolean shell) {
         PageFrame frame = pageFrame(mouseX, mouseY);
         this.pageItems.begin(mouseX, mouseY, true);
+        // 换页过渡：新页面淡入并从下方 6px 滑上来（物品层同步位移）
+        float switchT = this.pageSwitchNanos == 0L ? 1.0F
+                : Math.min(1.0F, (System.nanoTime() - this.pageSwitchNanos) / 1_000_000.0F / PAGE_SWITCH_MS);
+        float switchE = Motion.easeOutCubic(switchT);
+        float slide = 6.0F * (1.0F - switchE);
         SkiaFrame.draw(g, canvas -> {
             if (shell) {
                 drawShellSkia(canvas, mouseX, mouseY);
             }
-            page.render(canvas, frame);
+            if (switchT >= 1.0F) {
+                page.render(canvas, frame);
+                return;
+            }
+            int saved = canvas.save();
+            Draw.clip(canvas, contentX() - 6, contentY() - 4, contentW() + 12, contentH() + 8);
+            int layer = Draw.beginOpacity(canvas, 0.25F + 0.75F * switchE);
+            try {
+                canvas.translate(0.0F, slide);
+                page.render(canvas, frame);
+            } finally {
+                canvas.restoreToCount(layer);
+                canvas.restoreToCount(saved);
+            }
         });
-        this.pageItems.flush(g, this.font);
+        if (slide > 0.01F) {
+            g.pose().pushPose();
+            g.pose().translate(0.0F, slide, 0.0F);
+            this.pageItems.flush(g, this.font);
+            g.pose().popPose();
+        } else {
+            this.pageItems.flush(g, this.font);
+        }
         ItemStack hovered = this.pageItems.hovered();
         if (!hovered.isEmpty()) {
             this.jeiHover = hovered;
@@ -925,10 +949,16 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
 
     /** 外壳控件的悬停动画值（key → 0..1）。 */
     private final Map<String, Float> shellAnim = new HashMap<>();
+    /** 侧栏选中块当前所在的行（小数，弹簧跟随）；-1 表示还没初始化。 */
+    // 静态：服务端操作后界面会重建，选中块位置要跨实例保留，否则滑动动画会被打断
+    private static float navSelSlot = -1.0F;
+    private static Motion.Spring navSelSpring = new Motion.Spring(0.0F);
 
     private float shellAnim(String key, boolean on, float tauMs) {
+        // 悬停类动画：移入快、移出慢
+        float tau = tauMs == Motion.HOVER_MS && !on ? Motion.HOVER_OUT_MS : tauMs;
         float v = Motion.approach(this.shellAnim.getOrDefault(key, on ? 1.0F : 0.0F), on ? 1.0F : 0.0F,
-                this.pageDtMs, tauMs);
+                this.pageDtMs, tau);
         this.shellAnim.put(key, v);
         return v;
     }
@@ -936,6 +966,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     private void drawShellSkia(io.github.humbleui.skija.Canvas c, int mouseX, int mouseY) {
         int x = left();
         int y = top();
+        Draw.shadow(c, x, y, PANEL_W, PANEL_H, 0.0F, 14.0F, 4.0F, IOStyle.SHADOW_TINT);
         Draw.fill(c, x, y, PANEL_W, PANEL_H, 0.0F, IOStyle.SHEET);
         Draw.fill(c, x + 1, y + 1, SIDEBAR_W - 1, PANEL_H - 2, 0.0F, IOStyle.SIDEBAR);
         Draw.fill(c, x + SIDEBAR_W, y + 1, PANEL_W - SIDEBAR_W - 1, PANEL_H - 2, 0.0F, IOStyle.CONTENT);
@@ -989,24 +1020,57 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             int first = Math.max(0, (int) Math.floor(this.sidebarScrollPx / pitch) - 1);
             int last = Math.min(tabs.size() - 1,
                     (int) Math.ceil((this.sidebarScrollPx + rowsFit * (float) pitch) / pitch));
+            float tabX = x + slotX(0);
+            // easeSlot 每调用一次推进一步换位动画，所以每帧只算一次
+            float[] slots = new float[Math.max(0, last - first + 1)];
+            for (int i = first; i <= last; i++) {
+                slots[i - first] = easeSlot(tabs.get(i), i, k);
+            }
+            // 第一遍：每个页签的底色与描边（悬停高亮）
             for (int i = first; i <= last; i++) {
                 String id = tabs.get(i);
-                float slot = easeSlot(id, i, k);
-                float tx = x + slotX(0);
+                float ty = bandTop + slots[i - first] * pitch - this.sidebarScrollPx;
+                if (ty > bandBottom || ty + TAB_H < bandTop) {
+                    continue;
+                }
+                boolean selected = id.equals(currentTab);
+                boolean hover = !selected && mouseX >= tabX && mouseX < tabX + TAB_W && mouseY >= ty
+                        && mouseY < ty + TAB_H && mouseY >= bandTop && mouseY <= bandBottom;
+                float ht = shellAnim("nav.h." + id, hover, Motion.HOVER_MS);
+                Draw.fill(c, tabX, ty, TAB_W, TAB_H, 2.0F, Draw.lerp(IOStyle.SIDEBAR, IOStyle.ROW_HOVER, ht));
+                Draw.stroke(c, tabX, ty, TAB_W, TAB_H, 2.0F, 1.0F,
+                        Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, ht));
+            }
+            // 选中块：一整块强调色在页签之间滑动（弹簧跟随），而不是旧页签褪色、新页签亮起
+            int selIndex = tabs.indexOf(currentTab);
+            if (selIndex >= 0) {
+                float targetSlot = selIndex >= first && selIndex <= last ? slots[selIndex - first] : selIndex;
+                if (this.navSelSlot < -0.5F) {
+                    this.navSelSlot = targetSlot;
+                    this.navSelSpring = new Motion.Spring(targetSlot);
+                }
+                this.navSelSlot = this.navSelSpring.step(targetSlot, this.pageDtMs, 420.0F, 34.0F);
+            }
+            float selAlpha = shellAnim("nav.sel", selIndex >= 0, 80.0F);
+            if (selAlpha > 0.01F && this.navSelSlot > -0.5F) {
+                float sy = bandTop + this.navSelSlot * pitch - this.sidebarScrollPx;
+                Draw.fill(c, tabX, sy, TAB_W, TAB_H, 2.0F, Draw.alpha(IOStyle.BLUE, selAlpha));
+                Draw.stroke(c, tabX, sy, TAB_W, TAB_H, 2.0F, 1.0F, Draw.alpha(IOStyle.BORDER_HOVER, selAlpha));
+            }
+            // 第二遍：文字、红点、点击区（画在选中块之上）
+            for (int i = first; i <= last; i++) {
+                String id = tabs.get(i);
+                float slot = slots[i - first];
+                float tx = tabX;
                 float ty = bandTop + slot * pitch - this.sidebarScrollPx;
                 if (ty > bandBottom || ty + TAB_H < bandTop) {
                     continue;
                 }
                 boolean selected = id.equals(currentTab);
-                boolean hover = !selected && mouseX >= tx && mouseX < tx + TAB_W && mouseY >= ty && mouseY < ty + TAB_H
-                        && mouseY >= bandTop && mouseY <= bandBottom;
-                float ht = shellAnim("nav.h." + id, hover, Motion.HOVER_MS);
-                float st = shellAnim("nav.s." + id, selected, 80.0F);
-                int bg = Draw.lerp(Draw.lerp(IOStyle.SIDEBAR, IOStyle.ROW_HOVER, ht), IOStyle.BLUE, st);
-                Draw.fill(c, tx, ty, TAB_W, TAB_H, 2.0F, bg);
-                Draw.stroke(c, tx, ty, TAB_W, TAB_H, 2.0F, 1.0F,
-                        Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, Math.max(ht, st)));
-                int fg = Draw.lerp(IOStyle.TEXT, 0xFFFFFFFF, Math.max(st, ht * 0.4F));
+                // 文字颜色按选中块覆盖的程度变白，选中块滑过时文字跟着反色
+                float cover = this.navSelSlot > -0.5F
+                        ? Math.max(0.0F, 1.0F - Math.abs(this.navSelSlot - slot)) * selAlpha : 0.0F;
+                int fg = Draw.lerp(IOStyle.TEXT, 0xFFFFFFFF, cover);
                 Text.drawLine(c, tabLabel(id).getString(), selected ? AtomUi.BOLD : AtomUi.REGULAR, Text.BODY, fg,
                         tx + 9.0F, ty + TAB_H / 2.0F, TAB_W - 17.0F, Text.Align.LEFT);
                 NotificationType badge = switch (id) {
@@ -1047,7 +1111,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         int avatar = 18;
         int ax = bx + 5;
         int ay = by + (PROFILE_H - avatar) / 2;
-        Draw.fill(c, ax - 1, ay - 1, avatar + 2, avatar + 2, 3.0F, 0x33FFFFFF);
+        Draw.fill(c, ax - 1, ay - 1, avatar + 2, avatar + 2, 3.0F, Draw.alpha(IOStyle.TEXT, 0.2F));
         this.pageItems.addCustom(ax, ay, avatar, avatar, (g, font) -> {
             var player = Minecraft.getInstance().player;
             if (player != null) {
@@ -1071,7 +1135,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                 ClientShopData.money(ClientShopData.balance)).getString();
         boolean balanceHover = shellRectHover(textX - 2, by + 17, textMax + 4, 12, mouseX, mouseY);
         float hb = shellAnim("balance", balanceHover, Motion.HOVER_MS);
-        int color = Draw.lerp(Draw.lerp(IOStyle.BLUE, IOStyle.BLUE_HOVER, hb), 0xFFFFFFFF, flash * 0.6F);
+        int color = Draw.lerp(Draw.lerp(IOStyle.BLUE, IOStyle.BLUE_HOVER, hb), IOStyle.TEXT, flash * 0.6F);
         float bwidth = Text.drawLine(c, balance, AtomUi.BOLD, 7.0F, color, textX, by + 23.0F, textMax, Text.Align.LEFT);
         if (hb > 0.01F) {
             Draw.fill(c, textX, by + 27.5F, bwidth * hb, 0.8F, 0.0F, Draw.alpha(color, 0.7F));
@@ -1080,6 +1144,36 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             this.pendingTextTip = Component.translatable("gui.module_shop.bill.open_tip");
         }
         addRegion(Math.round(textX) - 2, by + 17, Math.round(bwidth) + 4, 12, "open_bill", null, null);
+    }
+
+    /**
+     * 主题图标：p = 0 是月亮（圆被“咬掉”一块），p = 1 是太阳（完整小圆 + 8 道光芒）。
+     * 过渡时咬痕移出、光芒旋转着长出来。bg 是按钮底色（用来画咬痕）。
+     */
+    private static void drawThemeIcon(io.github.humbleui.skija.Canvas c, float cx, float cy, int color, int bg) {
+        float p = IOStyle.themeProgress();
+        float r = 3.6F - 1.0F * p;
+        Draw.fill(c, cx - r, cy - r, r * 2, r * 2, r, color);
+        // 月亮的咬痕：从右上角滑出
+        float bite = 1.0F - p;
+        if (bite > 0.01F) {
+            float br = 3.0F;
+            float bx = cx + 1.6F + 3.5F * p;
+            float by = cy - 1.6F - 3.5F * p;
+            Draw.fill(c, bx - br, by - br, br * 2, br * 2, br, bg);
+        }
+        // 太阳光芒：旋转着长出
+        if (p > 0.01F) {
+            double spin = (1.0F - p) * Math.PI / 2.0;
+            for (int i = 0; i < 8; i++) {
+                double a = spin + i * Math.PI / 4.0;
+                float inner = r + 1.3F;
+                float outer = inner + 1.6F * p;
+                Draw.line(c, cx + (float) Math.cos(a) * inner, cy + (float) Math.sin(a) * inner,
+                        cx + (float) Math.cos(a) * outer, cy + (float) Math.sin(a) * outer, 1.0F,
+                        Draw.alpha(color, p));
+            }
+        }
     }
 
     private static boolean shellRectHover(float x, float y, float w, float h, int mx, int my) {
@@ -1109,10 +1203,24 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             this.pendingTextTip = Component.translatable("gui.module_shop.notify.settings_title");
         }
 
+        // 日间 / 暗色切换（太阳 ⇄ 月亮，图标随主题过渡一起变形）
+        int themeX = bellX - 20;
+        boolean themeHover = shellRectHover(themeX, closeY, 14, 14, mouseX, mouseY);
+        float hth = shellAnim("theme", themeHover, Motion.HOVER_MS);
+        Draw.fill(c, themeX, closeY, 14, 14, 2.0F, Draw.lerp(IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER, hth));
+        Draw.stroke(c, themeX, closeY, 14, 14, 2.0F, 1.0F, Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, hth));
+        drawThemeIcon(c, themeX + 7.0F, closeY + 7.0F, Draw.lerp(IOStyle.TEXT, IOStyle.BLUE, hth),
+                Draw.lerp(IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER, hth));
+        addRegion(themeX, closeY, 14, 14, "toggle_theme", null, null);
+        if (themeHover) {
+            this.pendingTextTip = Component.translatable(UITheme.isDark()
+                    ? "gui.module_shop.theme.to_light" : "gui.module_shop.theme.to_dark");
+        }
+
         // 管理员药丸：编辑布局 / 商店设置（从右往左排）
         int pillH = 16;
         int pillY = y + 6;
-        float px = closeX - 26;
+        float px = themeX - 6;
         if (ClientShopData.canAdmin) {
             for (String action : new String[]{"sidebar_edit", "admin_open"}) {
                 String label = Component.translatable("sidebar_edit".equals(action)
@@ -1167,7 +1275,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         int textMax = bx + bw - 5 - textX;
         String name = ClientShopData.playerName.isEmpty() ? "-" : ClientShopData.playerName;
         g.drawString(this.font, IOStyle.ellipsize(this.font, Component.literal(name), textMax).getString(),
-                textX, by + 6, COLOR_TEXT, false);
+                textX, by + 6, IOStyle.TEXT, false);
         // 余额（第二行，强调色）：点它进账单。
         // 用 **0.8 倍字号**绘制：数字再长也稳稳在信息块边框以内（以前 1.0 倍字号 + 省略号，
         // 看着像是顶到了边框上）；可用宽度也按缩放折算，能显示的数字更多。
@@ -1258,14 +1366,14 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                 ? Component.translatable("gui.module_shop.admin_title",
                         tabLabelWithOriginal(adminMode))
                 : tabLabel(currentTab);
-        g.drawString(this.font, headerTitle, contentX, titleY, COLOR_TEXT, false);
+        g.drawString(this.font, headerTitle, contentX, titleY, IOStyle.TEXT, false);
         // 关闭（右上角的 ×）：直角方块 + 1px 硬边框
         int closeX = x + PANEL_W - 22;
         int closeY = y + 7;
         boolean closeHover = IOStyle.inside(closeX, closeY, 14, 14, mouseX, mouseY);
         IOStyle.rounded(g, closeX, closeY, 14, 14, 0, closeHover ? IOStyle.GRAY_BTN_HOVER : IOStyle.GRAY_BTN);
         IOStyle.ring(g, closeX, closeY, 14, 14, 0, IOStyle.BORDER_DIM);
-        int cc = closeHover ? COLOR_TEXT : COLOR_MUTED;
+        int cc = closeHover ? IOStyle.TEXT : IOStyle.TEXT_2;
         for (int i = 0; i < 6; i++) {
             g.fill(closeX + 4 + i, closeY + 4 + i, closeX + 5 + i, closeY + 5 + i, cc);
             g.fill(closeX + 4 + i, closeY + 9 - i, closeX + 5 + i, closeY + 10 - i, cc);
@@ -2052,7 +2160,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     private void drawDaily(GuiGraphics g, int cx, int cy, int cw, int ch, int mx, int my, float partialTick) {
         int count = ClientShopData.dailyShop.size();
         if (count == 0) {
-            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.empty"), cx + cw / 2, cy + 40, COLOR_MUTED);
+            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.empty"), cx + cw / 2, cy + 40, IOStyle.TEXT_2);
             return;
         }
         // 需求 8：牌数超过 6 张时改为每行 1 个横向长条（滚轮整行滚动、内容自适应）。
@@ -2099,14 +2207,14 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                 g.renderItem(entry.stack, itemX, cardY + 6);
                 g.renderItemDecorations(this.font, entry.stack, itemX, cardY + 6);
                 IOStyle.centerAt(g, this.font, Component.literal(ClientShopData.money(entry.price)),
-                        x + cardW / 2, cardY + 24, COLOR_TEXT);
+                        x + cardW / 2, cardY + 24, IOStyle.TEXT);
                 // 剩余数量（小字）+ 品质（品质色）
                 int remaining = entry.remaining();
                 g.pose().pushPose();
                 g.pose().translate(x + cardW / 2.0F, cardY + 34, 0.0F);
                 g.pose().scale(0.8F, 0.8F, 1.0F);
                 IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.remaining", remaining),
-                        0, 0, remaining > 0 ? COLOR_MUTED : IOStyle.RED);
+                        0, 0, remaining > 0 ? IOStyle.TEXT_2 : IOStyle.RED);
                 g.pose().popPose();
                 IOStyle.centerAt(g, this.font, Component.translatable(entry.rarity.translationKey()),
                         x + cardW / 2, cardY + 42, entry.rarity.color());
@@ -2284,7 +2392,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     private void drawBuyback(GuiGraphics g, int cx, int cy, int cw, int ch, int mx, int my) {
         var list = ClientShopData.dailyBuyback;
         if (list.isEmpty()) {
-            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.empty"), cx + cw / 2, cy + 40, COLOR_MUTED);
+            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.empty"), cx + cw / 2, cy + 40, IOStyle.TEXT_2);
             return;
         }
         // 需求 5：一行一个共 6 行横条，最左物品图标、中间收购价、右侧还能收购的数量。
@@ -2323,13 +2431,13 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             int priceLeft = cx + cw - 12 - Math.round(this.font.width(price) * numScale);
             Component itemName = IOStyle.ellipsize(this.font, plainNameComponent(entry.stack),
                     Math.max(24, priceLeft - 6 - (cx + 36)));
-            g.drawString(this.font, itemName, cx + 36, textY, COLOR_TEXT, false);
-            drawLabelRight(g, cx + cw - 12, blockTop, Component.literal(price), COLOR_GOLD, numScale);
+            g.drawString(this.font, itemName, cx + 36, textY, IOStyle.TEXT, false);
+            drawLabelRight(g, cx + cw - 12, blockTop, Component.literal(price), IOStyle.ORANGE, numScale);
             // 需求 9：剩余可收购数量来自该物品自己的上限。
             int remaining = entry.remaining();
             String remainText = Component.translatable("gui.module_shop.buyback_remaining", remaining).getString();
             drawLabelRight(g, cx + cw - 12, blockTop + lineH, Component.literal(remainText),
-                    remaining > 0 ? COLOR_MUTED : IOStyle.RED, numScale);
+                    remaining > 0 ? IOStyle.TEXT_2 : IOStyle.RED, numScale);
             CompoundTag extra = new CompoundTag();
             extra.putInt("index", i);
             // 需求 9：点击不立即出售，而是弹出数量输入，让玩家自己调节卖出的数量。
@@ -2362,7 +2470,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                     : Component.translatable("gui.module_shop.buyback_bonus_progress",
                             ClientShopData.money(ClientShopData.buybackBonus), ClientShopData.buybackLeft);
             drawBarLabel(g, cx + 4, barLabelY, adminLeft - BAR_GAP, bonusLine,
-                    ClientShopData.buybackBonusDone ? COLOR_MUTED : COLOR_GOLD);
+                    ClientShopData.buybackBonusDone ? IOStyle.TEXT_2 : IOStyle.ORANGE);
         }
         // 付费刷新每日收购：与商店的刷新**完全分开**（各自的次数与价格）。
         boolean canBuybackRefresh = ClientShopData.buybackRefreshCost >= 0L;
@@ -2427,12 +2535,12 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             Bricks.slot(g, cx + 8, y + 5);
             g.renderItem(view.stack, cx + 8, y + 5);
             g.renderItemDecorations(this.font, view.stack, cx + 8, y + 5);
-            g.drawString(this.font, view.stack.getHoverName(), cx + 32, y + 4, COLOR_TEXT, false);
+            g.drawString(this.font, view.stack.getHoverName(), cx + 32, y + 4, IOStyle.TEXT, false);
             String sellerText = Component.translatable("gui.module_shop.auction_seller", view.seller).getString();
             if (view.own) {
                 sellerText = sellerText + " " + Component.translatable("gui.module_shop.auction_mine").getString();
             }
-            g.drawString(this.font, sellerText, cx + 32, y + 15, view.own ? COLOR_GOLD : COLOR_MUTED, false);
+            g.drawString(this.font, sellerText, cx + 32, y + 15, view.own ? IOStyle.ORANGE : IOStyle.TEXT_2, false);
             // 最高出价者：玩家一眼看出自己是不是还在最高价（出价的钱是否还处于冻结中）。
             if (view.currentBid > 0L && view.topBidder != null && !view.topBidder.isEmpty()) {
                 String top = Component.translatable(view.topMe
@@ -2440,7 +2548,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                         : "gui.module_shop.auction_top_bidder", view.topBidder).getString();
                 int topX = cx + cw - 6 - this.font.width(top);
                 if (topX > cx + 32 + this.font.width(sellerText) + 4) {
-                    g.drawString(this.font, top, topX, y + 15, view.topMe ? COLOR_GOLD : COLOR_MUTED, false);
+                    g.drawString(this.font, top, topX, y + 15, view.topMe ? IOStyle.ORANGE : IOStyle.TEXT_2, false);
                 }
             }
             // 需求三：竞拍倒计时实时递减（快照剩余时间减去快照到达后的本地流逝时间）。
@@ -2453,7 +2561,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             if (view.currentBid > 0) {
                 String current = Component.translatable("gui.module_shop.auction_current_bid",
                         ClientShopData.money(view.currentBid)).getString();
-                g.drawString(this.font, current, centerX - this.font.width(current) / 2, y + 4, COLOR_GOLD, false);
+                g.drawString(this.font, current, centerX - this.font.width(current) / 2, y + 4, IOStyle.ORANGE, false);
                 if (view.lastBid > 0) {
                     String last = Component.translatable("gui.module_shop.auction_last_bid",
                             ClientShopData.money(view.lastBid)).getString();
@@ -2464,12 +2572,12 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             } else {
                 String start = Component.translatable("gui.module_shop.auction_start",
                         ClientShopData.money(view.startPrice)).getString();
-                g.drawString(this.font, start, centerX - this.font.width(start) / 2, y + 4, COLOR_GOLD, false);
-                g.drawString(this.font, time, centerX - this.font.width(time) / 2, y + 15, COLOR_MUTED, false);
+                g.drawString(this.font, start, centerX - this.font.width(start) / 2, y + 4, IOStyle.ORANGE, false);
+                g.drawString(this.font, time, centerX - this.font.width(time) / 2, y + 15, IOStyle.TEXT_2, false);
             }
             // 剩余时间固定右上角显示，避免与居中的价格文字重叠。
             if (view.currentBid > 0) {
-                g.drawString(this.font, time, cx + cw - 6 - this.font.width(time), y + 4, COLOR_MUTED, false);
+                g.drawString(this.font, time, cx + cw - 6 - this.font.width(time), y + 4, IOStyle.TEXT_2, false);
             }
             // 需求 3：悬停物品图标时显示名称/附魔/属性/NBT/标签等完整信息。
             if (mx >= cx + 8 && mx < cx + 24 && my >= y + 5 && my < y + 21) {
@@ -2484,7 +2592,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             }
         }
         if (auctions.isEmpty()) {
-            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.auction_empty"), cx + cw / 2, cy + 50, COLOR_MUTED);
+            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.auction_empty"), cx + cw / 2, cy + 50, IOStyle.TEXT_2);
         }
         // 上架按钮
         CompoundTag add = new CompoundTag();
@@ -2498,7 +2606,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             addRegion(cx + 4, barY, 44, 16, "auction_prev", null, null);
             addRegion(cx + 52, barY, 44, 16, "auction_next", null, null);
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.page", auctionPage + 1, pages),
-                    cx + cw / 2, barMid(cy, ch, 9), COLOR_MUTED);
+                    cx + cw / 2, barMid(cy, ch, 9), IOStyle.TEXT_2);
         }
     }
 
@@ -2536,7 +2644,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                 int textLeft = sx + 26;
                 int textRight = sx + cellW - 26;
                 Component priceText = Component.literal(ClientShopData.money(entry.price));
-                drawLabel(g, textLeft, blockTop, priceText, COLOR_GOLD, numScale);
+                drawLabel(g, textLeft, blockTop, priceText, IOStyle.ORANGE, numScale);
                 // 「下架时间」限时时，在价格右侧显示剩余时间（右对齐到 X 按钮左边，放不下就不画）。
                 Component remain = stallRemainText(entry);
                 if (remain != null) {
@@ -2553,7 +2661,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                     stockColor = IOStyle.RED;
                 } else {
                     stockText = Component.translatable("gui.module_shop.stall_stock", entry.stock).getString();
-                    stockColor = COLOR_MUTED;
+                    stockColor = IOStyle.TEXT_2;
                 }
                 int stockY = blockTop + lineH;
                 drawLabel(g, textLeft, stockY, Component.literal(stockText), stockColor, numScale);
@@ -2598,8 +2706,8 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                         ClientShopData.stallExpireAmount);
         Component line2 = Component.translatable("gui.module_shop.stall.expire_current", current);
         drawSmallLabel(g, cx + 8, cy + 26, title, IOStyle.TEXT);
-        drawBarLabel(g, cx + 8, cy + 42, cx + cw - 8, line1, COLOR_MUTED);
-        drawBarLabel(g, cx + 8, cy + 56, cx + cw - 8, line2, COLOR_GOLD);
+        drawBarLabel(g, cx + 8, cy + 42, cx + cw - 8, line1, IOStyle.TEXT_2);
+        drawBarLabel(g, cx + 8, cy + 56, cx + cw - 8, line2, IOStyle.ORANGE);
     }
 
     /** 打开「摊位下架时间」设置：永久 / 游戏时间 / 现实时间 + 时长。 */
@@ -2744,12 +2852,12 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         int rowW = cw - 8;
         if (!ClientShopData.demandEnabled) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.demand.disabled"),
-                    cx + cw / 2, cy + 50, COLOR_MUTED);
+                    cx + cw / 2, cy + 50, IOStyle.TEXT_2);
         } else if (list.isEmpty()) {
             IOStyle.centerAt(g, this.font,
                     Component.translatable(this.demandOnlyMine ? "gui.module_shop.demand.empty_mine"
                             : "gui.module_shop.demand.empty"),
-                    cx + cw / 2, cy + 50, COLOR_MUTED);
+                    cx + cw / 2, cy + 50, IOStyle.TEXT_2);
         }
         var self = this.minecraft == null || this.minecraft.player == null ? null : this.minecraft.player.getUUID();
         int bottom = cy + ch - 20;   // 底栏留给「发起求购 / 只看我的」
@@ -2770,20 +2878,20 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             ItemStack want = entry.wants.isEmpty() ? ItemStack.EMPTY : entry.wants.get(0).display();
             g.renderItem(want, cx + 6, y + 2);
             g.renderItemDecorations(this.font, want, cx + 6, y + 2);
-            drawSmallLabel(g, cx + 26, y + 3, entry.summary(), COLOR_TEXT);
+            drawSmallLabel(g, cx + 26, y + 3, entry.summary(), IOStyle.TEXT);
             // 悬赏
             drawSmallLabel(g, cx + 26, y + 12, Component.translatable("gui.module_shop.demand.reward",
-                    demandRewardLine(entry)), COLOR_GOLD);
+                    demandRewardLine(entry)), IOStyle.ORANGE);
             // 发布者 + 剩余时间（右侧对齐）
             String who = entry.requesterName == null || entry.requesterName.isBlank() ? "?" : entry.requesterName;
             Component remain = demandRemainText(entry);
             Component right = remain == null ? Component.literal(who)
                     : Component.literal(who + "  " + remain.getString());
             int rightX = cx + 4 + rowW - 12 - (int) (this.font.width(right) * 0.8F);
-            drawSmallLabel(g, rightX, y + 7, right, COLOR_MUTED);
+            drawSmallLabel(g, rightX, y + 7, right, IOStyle.TEXT_2);
             // 展开/收起指示（▾ 展开中，▸ 收起）
             drawSmallLabel(g, cx + 4 + rowW - 10, y + 6,
-                    Component.literal(expanded ? "▾" : "▸"), COLOR_MUTED);
+                    Component.literal(expanded ? "▾" : "▸"), IOStyle.TEXT_2);
             CompoundTag extra = new CompoundTag();
             extra.putString("id", entry.id);
             addRegion(cx + 4, y, rowW - 2, headH, "demand_toggle", null, extra);
@@ -2804,7 +2912,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                 Component.translatable(this.demandOnlyMine ? "gui.module_shop.demand.filter_all"
                         : "gui.module_shop.demand.filter_mine"));
         drawBarLabel(g, cx + 168, buttonY + 4, cx + cw - 6,
-                Component.translatable("gui.module_shop.demand.hint"), COLOR_MUTED);
+                Component.translatable("gui.module_shop.demand.hint"), IOStyle.TEXT_2);
     }
 
     /** 展开区域高度：每行物品 16px（两列），底部留一行按钮。 */
@@ -2845,7 +2953,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             // 名称 ×N（截断到列宽的一半，右边留给 需要/拥有）
             Component name = IOStyle.ellipsize(this.font, plainNameComponent(line.stack),
                     Math.max(24, colW - 18 - 56));
-            drawSmallLabel(g, cellX + 18, cellY + 3, name, COLOR_TEXT);
+            drawSmallLabel(g, cellX + 18, cellY + 3, name, IOStyle.TEXT);
             Component counts = Component.translatable("gui.module_shop.demand.need_have",
                     line.count, have);
             Component mark = Component.literal(" " + (enough ? "√" : "×"));
@@ -2920,10 +3028,10 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                                 Component.translatable("gui.module_shop.choice.expire_mode."
                                         + ClientShopData.demandExpireMode),
                                 ClientShopData.demandExpireAmount));
-        drawBarLabel(g, cx + 6, cy + 20, cx + cw - 6, summary, COLOR_GOLD);
+        drawBarLabel(g, cx + 6, cy + 20, cx + cw - 6, summary, IOStyle.ORANGE);
         if (list.isEmpty()) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.demand.empty"),
-                    cx + cw / 2, cy + 50, COLOR_MUTED);
+                    cx + cw / 2, cy + 50, IOStyle.TEXT_2);
             return;
         }
         int rowW = cw - 8;
@@ -2936,13 +3044,13 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             IOStyle.ring(g, cx + 4, ry, rowW, 18, 0, IOStyle.BORDER_DIM);
             ItemStack want = entry.wants.isEmpty() ? ItemStack.EMPTY : entry.wants.get(0).display();
             g.renderItem(want, cx + 6, ry + 1);
-            drawSmallLabel(g, cx + 26, ry + 4, entry.summary(), COLOR_TEXT);
+            drawSmallLabel(g, cx + 26, ry + 4, entry.summary(), IOStyle.TEXT);
             Component reward = Component.translatable("gui.module_shop.demand.reward",
                     demandRewardLine(entry));
-            drawSmallLabel(g, cx + 130, ry + 4, reward, COLOR_GOLD);
+            drawSmallLabel(g, cx + 130, ry + 4, reward, IOStyle.ORANGE);
             String who = entry.requesterName == null || entry.requesterName.isBlank() ? "?" : entry.requesterName;
             int whoX = cx + 4 + rowW - 8 - this.font.width(who);
-            drawSmallLabel(g, whoX, ry + 4, Component.literal(who), COLOR_MUTED);
+            drawSmallLabel(g, whoX, ry + 4, Component.literal(who), IOStyle.TEXT_2);
             CompoundTag extra = new CompoundTag();
             extra.putString("id", entry.id);
             addRegion(cx + 4, ry, rowW - 2, 18, "demand_admin_cancel", null, extra);
@@ -3508,7 +3616,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         drawBarLabel(g, statusX, barTextY(cy, ch), cx + cw - 6,
                 Component.translatable(done ? "gui.module_shop.signin.status_done"
                         : "gui.module_shop.signin.status", ClientShopData.signInStreak,
-                        ClientShopData.money(ClientShopData.signInBase + signInTierBonus())), COLOR_MUTED);
+                        ClientShopData.money(ClientShopData.signInBase + signInTierBonus())), IOStyle.TEXT_2);
 
         // 悬浮提示统一留到最后画：画在格子里会被后画的格子盖住。
         if (this.signInTipLines != null && !this.signInTipLines.isEmpty()) {
@@ -3718,7 +3826,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         }
         if (players.isEmpty()) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.no_online"),
-                    cx + cw / 2, top + 44, COLOR_MUTED);
+                    cx + cw / 2, top + 44, IOStyle.TEXT_2);
         }
         // 底栏：交易页有「交易请求」入口（带红点）；有分页时右侧放翻页 + 页码。
         int barY = barMid(cy, ch, 14);
@@ -3741,7 +3849,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                     IOStyle.inside(nextX, barY, 42, 14, mx, my), false, false);
             Component pageLabel = Component.translatable("gui.module_shop.page", this.tradePage + 1, pages);
             drawSmallLabel(g, prevX - 8 - Math.round(this.font.width(pageLabel) * 0.8F), barTextY(cy, ch),
-                    pageLabel, COLOR_MUTED);
+                    pageLabel, IOStyle.TEXT_2);
         }
     }
 
@@ -3832,7 +3940,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                             Component.translatable("gui.module_shop.admin_current",
                                     tabLabelWithOriginal(adminMode)),
                             currentRight - currentX),
-                    COLOR_GOLD);
+                    IOStyle.ORANGE);
         }
         // 下拉面板的位置：紧贴按钮下方。**被它盖住的那几行商品不画**——物品图标属于另一批渲染，
         // 会穿透面板浮在上面（编辑布局那边踩过同一个坑）。
@@ -3882,13 +3990,13 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             Bricks.slot(g, cx + 16, y);
             g.renderItem(offer.stack, cx + 16, y);
             g.renderItemDecorations(this.font, offer.stack, cx + 16, y);
-            g.drawString(this.font, offer.stack.getHoverName(), cx + 40, y + 1, COLOR_TEXT, false);
+            g.drawString(this.font, offer.stack.getHoverName(), cx + 40, y + 1, IOStyle.TEXT, false);
             if (!ship) {
                 // 出货箱的"条目"是兑换规则，没有品质可言，这一列留空。
                 g.drawString(this.font, Component.translatable(offer.rarity.translationKey()), cx + 130, y + 1,
                         offer.rarity.color(), true);
             }
-            g.drawString(this.font, ClientShopData.money(offer.price), cx + 176, y + 1, COLOR_GOLD, false);
+            g.drawString(this.font, ClientShopData.money(offer.price), cx + 176, y + 1, IOStyle.ORANGE, false);
             // 需求 6/7：显示管理员配置的数量（未配置时展示实际生效的默认上限）。
             // 购物城的数量字段是**库存**（-1 = 无限）、出货箱的是**每日份数**（0 = 不限），语义不同所以分开显示。
             Component amountText;
@@ -3905,7 +4013,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                         : offer.amountOr(Config.INSTANCE.buybackCapacity.get());
                 amountText = Component.translatable("gui.module_shop.admin_amount", effectiveAmount);
             }
-            g.drawString(this.font, amountText, cx + 244, y + 1, COLOR_MUTED, true);
+            g.drawString(this.font, amountText, cx + 244, y + 1, IOStyle.TEXT_2, true);
             CompoundTag extra = new CompoundTag();
             extra.putString("mode", adminMode);
             extra.putInt("index", index);
@@ -3924,7 +4032,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             } else if (demands) {
                 drawDemandAdminList(g, cx, cy, cw, ch, mx, my);
             } else {
-                IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.admin_empty"), cx + cw / 2, cy + 60, COLOR_MUTED);
+                IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.admin_empty"), cx + cw / 2, cy + 60, IOStyle.TEXT_2);
             }
         }
         // 「选择模块编辑」下拉：最后画，盖在商品行之上；点一项即切到该模块的编辑界面。
@@ -4053,7 +4161,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                     ClientShopData.signInMakeupDays);
             drawBarLabel(g, cx + 4, rowB + 3, cx + cw - 6,
                     this.signInEdit ? Component.translatable("gui.module_shop.signin.edit_mode") : line1,
-                    this.signInEdit ? IOStyle.ORANGE : COLOR_GOLD);
+                    this.signInEdit ? IOStyle.ORANGE : IOStyle.ORANGE);
             return;
         }
         int labelY = rowB + 3;
@@ -4069,17 +4177,17 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             drawSmallLabelButton(g, cx + 50, rowB, 42, 14, Component.translatable("gui.module_shop.page_next"), false);
             Component pageLabel = Component.translatable("gui.module_shop.page", adminPage + 1, pages);
             cursorX = cx + 98;
-            drawSmallLabel(g, cursorX, labelY, pageLabel, COLOR_MUTED);
+            drawSmallLabel(g, cursorX, labelY, pageLabel, IOStyle.TEXT_2);
             cursorX += (int) (this.font.width(pageLabel) * 0.8F) + 12;
         }
         // 第八项：管理员界面直接显示当前收购全清奖励金额。
         Component bonusValue = Component.translatable("gui.module_shop.buyback_bonus_value",
                 ClientShopData.money(ClientShopData.buybackBonus));
-        drawSmallLabel(g, cursorX, labelY, bonusValue, COLOR_GOLD);
+        drawSmallLabel(g, cursorX, labelY, bonusValue, IOStyle.ORANGE);
         cursorX += (int) (this.font.width(bonusValue) * 0.8F) + 12;
         // 操作提示接在后面，超宽自动截断，永远不会压到左边的页码 / 金额。
         drawBarLabel(g, cursorX, labelY, cx + cw - 6,
-                Component.translatable("gui.module_shop.admin_hint"), COLOR_MUTED);
+                Component.translatable("gui.module_shop.admin_hint"), IOStyle.TEXT_2);
     }
 
     /**
@@ -4272,7 +4380,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         int viewH = Math.max(20, ch - BAR_H - 10);
         if (list.isEmpty()) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.exchange.empty"),
-                    cx + cw / 2, cy + 40, COLOR_MUTED);
+                    cx + cw / 2, cy + 40, IOStyle.TEXT_2);
         } else {
             int first = Mth.clamp(ClientShopData.lastExchangeScrollRow, 0, Math.max(0, list.size() - 1));
             ClientShopData.lastExchangeScrollRow = first;
@@ -4313,7 +4421,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             hintX = cx + 4 + 78 + BAR_GAP;
         }
         drawBarLabel(g, hintX, barTextY(cy, ch), cx + cw - 6,
-                Component.translatable("gui.module_shop.exchange.hint"), COLOR_MUTED);
+                Component.translatable("gui.module_shop.exchange.hint"), IOStyle.TEXT_2);
     }
 
     /** 单行兑换货币条。 */
@@ -4333,23 +4441,23 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         g.renderItemDecorations(this.font, entry.stack, cx + 8, y + 3);
         // 名称过长时截断，避免压到右侧汇率。
         String name = this.font.plainSubstrByWidth(entry.stack.getHoverName().getString(), open ? 120 : 96);
-        g.drawString(this.font, name, cx + 30, y + 7, COLOR_TEXT, false);
+        g.drawString(this.font, name, cx + 30, y + 7, IOStyle.TEXT, false);
         // “该货币 = 多少星币”
         String rate = Component.translatable("gui.module_shop.exchange.rate",
                 ClientShopData.money(entry.value)).getString();
         if (open) {
-            drawSmallLabel(g, cx + 30 + this.font.width(name) + 8, y + 8, Component.literal(rate), COLOR_GOLD);
+            drawSmallLabel(g, cx + 30 + this.font.width(name) + 8, y + 8, Component.literal(rate), IOStyle.ORANGE);
         } else {
-            g.drawString(this.font, rate, cx + cw - 24 - this.font.width(rate), y + 7, COLOR_GOLD, false);
-            g.drawString(this.font, "v", cx + cw - 16, y + 7, COLOR_MUTED, false);
+            g.drawString(this.font, rate, cx + cw - 24 - this.font.width(rate), y + 7, IOStyle.ORANGE, false);
+            g.drawString(this.font, "v", cx + cw - 16, y + 7, IOStyle.TEXT_2, false);
         }
         if (open) {
             // 展开行：左边显示持有量与可取出上限，右边是操作按钮。
             drawSmallLabel(g, cx + 8, y + 32,
-                    Component.translatable("gui.module_shop.exchange.owned", entry.owned), COLOR_MUTED);
+                    Component.translatable("gui.module_shop.exchange.owned", entry.owned), IOStyle.TEXT_2);
             long affordable = entry.value > 0L ? ClientShopData.balance / entry.value : 0L;
             drawSmallLabel(g, cx + 60, y + 32,
-                    Component.translatable("gui.module_shop.exchange.can_withdraw", affordable), COLOR_MUTED);
+                    Component.translatable("gui.module_shop.exchange.can_withdraw", affordable), IOStyle.TEXT_2);
 
             // 按钮改小一号（0.7 倍字号 + 38×12），右侧四个按钮一共 164px，
             // 左边「背包 / 可取」那两行小字因此绝不会被压到。
@@ -4610,7 +4718,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                 }
                 if (list.isEmpty()) {
                     IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.mall.empty"),
-                            cx + cw / 2, gridTop + gridH / 2, COLOR_MUTED);
+                            cx + cw / 2, gridTop + gridH / 2, IOStyle.TEXT_2);
                 }
                 // 底栏：页码 + 翻页 + 管理员按钮
                 int pageLabelY = barTextY(cy, ch);
@@ -4647,7 +4755,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                                             + ("game".equals(ClientShopData.mallRestockMode) ? "game" : "real")))
                             .append(Component.literal("  ·  ")).append(status);
                 }
-                drawBarLabel(g, cx + 4, pageLabelY, right, status, COLOR_MUTED);
+                drawBarLabel(g, cx + 4, pageLabelY, right, status, IOStyle.TEXT_2);
             }
         }
 
@@ -4763,7 +4871,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         int per = Math.max(1, h / rowH);
         if (list.isEmpty()) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.mall.recent_empty"),
-                    cx + cw / 2, top + h / 2, COLOR_MUTED);
+                    cx + cw / 2, top + h / 2, IOStyle.TEXT_2);
             return;
         }
         int maxScroll = Math.max(0, list.size() - per);
@@ -4803,7 +4911,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         }
         // 底栏：记录条数提示
         drawBarLabel(g, cx + 4, barTextY(cy, ch), cx + cw - 6,
-                Component.translatable("gui.module_shop.mall.recent_status", list.size()), COLOR_MUTED);
+                Component.translatable("gui.module_shop.mall.recent_status", list.size()), IOStyle.TEXT_2);
     }
 
     /** 0.8 倍字号右对齐小字。 */
@@ -4876,16 +4984,16 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         int barTop = barTop(cy, ch);
         if (!ClientShopData.shipEnabled) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.shipping.disabled"),
-                    cx + cw / 2, cy + 60, COLOR_MUTED);
+                    cx + cw / 2, cy + 60, IOStyle.TEXT_2);
             return;
         }
         // ---------- 卡片一：本次结算 ----------
         int cardY = cy + 2;
         IOStyle.card(g, cx + 2, cardY, cw - 4, 58, 0);
         drawSmallLabel(g, cx + 10, cardY + 6, Component.translatable("gui.module_shop.shipping.level",
-                ClientShopData.shipLevel, ClientShopData.shipMaxLevel, ClientShopData.shipSlots), COLOR_GOLD);
+                ClientShopData.shipLevel, ClientShopData.shipMaxLevel, ClientShopData.shipSlots), IOStyle.ORANGE);
         drawSmallLabel(g, cx + 10, cardY + 20, Component.translatable("gui.module_shop.shipping.items",
-                ClientShopData.shipItems), COLOR_MUTED);
+                ClientShopData.shipItems), IOStyle.TEXT_2);
         // 本次结算金额（大一点、金色，一眼能看到）
         Component value = Component.translatable("gui.module_shop.shipping.pending",
                 ClientShopData.money(ClientShopData.shipValue));
@@ -4896,17 +5004,17 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                         ClientShopData.money(ClientShopData.shipLimit))
                 : Component.translatable("gui.module_shop.shipping.today_unlimited",
                         ClientShopData.money(ClientShopData.shipSoldToday));
-        drawSmallLabelRight(g, cx + cw - 10, cardY + 36, today, COLOR_MUTED);
+        drawSmallLabelRight(g, cx + cw - 10, cardY + 36, today, IOStyle.TEXT_2);
         // ---------- 卡片二：结算时间（规则条数/正常与否不再占行，只有出错时才红字提醒）----------
         int card2Y = cardY + 62;
         IOStyle.card(g, cx + 2, card2Y, cw - 4, 50, 0);
         Component settleTime = Component.translatable("gui.module_shop.shipping.settle_time",
                 String.format("%02d:%02d", (ClientShopData.shipSettleTick / 1000 + 6) % 24,
                         (int) ((ClientShopData.shipSettleTick % 1000) * 60 / 1000)));
-        drawSmallLabel(g, cx + 10, card2Y + 8, settleTime, COLOR_MUTED);
+        drawSmallLabel(g, cx + 10, card2Y + 8, settleTime, IOStyle.TEXT_2);
         drawSmallLabel(g, cx + 10, card2Y + 22, Component.translatable(
-                "gui.module_shop.shipping.reset_line", ClientShopData.shipResetTimeText), COLOR_MUTED);
-        drawSmallLabelRight(g, cx + cw - 10, card2Y + 8, Component.literal(shippingNextText()), COLOR_GOLD);
+                "gui.module_shop.shipping.reset_line", ClientShopData.shipResetTimeText), IOStyle.TEXT_2);
+        drawSmallLabelRight(g, cx + cw - 10, card2Y + 8, Component.literal(shippingNextText()), IOStyle.ORANGE);
 
         // ---------- 按钮 ----------
         int btnY = card2Y + 56;
@@ -4930,7 +5038,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         // ---------- 底栏提示（规则错误不再在这里刷字：管理页会把出问题的规则**标红**）----------
         // 货币名用当前显示名（管理员改过就用改过的），不再在文案里写死「星币」。
         drawBarLabel(g, cx + 4, barTextY(cy, ch), cx + cw - 6,
-                Component.translatable("gui.module_shop.shipping.hint", ClientShopData.currencyName()), COLOR_MUTED);
+                Component.translatable("gui.module_shop.shipping.hint", ClientShopData.currencyName()), IOStyle.TEXT_2);
     }
 
     // =========================================================== 交互
@@ -5531,6 +5639,10 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             // 交易记录：复用输入弹窗收集玩家名，服务端把流水回传到聊天栏。
             case "admin_history_gui" -> openInput("admin_history", "gui.module_shop.input.history", null, "target");
             // 需求 10-5：左下角齿轮打开提醒音效设置。
+            case "toggle_theme" -> {
+                Bricks.click();
+                UITheme.toggle();
+            }
             case "notif_settings" -> {
                 Bricks.click();
                 Nav.open(new NotificationSettingsScreen());

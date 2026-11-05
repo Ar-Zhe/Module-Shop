@@ -42,7 +42,8 @@ import net.minecraft.world.item.ItemStack;
  * 在 {@link #initSkia} 里用 {@link #field} 创建。
  */
 public abstract class SkiaDialog extends Screen {
-    private static final float OPEN_MS = 140.0F;
+    private static final float OPEN_MS = 160.0F;
+    private static final float SCALE_MS = 260.0F;
 
     /** 弹窗标准尺寸：标题区高度、内边距。 */
     protected static final float HEADER_H = 26.0F;
@@ -145,7 +146,13 @@ public abstract class SkiaDialog extends Screen {
         this.lastNanos = now;
         this.mouseX = mx;
         this.mouseY = my;
-        float open = Motion.easeOutCubic(Math.min(1.0F, (now - this.openNanos) / 1_000_000.0F / OPEN_MS));
+        IOStyle.tickTheme();
+        float openMs = (now - this.openNanos) / 1_000_000.0F;
+        float open = Motion.easeOutCubic(Math.min(1.0F, openMs / OPEN_MS));
+        // 打开时从 97% 轻微放大到 100%（带一点回弹），以屏幕中心为原点；物品层用同样的变换保持对齐
+        float scale = 0.97F + 0.03F * Motion.easeOutBack(Math.min(1.0F, openMs / SCALE_MS));
+        float pivotX = this.width / 2.0F;
+        float pivotY = this.height / 2.0F;
         this.items.begin(mx, my, true);
         this.pendingTip = null;
         this.frameButtons.clear();
@@ -157,6 +164,11 @@ public abstract class SkiaDialog extends Screen {
         SkiaFrame.draw(g, canvas -> {
             int saved = Draw.beginOpacity(canvas, open);
             try {
+                if (scale != 1.0F) {
+                    canvas.translate(pivotX, pivotY);
+                    canvas.scale(scale, scale);
+                    canvas.translate(-pivotX, -pivotY);
+                }
                 paint(canvas);
                 for (UiComponent comp : this.comps) {
                     comp.render(canvas, mx, my, this.dtMs);
@@ -170,7 +182,16 @@ public abstract class SkiaDialog extends Screen {
         this.hits.addAll(this.frameHits);
         this.lists.clear();
         this.lists.addAll(this.frameLists);
-        this.items.flush(g, this.font);
+        if (scale != 1.0F) {
+            g.pose().pushPose();
+            g.pose().translate(pivotX, pivotY, 0.0F);
+            g.pose().scale(scale, scale, 1.0F);
+            g.pose().translate(-pivotX, -pivotY, 0.0F);
+            this.items.flush(g, this.font);
+            g.pose().popPose();
+        } else {
+            this.items.flush(g, this.font);
+        }
         if (!this.items.renderTooltip(g, this.font, mx, my) && this.pendingTip != null) {
             List<net.minecraft.util.FormattedCharSequence> lines = new ArrayList<>();
             for (Component line : this.pendingTip) {
@@ -388,7 +409,8 @@ public abstract class SkiaDialog extends Screen {
     }
 
     protected final float hover(String key, float x, float y, float w, float h) {
-        return anim("hover:" + key, over(x, y, w, h), Motion.HOVER_MS);
+        boolean on = over(x, y, w, h);
+        return anim("hover:" + key, on, on ? Motion.HOVER_MS : Motion.HOVER_OUT_MS);
     }
 
     /**
@@ -414,12 +436,15 @@ public abstract class SkiaDialog extends Screen {
         float h = 12.0F;
         float t = anim("toggle:" + key, on, 70.0F);
         float hv = hover("toggle:" + key, x, y, w, h);
-        int track = Draw.lerp(Draw.lerp(IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER, hv), IOStyle.BLUE, t);
+        int track = Draw.lerp(Draw.lerp(IOStyle.TOGGLE_OFF, IOStyle.GRAY_BTN_HOVER, hv), IOStyle.BLUE, t);
         Draw.fill(canvas, x, y, w, h, h / 2.0F, track);
-        Draw.stroke(canvas, x, y, w, h, h / 2.0F, 1.0F, Draw.lerp(IOStyle.BORDER, IOStyle.BLUE, t));
+        Draw.stroke(canvas, x, y, w, h, h / 2.0F, 1.0F, Draw.lerp(IOStyle.TOGGLE_OFF_RING, IOStyle.BLUE, t));
         float knob = h - 4.0F;
-        float kx = x + 2.0F + (w - 4.0F - knob) * t;
-        Draw.fill(canvas, kx, y + 2.0F, knob, knob, knob / 2.0F, 0xFFFFFFFF);
+        // 滑块移动途中横向拉长一点（像被拖着走），到位后恢复圆形
+        float stretch = 4.0F * t * (1.0F - t) * 2.0F;
+        float kx = x + 2.0F + (w - 4.0F - knob) * t - stretch * t;
+        Draw.shadow(canvas, kx, y + 2.0F, knob + stretch, knob, knob / 2.0F, 1.5F, 0.5F, IOStyle.SHADOW_2);
+        Draw.fill(canvas, kx, y + 2.0F, knob + stretch, knob, knob / 2.0F, IOStyle.KNOB);
         hit(x - 2, y - 2, w + 4, h + 4, action, null);
     }
 
@@ -497,7 +522,7 @@ public abstract class SkiaDialog extends Screen {
 
     /** 标准弹窗面板：底色 + 边框 + 标题（粗体居中）+ 标题下分隔线。 */
     protected final void panel(Canvas canvas, float x, float y, float w, float h, String title) {
-        Draw.fill(canvas, x - 1, y - 1, w + 2, h + 2, 0.0F, 0x40000000);
+        Draw.shadow(canvas, x, y, w, h, 0.0F, 10.0F, 3.0F, IOStyle.SHADOW_TINT);
         Draw.fill(canvas, x, y, w, h, 0.0F, IOStyle.SHEET);
         Draw.stroke(canvas, x, y, w, h, 0.0F, 1.0F, IOStyle.BORDER);
         if (title != null) {
@@ -567,9 +592,18 @@ public abstract class SkiaDialog extends Screen {
         Draw.stroke(canvas, x, y, w, h, 3.0F, 1.0F, focused ? IOStyle.BLUE : IOStyle.BORDER_DIM);
     }
 
+    /** 容器界面里的原版无边框输入框：文字颜色跟随主题（日间主题下默认的浅灰字会看不见）。每帧调用。 */
+    public static void themeBox(net.minecraft.client.gui.components.EditBox box) {
+        if (box != null) {
+            box.setTextColor(IOStyle.TEXT);
+            box.setTextColorUneditable(IOStyle.TEXT_2);
+        }
+    }
+
     /** 不带标题的弹窗面板（容器界面用）。 */
     public static void bare(Canvas canvas, float x, float y, float w, float h) {
-        Draw.fill(canvas, x - 1, y - 1, w + 2, h + 2, 0.0F, 0x40000000);
+        IOStyle.tickTheme();
+        Draw.shadow(canvas, x, y, w, h, 0.0F, 10.0F, 3.0F, IOStyle.SHADOW_TINT);
         Draw.fill(canvas, x, y, w, h, 0.0F, IOStyle.SHEET);
         Draw.stroke(canvas, x, y, w, h, 0.0F, 1.0F, IOStyle.BORDER);
     }

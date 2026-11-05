@@ -220,6 +220,8 @@
   "gui.module_shop.mall.count": "共 %s 件",
   "gui.module_shop.avatar.count": "共 %s 个摊位",
   "gui.module_shop.redeem.random": "随机生成兑换码",
+  "gui.module_shop.theme.to_light": "切换到日间主题",
+  "gui.module_shop.theme.to_dark": "切换到暗色主题",
   "gui.module_shop.mall.tip_price": "单价：%s",
   "gui.module_shop.mall.tip_stock": "库存：%s",
   "gui.module_shop.mall.tip_mod": "来自：%s",

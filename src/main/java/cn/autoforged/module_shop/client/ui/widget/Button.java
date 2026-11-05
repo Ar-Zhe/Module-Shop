@@ -37,6 +37,7 @@ public final class Button extends UiComponent {
     private float pressT;
     private float selectT;
     private boolean pressed;
+    private final Motion.Spring press = new Motion.Spring(1.0F);
 
     public Button(Kind kind, String label, Runnable onClick) {
         this(kind, () -> label, onClick);
@@ -89,8 +90,10 @@ public final class Button extends UiComponent {
             return;
         }
         boolean hover = enabled && isMouseOver(mouseX, mouseY);
-        hoverT = Motion.approach(hoverT, hover ? 1.0F : 0.0F, dtMs, Motion.HOVER_MS);
+        hoverT = Motion.hover(hoverT, hover, dtMs);
         pressT = Motion.approach(pressT, pressed && hover ? 1.0F : 0.0F, dtMs, Motion.PRESS_MS);
+        // 按下缩小、松开用弹簧回弹（轻微冲过 1 再回来）
+        float scale = press.step(pressed && hover ? 0.95F : 1.0F, dtMs, 900.0F, 30.0F);
         selectT = Motion.approach(selectT, selected ? 1.0F : 0.0F, dtMs, Motion.PRESS_MS);
 
         int fill;
@@ -103,7 +106,7 @@ public final class Button extends UiComponent {
         } else {
             switch (kind) {
                 case ACCENT -> {
-                    fill = Draw.lerp(IOStyle.BLUE, IOStyle.BLUE_HOVER, hoverT);
+                    fill = Draw.lerp(Draw.lerp(IOStyle.BLUE, IOStyle.BLUE_HOVER, hoverT), IOStyle.BLUE, pressT);
                     border = Draw.lerp(IOStyle.BLUE, IOStyle.BLUE_HOVER, hoverT);
                     textColor = 0xFFFFFFFF;
                 }
@@ -127,8 +130,6 @@ public final class Button extends UiComponent {
             }
         }
 
-        // 按下缩放 0.97（以按钮中心为原点）
-        float scale = 1.0F - 0.03F * pressT;
         int saved = canvas.save();
         try {
             float cx = x + width / 2.0F;

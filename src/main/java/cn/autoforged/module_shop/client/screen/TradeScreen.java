@@ -21,9 +21,6 @@ public class TradeScreen extends SkiaDialog {
     private static final int MAX_ITEMS = 6;
     private static final int COL_W = 150;
     private static final int ROW_H = 16;
-    private static final int COLOR_TEXT = IOStyle.TEXT;
-    private static final int COLOR_MUTED = IOStyle.TEXT_2;
-    private static final int COLOR_GOLD = IOStyle.ORANGE;
     private static final int COLOR_GREEN = 0x55FF55;
 
     private ButtonZone[] zones;
@@ -69,7 +66,7 @@ public class TradeScreen extends SkiaDialog {
         int x = left();
         int y = top();
         Bricks.panel(g, x, y, PANEL_W, PANEL_H);
-        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 8, COLOR_GOLD);
+        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 8, IOStyle.ORANGE);
 
         int colW = COL_W;
         int selfX = x + 10;
@@ -87,22 +84,22 @@ public class TradeScreen extends SkiaDialog {
             // 需求 2：等待对方同意请求期间，对方那侧灰色不可选。
             g.drawCenteredString(this.font,
                     Component.translatable("gui.module_shop.trade.waiting_accept", ClientShopData.tradeOtherName),
-                    x + PANEL_W / 2, centerY, COLOR_GOLD);
+                    x + PANEL_W / 2, centerY, IOStyle.ORANGE);
         } else if (ClientShopData.tradeAgreedBoth) {
             long countdown = ClientShopData.tradeCountdownMs;
             if (countdown > 0) {
                 long seconds = (countdown + 999L) / 1000L;
                 IOStyle.centerAt(g, this.font, Component.literal(String.valueOf(seconds)),
-                        x + PANEL_W / 2, centerY - 6, COLOR_GOLD);
+                        x + PANEL_W / 2, centerY - 6, IOStyle.ORANGE);
                 IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.countdown"),
-                        x + PANEL_W / 2, centerY + 10, COLOR_MUTED);
+                        x + PANEL_W / 2, centerY + 10, IOStyle.TEXT_2);
             } else {
                 IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.ready"),
                         x + PANEL_W / 2, centerY, COLOR_GREEN);
             }
         } else {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.waiting"),
-                    x + PANEL_W / 2, centerY, COLOR_MUTED);
+                    x + PANEL_W / 2, centerY, IOStyle.TEXT_2);
         }
 
         for (ButtonZone zone : this.zones) {
@@ -125,9 +122,9 @@ public class TradeScreen extends SkiaDialog {
     private void drawSide(GuiGraphics g, int x, int y, int w, String name, List<ItemStack> items, long money,
             boolean agreed, boolean confirmed, boolean active, boolean self, int mouseX, int mouseY) {
         g.fill(x, y, x + w, y + 132, 0xFF202020);
-        g.drawString(this.font, name, x + 6, y + 6, COLOR_TEXT, false);
+        g.drawString(this.font, name, x + 6, y + 6, IOStyle.TEXT, false);
         String moneyText = ClientShopData.money(money);
-        g.drawString(this.font, moneyText, x + w - 6 - this.font.width(moneyText), y + 6, COLOR_GOLD, false);
+        g.drawString(this.font, moneyText, x + w - 6 - this.font.width(moneyText), y + 6, IOStyle.ORANGE, false);
         int rowY = y + 20;
         for (int i = 0; i < items.size() && i < MAX_ITEMS; i++) {
             ItemStack stack = items.get(i);
@@ -135,7 +132,7 @@ public class TradeScreen extends SkiaDialog {
             Bricks.slot(g, x + 6, slotY);
             g.renderItem(stack, x + 6, slotY);
             g.renderItemDecorations(this.font, stack, x + 6, slotY);
-            g.drawString(this.font, stack.getHoverName(), x + 26, slotY + 4, COLOR_TEXT, false);
+            g.drawString(this.font, stack.getHoverName(), x + 26, slotY + 4, IOStyle.TEXT, false);
             if (mouseX >= x + 6 && mouseX < x + 22 && mouseY >= slotY && mouseY < slotY + 16) {
                 g.renderTooltip(this.font, stack, mouseX, mouseY);
             }
@@ -155,13 +152,13 @@ public class TradeScreen extends SkiaDialog {
         }
         if (items.isEmpty()) {
             g.drawString(this.font, Component.translatable("gui.module_shop.trade.no_items"),
-                    x + 6, rowY + 4, COLOR_MUTED, true);
+                    x + 6, rowY + 4, IOStyle.TEXT_2, true);
         }
         Component status = agreed
                 ? Component.translatable(confirmed ? "gui.module_shop.trade.confirmed"
                         : "gui.module_shop.trade.agreed")
                 : Component.translatable("gui.module_shop.trade.not_agreed");
-        g.drawString(this.font, status, x + 6, y + 120, agreed ? COLOR_GREEN : COLOR_MUTED, false);
+        g.drawString(this.font, status, x + 6, y + 120, agreed ? COLOR_GREEN : IOStyle.TEXT_2, false);
         // 需求 2：对方尚未同意时整列覆盖灰色，表示不可选区。
         if (!active) {
             g.fill(x, y, x + w, y + 132, 0x99101010);
@@ -246,7 +243,7 @@ public class TradeScreen extends SkiaDialog {
         double[] m = IOStyle.mouseGui();
         boolean realHover = enabled && hover && IOStyle.inside(x, y, w, h, m[0], m[1]);
         IOStyle.smallButton(g, x, y, w, h, label, this.font, realHover, IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER,
-                enabled ? COLOR_TEXT : IOStyle.DISABLED_TEXT, (int) Math.round(m[0]), (int) Math.round(m[1]));
+                enabled ? IOStyle.TEXT : IOStyle.DISABLED_TEXT, (int) Math.round(m[0]), (int) Math.round(m[1]));
     }
 
     // ------------------------------------------------------------------ Skija
@@ -380,7 +377,8 @@ public class TradeScreen extends SkiaDialog {
                 agreed ? IOStyle.GREEN : IOStyle.TEXT_3);
         small(c, status, x + 15, dotY, w - 20, agreed ? IOStyle.GREEN : IOStyle.TEXT_2);
         if (!active) {
-            cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x, y, w, h, 3, 0xB0101114);
+            cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x, y, w, h, 3,
+                    cn.autoforged.module_shop.client.ui.render.Draw.alpha(IOStyle.SHEET, 0.72F));
             center(c, Component.translatable("gui.module_shop.trade.pending").getString(), x, y + h / 2, w,
                     IOStyle.TEXT_2);
         }

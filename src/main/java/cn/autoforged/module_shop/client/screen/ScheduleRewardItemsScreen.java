@@ -209,7 +209,7 @@ public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu
                     cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_2, 6, false);
             SkiaDialog.small(c, Component.translatable("gui.module_shop.grant.amount_label").getString(), rx, y + 114,
                     LIST_W, IOStyle.TEXT_2);
-            SkiaDialog.fieldFrame(c, rx, y + 122, LIST_W, 16, this.moneyBox.isFocused());
+            SkiaDialog.fieldFrame(c, rx, y + 122, LIST_W, 16, this.moneyBox.isFocused()); SkiaDialog.themeBox(this.moneyBox);
             SkiaDialog.paragraph(c, Component.translatable("gui.module_shop.schedule.reward_save_hint").getString(),
                     rx, y + 142, LIST_W, cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_3, 3,
                     false);

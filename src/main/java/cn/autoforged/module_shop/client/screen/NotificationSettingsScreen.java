@@ -19,9 +19,6 @@ public class NotificationSettingsScreen extends SkiaDialog {
     /** 比原来高一行：底部多了一行「界面点击音效」+ 一行提示，面板加高避免与返回按钮重叠。 */
     private static final int PANEL_H = 224;
     private static final int ROW_H = 20;
-    private static final int COLOR_TEXT = IOStyle.TEXT;
-    private static final int COLOR_MUTED = IOStyle.TEXT_2;
-    private static final int COLOR_GOLD = IOStyle.ORANGE;
     private static final int COLOR_ON = 0xFF3FA34D;
     private static final int COLOR_OFF = 0xFF5A2A2A;
 
@@ -51,7 +48,7 @@ public class NotificationSettingsScreen extends SkiaDialog {
         int x = left();
         int y = top();
         Bricks.panel(g, x, y, PANEL_W, PANEL_H);
-        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 9, COLOR_GOLD);
+        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 9, IOStyle.ORANGE);
 
         int rowY = y + 26;
         addRow(g, x, rowY, Component.translatable("gui.module_shop.notify.master"), null);
@@ -64,25 +61,25 @@ public class NotificationSettingsScreen extends SkiaDialog {
         this.clickRow = new int[]{x + 10, rowY, PANEL_W - 20, ROW_H - 3};
         g.fill(x + 10, rowY, x + PANEL_W - 10, rowY + ROW_H - 3, 0xFF1B1C1F);
         g.drawString(this.font, Component.translatable("gui.module_shop.notify.clicksound"), x + 16, rowY + 5,
-                COLOR_TEXT, false);
+                IOStyle.TEXT, false);
         String name = ClickSound.displayName().getString();
-        IOStyle.centerAt(g, this.font, Component.literal(name), x + PANEL_W - 66, rowY + 5, COLOR_GOLD);
+        IOStyle.centerAt(g, this.font, Component.literal(name), x + PANEL_W - 66, rowY + 5, IOStyle.ORANGE);
         IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.notify.clicksound_hint"),
-                x + PANEL_W / 2, rowY + ROW_H - 1, COLOR_MUTED);
+                x + PANEL_W / 2, rowY + ROW_H - 1, IOStyle.TEXT_2);
 
         drawButton(g, x + 10, y + PANEL_H - 24, 70, 16, Component.translatable("gui.module_shop.back"));
     }
 
     private void addRow(GuiGraphics g, int x, int y, Component label, NotificationType type) {
         g.fill(x + 10, y, x + PANEL_W - 10, y + ROW_H - 3, 0xFF1B1C1F);
-        g.drawString(this.font, label, x + 16, y + 5, COLOR_TEXT, false);
+        g.drawString(this.font, label, x + 16, y + 5, IOStyle.TEXT, false);
         boolean on = type == null ? ClientNotifications.masterSound : ClientNotifications.typeSound(type);
         int bx = x + PANEL_W - 62;
         int by = y + 2;
         g.fill(bx, by, bx + 48, by + 13, on ? COLOR_ON : COLOR_OFF);
         g.fill(bx, by, bx + 48, by + 1, on ? 0xFF6FE07F : 0xFF8A4A4A);
         IOStyle.centerAt(g, this.font, on ? Component.translatable("gui.module_shop.notify.on")
-                : Component.translatable("gui.module_shop.notify.off"), bx + 24, by + 3, COLOR_TEXT);
+                : Component.translatable("gui.module_shop.notify.off"), bx + 24, by + 3, IOStyle.TEXT);
         this.rows.add(new Row(bx, by, 48, 13, type));
     }
 
@@ -190,7 +187,7 @@ public class NotificationSettingsScreen extends SkiaDialog {
         double[] m = IOStyle.mouseGui();
         boolean hover = IOStyle.inside(x, y, w, h, m[0], m[1]);
         IOStyle.smallButton(g, x, y, w, h, label, this.font, hover, IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER,
-                COLOR_TEXT, (int) Math.round(m[0]), (int) Math.round(m[1]));
+                IOStyle.TEXT, (int) Math.round(m[0]), (int) Math.round(m[1]));
     }
 
     private record Row(int x, int y, int w, int h, NotificationType type) {

@@ -220,6 +220,8 @@
   "gui.module_shop.mall.count": "%s items",
   "gui.module_shop.avatar.count": "%s stalls",
   "gui.module_shop.redeem.random": "Random code",
+  "gui.module_shop.theme.to_light": "Switch to light theme",
+  "gui.module_shop.theme.to_dark": "Switch to dark theme",
   "gui.module_shop.mall.tip_price": "Unit price: %s",
   "gui.module_shop.mall.tip_stock": "Stock: %s",
   "gui.module_shop.mall.tip_mod": "From: %s",

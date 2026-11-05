@@ -21,9 +21,6 @@ import net.neoforged.neoforge.network.PacketDistributor;
 public class AuctionBidScreen extends SkiaDialog {
     private static final int PANEL_W = 280;
     private static final int PANEL_H = 180;
-    private static final int COLOR_TEXT = IOStyle.TEXT;
-    private static final int COLOR_MUTED = IOStyle.TEXT_2;
-    private static final int COLOR_GOLD = IOStyle.ORANGE;
 
     private final long id;
     private final ItemStack stack;
@@ -131,7 +128,7 @@ public class AuctionBidScreen extends SkiaDialog {
         refreshFromCache();
         super.render(g, mouseX, mouseY, partialTick);
         int cx = this.left + PANEL_W / 2;
-        IOStyle.centerAt(g, this.font, this.title, cx, this.top + 10, COLOR_GOLD);
+        IOStyle.centerAt(g, this.font, this.title, cx, this.top + 10, IOStyle.ORANGE);
         // 上方物品图标（仅展示，不是可交互槽位）。
         int iconX = cx - 8;
         int iconY = this.top + 26;
@@ -141,12 +138,12 @@ public class AuctionBidScreen extends SkiaDialog {
             g.renderItemDecorations(this.font, this.stack, iconX, iconY);
         }
         IOStyle.centerAt(g, this.font, this.stack.isEmpty() ? Component.literal("-") : this.stack.getHoverName(),
-                cx, this.top + 48, COLOR_TEXT);
+                cx, this.top + 48, IOStyle.TEXT);
         // 需求三：居中显示当前最高出价，并在下方用划掉效果展示上一轮出价。
         if (this.currentBid > 0L) {
             String current = Component.translatable("gui.module_shop.auction_current_bid",
                     ClientShopData.money(this.currentBid)).getString();
-            IOStyle.centerAt(g, this.font, current, cx, this.top + 58, COLOR_GOLD);
+            IOStyle.centerAt(g, this.font, current, cx, this.top + 58, IOStyle.ORANGE);
             if (this.lastBid > 0L) {
                 String last = Component.translatable("gui.module_shop.auction_last_bid",
                         ClientShopData.money(this.lastBid)).getString();
@@ -157,15 +154,15 @@ public class AuctionBidScreen extends SkiaDialog {
         } else {
             String start = Component.translatable("gui.module_shop.auction_start",
                     ClientShopData.money(this.startPrice)).getString();
-            IOStyle.centerAt(g, this.font, start, cx, this.top + 60, COLOR_GOLD);
+            IOStyle.centerAt(g, this.font, start, cx, this.top + 60, IOStyle.ORANGE);
         }
         IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.bid_min",
-                ClientShopData.money(minimum())), cx, this.top + 74, COLOR_MUTED);
+                ClientShopData.money(minimum())), cx, this.top + 74, IOStyle.TEXT_2);
         // 明确“出价即扣款、被超价/流拍会退回”，并显示当前余额，避免玩家以为钱被吃掉。
         IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.bid_rule"),
-                cx, this.top + 112, COLOR_MUTED);
+                cx, this.top + 112, IOStyle.TEXT_2);
         IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.bid_balance",
-                ClientShopData.money(ClientShopData.balance)), cx, this.top + 124, COLOR_GOLD);
+                ClientShopData.money(ClientShopData.balance)), cx, this.top + 124, IOStyle.ORANGE);
         if (!this.listed) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.auction_gone"),
                     cx, this.top + 138, 0xFF6B6B);

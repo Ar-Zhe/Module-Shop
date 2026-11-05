@@ -27,9 +27,6 @@ public class MallImportScreen extends SkiaDialog {
     private static final int LIST_ROWS = 9;
     /** 位掩码最多支持多少件（再多就不做过滤，交给服务端按数量上限处理）。 */
     private static final int MASK_LIMIT = 8192;
-    private static final int COLOR_TEXT = IOStyle.TEXT;
-    private static final int COLOR_MUTED = IOStyle.TEXT_2;
-    private static final int COLOR_GOLD = IOStyle.ORANGE;
 
     /** 全部模组（命名空间 → 显示名），按显示名排序；客户端注册表不会变，所以只建一次。 */
     private static List<String[]> modCache;
@@ -110,9 +107,9 @@ public class MallImportScreen extends SkiaDialog {
         this.rowRects.clear();
         int x = this.left;
         int y = this.top;
-        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 10, COLOR_GOLD);
+        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 10, IOStyle.ORANGE);
         IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.mall.import_hint"),
-                x + PANEL_W / 2, y + 24, COLOR_MUTED);
+                x + PANEL_W / 2, y + 24, IOStyle.TEXT_2);
 
         // ① 上方的「选择模组分类」折叠条：点一下展开 / 收起。
         int headY = y + 38;
@@ -122,7 +119,7 @@ public class MallImportScreen extends SkiaDialog {
         String head = this.selected.isEmpty()
                 ? Component.translatable("gui.module_shop.mall.choose_mod").getString()
                 : displayName(this.selected);
-        drawSmall(g, x + 16, headY + 5, Component.literal(head), this.selected.isEmpty() ? COLOR_TEXT : COLOR_GOLD);
+        drawSmall(g, x + 16, headY + 5, Component.literal(head), this.selected.isEmpty() ? IOStyle.TEXT : IOStyle.ORANGE);
         // 直边倒三角：展开朝下、收起朝右（这里统一用三角方向表示状态）
         IOStyle.triangleDown(g, x + PANEL_W - 22, headY + 7, 4, 4,
                 this.listOpen ? IOStyle.BLUE : IOStyle.TEXT_2);
@@ -150,7 +147,7 @@ public class MallImportScreen extends SkiaDialog {
                 if (this.font.width(name) > nameMax) {
                     name = this.font.plainSubstrByWidth(name, Math.max(1, nameMax - 6)) + "…";
                 }
-                drawSmall(g, x + 18, ry + 3, Component.literal(name), current ? IOStyle.BLUE : COLOR_TEXT);
+                drawSmall(g, x + 18, ry + 3, Component.literal(name), current ? IOStyle.BLUE : IOStyle.TEXT);
                 drawSmallRight(g, x + PANEL_W - 18, ry + 3, Component.literal(mod[0]), IOStyle.TEXT_3);
                 this.rowRects.add(new int[]{x + 12, ry, PANEL_W - 24, ROW_H - 1, i});
             }

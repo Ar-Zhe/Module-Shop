@@ -35,9 +35,6 @@ public class GrantScreen extends AbstractContainerScreen<GrantMenu> {
     private static final int LIST_Y = 40;
     private static final int ROW_H = 20;
     private static final int PAGE_SIZE = 6;
-    private static final int COLOR_TEXT = IOStyle.TEXT;
-    private static final int COLOR_MUTED = IOStyle.TEXT_2;
-    private static final int COLOR_GOLD = IOStyle.ORANGE;
     private static final int COLOR_ONLINE = 0x55FF55;
 
     /** 已勾选的玩家 UUID；发送时若等于全部目标则改发 all 标记，节省包体。 */
@@ -203,13 +200,13 @@ public class GrantScreen extends AbstractContainerScreen<GrantMenu> {
         // 计数用“当前搜索结果”的数量：用全表长度会出现“已选 5 / 200”却只看到 2 行的怪现象。
         List<ClientShopData.GrantTarget> visibleTargets = filtered();
         g.drawString(this.font, Component.translatable("gui.module_shop.grant.amount_label"), x + 8, y + 78,
-                COLOR_MUTED, true);
+                IOStyle.TEXT_2, true);
         g.drawString(this.font,
                 Component.translatable("gui.module_shop.grant.selected", this.selected.size(),
                         visibleTargets.size()),
-                x + 8, y + 119, COLOR_GOLD, true);
+                x + 8, y + 119, IOStyle.ORANGE, true);
         g.drawString(this.font, Component.translatable("gui.module_shop.grant.hint"), x + 8, y + 131,
-                COLOR_MUTED, true);
+                IOStyle.TEXT_2, true);
 
         List<ClientShopData.GrantTarget> targets = visibleTargets;
         int pages = Math.max(1, (targets.size() + PAGE_SIZE - 1) / PAGE_SIZE);
@@ -225,26 +222,26 @@ public class GrantScreen extends AbstractContainerScreen<GrantMenu> {
             boolean checked = this.selected.contains(target.uuid);
             g.fill(x + LIST_X, rowY, x + LIST_X + LIST_W, rowY + ROW_H - 2, checked ? 0xFF39442F : 0xFF232427);
             if (checked) {
-                g.fill(x + LIST_X, rowY, x + LIST_X + 2, rowY + ROW_H - 2, COLOR_GOLD);
+                g.fill(x + LIST_X, rowY, x + LIST_X + 2, rowY + ROW_H - 2, IOStyle.ORANGE);
             }
             drawCheckbox(g, x + LIST_X + 4, rowY + 5, checked);
             Skins.drawHead(g, target.uuid, x + LIST_X + 17, rowY + 1, 16);
-            g.drawString(this.font, target.name, x + LIST_X + 37, rowY + 5, COLOR_TEXT, false);
+            g.drawString(this.font, target.name, x + LIST_X + 37, rowY + 5, IOStyle.TEXT, false);
             g.drawString(this.font,
                     Component.translatable(target.online
                             ? "gui.module_shop.grant.online"
                             : "gui.module_shop.grant.offline"),
-                    x + LIST_X + LIST_W - 28, rowY + 5, target.online ? COLOR_ONLINE : COLOR_MUTED, true);
+                    x + LIST_X + LIST_W - 28, rowY + 5, target.online ? COLOR_ONLINE : IOStyle.TEXT_2, true);
             this.rowRects.add(new int[]{x + LIST_X, rowY, LIST_W, ROW_H - 2, index});
             this.pageTargets.add(target);
         }
         if (targets.isEmpty()) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.grant.empty"),
-                    x + LIST_X + LIST_W / 2, y + 100, COLOR_MUTED);
+                    x + LIST_X + LIST_W / 2, y + 100, IOStyle.TEXT_2);
         }
         if (pages > 1) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.page", this.page + 1, pages),
-                    x + LIST_X + LIST_W / 2, y + 166, COLOR_MUTED);
+                    x + LIST_X + LIST_W / 2, y + 166, IOStyle.TEXT_2);
         }
     }
 
@@ -256,7 +253,7 @@ public class GrantScreen extends AbstractContainerScreen<GrantMenu> {
         g.fill(x, y, x + 1, y + 9, 0xFF6A6A6A);
         g.fill(x + 8, y, x + 9, y + 9, 0xFF6A6A6A);
         if (checked) {
-            g.fill(x + 2, y + 2, x + 7, y + 7, COLOR_GOLD);
+            g.fill(x + 2, y + 2, x + 7, y + 7, IOStyle.ORANGE);
         }
     }
 
@@ -372,7 +369,7 @@ public class GrantScreen extends AbstractContainerScreen<GrantMenu> {
             }
             SkiaDialog.small(c, Component.translatable("gui.module_shop.grant.amount_label").getString(), x + 8,
                     y + 82, 34, IOStyle.TEXT_2);
-            SkiaDialog.fieldFrame(c, x + 44, y + 74, 100, 16, this.amountBox.isFocused());
+            SkiaDialog.fieldFrame(c, x + 44, y + 74, 100, 16, this.amountBox.isFocused()); SkiaDialog.themeBox(this.amountBox);
             if (this.amountBox.getValue().isEmpty() && !this.amountBox.isFocused()) {
                 SkiaDialog.small(c, Component.translatable("gui.module_shop.grant.amount_hint").getString(), x + 48,
                         y + 82, 92, IOStyle.TEXT_3);
@@ -392,7 +389,7 @@ public class GrantScreen extends AbstractContainerScreen<GrantMenu> {
             SkiaDialog.playerSlots(c, x + 8, y + GrantMenu.INVENTORY_Y);
             // 右侧玩家列表
             SkiaDialog.card(c, x + LIST_X - 4, y + 14, LIST_W + 8, 192);
-            SkiaDialog.fieldFrame(c, x + LIST_X, y + 18, LIST_W, 16, this.searchBox.isFocused());
+            SkiaDialog.fieldFrame(c, x + LIST_X, y + 18, LIST_W, 16, this.searchBox.isFocused()); SkiaDialog.themeBox(this.searchBox);
             if (this.searchBox.getValue().isEmpty() && !this.searchBox.isFocused()) {
                 SkiaDialog.small(c, Component.translatable("gui.module_shop.grant.search_hint").getString(),
                         x + LIST_X + 4, y + 26, LIST_W - 8, IOStyle.TEXT_3);

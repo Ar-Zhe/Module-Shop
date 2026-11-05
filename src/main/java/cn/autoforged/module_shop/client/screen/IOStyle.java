@@ -116,21 +116,124 @@ public final class IOStyle {
    private IOStyle() {
    }
 
+   // =========================================================== 日间 / 暗色主题
+   // 上面字段的初始值就是暗色主题；日间主题只在 LIGHT 表里列出不同的颜色（参照 AtomChat「极简」预设）。
+   // 切换时所有调色板字段在两套之间做 THEME_MS 的缓动插值，整个界面一起平滑变色。
+
+   private static final java.util.Map<String, Integer> LIGHT = java.util.Map.ofEntries(
+         java.util.Map.entry("TEXT", 0xFF151A22), java.util.Map.entry("TEXT_2", 0xFF596273),
+         java.util.Map.entry("TEXT_3", 0xFF8A93A3), java.util.Map.entry("SHEET", 0xFFF7F8FA),
+         java.util.Map.entry("SIDEBAR", 0xFFEEF0F4), java.util.Map.entry("CONTENT", 0xFFF7F8FA),
+         java.util.Map.entry("CARD", 0xFFFFFFFF), java.util.Map.entry("HAIR", 0xFFE3E6EB),
+         java.util.Map.entry("HAIR_DARK", 0xFFD5D9E0), java.util.Map.entry("BLUE", 0xFF2563D8),
+         java.util.Map.entry("BLUE_HOVER", 0xFF3B76E8), java.util.Map.entry("BLUE_TINT", 0xFFDCE7FA),
+         java.util.Map.entry("BLUE_TINT_HOVER", 0xFFCADBF7), java.util.Map.entry("ORANGE", 0xFFB7791F),
+         java.util.Map.entry("GREEN", 0xFF1F9D57), java.util.Map.entry("GREEN_HOVER", 0xFF27B465),
+         java.util.Map.entry("GREEN_DARK", 0xFF177A43), java.util.Map.entry("GREEN_TINT", 0xFFDDF3E6),
+         java.util.Map.entry("GREEN_TINT_HOVER", 0xFFC9EBD7), java.util.Map.entry("RED", 0xFFD64541),
+         java.util.Map.entry("RED_HOVER", 0xFFE5534F), java.util.Map.entry("RED_TINT", 0xFFFBE3E2),
+         java.util.Map.entry("RED_TINT_HOVER", 0xFFF6CDCB), java.util.Map.entry("GRAY_BTN", 0xFFECEEF2),
+         java.util.Map.entry("GRAY_BTN_HOVER", 0xFFE0E3E9), java.util.Map.entry("FIELD_BG", 0xFFFFFFFF),
+         java.util.Map.entry("FIELD_GRAY", 0xFFE3E6EB), java.util.Map.entry("DISABLED_TEXT", 0xFFA3AAB6),
+         java.util.Map.entry("DISABLED_BG", 0xFFF0F1F4), java.util.Map.entry("ROW_HOVER", 0xFFEDF1F7),
+         java.util.Map.entry("EPIC", 0xFF8B4FD1), java.util.Map.entry("SLOT_BORDER", 0xFFCDD2DA),
+         java.util.Map.entry("SLOT_INNER", 0xFFE8EBF0), java.util.Map.entry("SEG_TRACK", 0xFFECEEF2),
+         java.util.Map.entry("SEG_SLIDER", 0xFF2563D8), java.util.Map.entry("SEG_OFF", 0xFF596273),
+         java.util.Map.entry("TOGGLE_OFF", 0xFFD5D9E0), java.util.Map.entry("TOGGLE_OFF_RING", 0xFFC4CAD3),
+         java.util.Map.entry("KNOB", 0xFFFFFFFF), java.util.Map.entry("KNOB_RING", 0x22000000),
+         java.util.Map.entry("TAB_BG", 0xFFFFFFFF), java.util.Map.entry("TAB_BG_HOVER", 0xFFF1F4F9),
+         java.util.Map.entry("TAB_BORDER", 0xFFE3E6EB), java.util.Map.entry("TAB_BORDER_HOVER", 0xFFC4CAD3),
+         java.util.Map.entry("TAB_SEL_GLOW", 0x332563D8), java.util.Map.entry("TAB_SEL_BORDER", 0xFF2563D8),
+         java.util.Map.entry("DONE_WASH", 0x88F7F8FA), java.util.Map.entry("SHADOW_1", 0x14000000),
+         java.util.Map.entry("SHADOW_2", 0x1F000000), java.util.Map.entry("SHADOW_3", 0x29000000),
+         java.util.Map.entry("BORDER", 0xFFD5D9E0), java.util.Map.entry("BORDER_HOVER", 0xFF4A80E8),
+         java.util.Map.entry("BORDER_DIM", 0xFFE3E6EB), java.util.Map.entry("SHEET_TOP", 0xFFF7F8FA),
+         java.util.Map.entry("SHEET_BOTTOM", 0xFFF7F8FA), java.util.Map.entry("CARD_TOP", 0xFFFFFFFF),
+         java.util.Map.entry("CARD_BOTTOM", 0xFFFFFFFF), java.util.Map.entry("INNER_LIGHT", 0x80FFFFFF),
+         java.util.Map.entry("SHADOW_TINT", 0x22000000), java.util.Map.entry("FOCUS", 0x992563D8));
+
+   /** 主题切换的过渡时长（毫秒）。 */
+   private static final float THEME_MS = 320.0F;
+   private static java.lang.reflect.Field[] paletteFields;
+   private static int[] darkValues;
+   private static int[] lightValues;
+   /** 0 = 暗色，1 = 日间；themeTarget 是目标，themeT 是当前插值进度。 */
+   private static float themeT = 0.0F;
+   private static float themeTarget = 0.0F;
+   private static long themeLastNs = 0L;
+
    static {
-      // 默认按深色主题初始化；真实主题由 UITheme 读取客户端 config/module_shop_ui_theme.txt 后覆盖。
-      applyTheme(true);
+      java.util.List<java.lang.reflect.Field> list = new java.util.ArrayList<>();
+      for (java.lang.reflect.Field f : IOStyle.class.getDeclaredFields()) {
+         int mod = f.getModifiers();
+         if (f.getType() == int.class && java.lang.reflect.Modifier.isStatic(mod)
+               && java.lang.reflect.Modifier.isPublic(mod) && !java.lang.reflect.Modifier.isFinal(mod)) {
+            list.add(f);
+         }
+      }
+      paletteFields = list.toArray(new java.lang.reflect.Field[0]);
+      darkValues = new int[paletteFields.length];
+      lightValues = new int[paletteFields.length];
+      for (int i = 0; i < paletteFields.length; i++) {
+         try {
+            darkValues[i] = paletteFields[i].getInt(null);
+         } catch (IllegalAccessException e) {
+            darkValues[i] = 0;
+         }
+         lightValues[i] = LIGHT.getOrDefault(paletteFields[i].getName(), darkValues[i]);
+      }
+      dark = true;
    }
 
+   /** 立即切到指定主题（不播过渡，用于启动时读取配置）。 */
    public static void applyTheme(boolean toDark) {
-      dark = true;
-      // 只保留这一套深色主题（OneConfig 风格）；衍生色统一在这里算，避免各处硬编码。
-      BLUE_TINT = 0xFF1B2A6B;
-      BLUE_TINT_HOVER = 0xFF243689;
-      GREEN_TINT = 0xFF16321F;
-      GREEN_TINT_HOVER = 0xFF1E4429;
-      RED_TINT = 0xFF3A1D1C;
-      RED_TINT_HOVER = 0xFF4E2725;
-      ROW_HOVER = 0xFF222735;
+      dark = toDark;
+      themeTarget = toDark ? 0.0F : 1.0F;
+      themeT = themeTarget;
+      themeLastNs = 0L;
+      writePalette(themeT);
+   }
+
+   /** 切到指定主题并播放渐变过渡。 */
+   public static void animateTheme(boolean toDark) {
+      dark = toDark;
+      themeTarget = toDark ? 0.0F : 1.0F;
+      themeLastNs = System.nanoTime();
+   }
+
+   /** 过渡进行中时推进插值；每帧调用一次（多次调用也安全，按真实时间推进）。 */
+   public static void tickTheme() {
+      if (themeT == themeTarget) {
+         return;
+      }
+      long now = System.nanoTime();
+      float dt = themeLastNs == 0L ? 16.0F : Math.min(50.0F, (now - themeLastNs) / 1_000_000.0F);
+      themeLastNs = now;
+      float step = dt / THEME_MS;
+      themeT = themeTarget > themeT ? Math.min(themeTarget, themeT + step) : Math.max(themeTarget, themeT - step);
+      writePalette(themeT);
+   }
+
+   /** 当前主题进度：0 = 暗色，1 = 日间（过渡中为中间值，已缓动）。 */
+   public static float themeProgress() {
+      return themeT * themeT * (3.0F - 2.0F * themeT);
+   }
+
+   /** 主题过渡是否还在进行。 */
+   public static boolean themeAnimating() {
+      return themeT != themeTarget;
+   }
+
+   private static void writePalette(float t) {
+      // 缓入缓出：首尾慢、中间快，变色过程看起来更柔和
+      float e = t * t * (3.0F - 2.0F * t);
+      for (int i = 0; i < paletteFields.length; i++) {
+         int v = e <= 0.0F ? darkValues[i] : e >= 1.0F ? lightValues[i] : mix(darkValues[i], lightValues[i], e);
+         try {
+            paletteFields[i].setInt(null, v);
+         } catch (IllegalAccessException ignored) {
+         }
+      }
    }
 
    // =========================================================== 基础工具

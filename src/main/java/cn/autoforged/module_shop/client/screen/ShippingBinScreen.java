@@ -606,6 +606,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
             boolean focused = this.searchBox != null && this.searchBox.isFocused();
             Draw.fill(c, x + LIST_X, y + SEARCH_Y, LIST_W, CTRL_H, 3, IOStyle.FIELD_BG);
             Draw.stroke(c, x + LIST_X, y + SEARCH_Y, LIST_W, CTRL_H, 3, 1, focused ? IOStyle.BLUE : IOStyle.BORDER_DIM);
+            SkiaDialog.themeBox(this.searchBox);
             if (this.searchBox != null && this.searchBox.getValue().isEmpty() && !focused) {
                 Text.drawLine(c, Component.translatable("gui.module_shop.shipping.search_hint").getString(),
                         AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_3, x + LIST_X + 5, y + SEARCH_Y + CTRL_H / 2.0F,
