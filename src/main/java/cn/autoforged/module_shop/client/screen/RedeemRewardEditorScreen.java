@@ -79,6 +79,11 @@ public class RedeemRewardEditorScreen extends AbstractContainerScreen<GrantMenu>
             }
         }
 
+        this.skia = cn.autoforged.module_shop.client.ui.AtomUi.available();
+        if (this.skia) {
+            skInit(x, y);
+            return;
+        }
         // 金额框下移到物品槽下方（原来那两个「全体玩家 / 全不选」按钮已取消：
         // 现在**不勾选任何玩家 = 全体玩家都能兑换**，勾了人就只有那些人能兑换）。
         this.amountBox = new EditBox(this.font, x + 44, y + 96, 100, 16,
@@ -217,6 +222,10 @@ public class RedeemRewardEditorScreen extends AbstractContainerScreen<GrantMenu>
     protected void renderBg(GuiGraphics g, float partialTick, int mouseX, int mouseY) {
         int x = this.leftPos;
         int y = this.topPos;
+        if (this.skia) {
+            skBg(g, x, y, mouseX, mouseY);
+            return;
+        }
         Bricks.panel(g, x, y, PANEL_W, PANEL_H);
         for (int row = 0; row < 3; row++) {
             for (int col = 0; col < 9; col++) {
@@ -304,6 +313,175 @@ public class RedeemRewardEditorScreen extends AbstractContainerScreen<GrantMenu>
         g.pose().popPose();
     }
 
+    // =========================================================== Skija（只换绘制，点击沿用旧矩形）
+
+    private boolean skia;
+
+    private void skInit(int x, int y) {
+        String keepSearch = this.searchBox == null ? "" : this.searchBox.getValue();
+        String keepAmount = this.amountBox == null ? Long.toString(Math.max(0L, ClientShopData.redeemDraftMoney))
+                : this.amountBox.getValue();
+        this.amountBox = new EditBox(this.font, x + 48, y + 100, 92, 10,
+                Component.translatable("gui.module_shop.grant.amount"));
+        this.amountBox.setBordered(false);
+        this.amountBox.setMaxLength(12);
+        this.amountBox.setFilter(text -> text.isEmpty() || text.matches("\\d{1,12}"));
+        this.amountBox.setValue(keepAmount);
+        this.addRenderableWidget(this.amountBox);
+        this.searchBox = new EditBox(this.font, x + LIST_X + 4, y + 22, LIST_W - 8, 10,
+                Component.translatable("gui.module_shop.grant.search_hint"));
+        this.searchBox.setBordered(false);
+        this.searchBox.setMaxLength(32);
+        this.searchBox.setValue(keepSearch);
+        this.searchBox.setResponder(text -> this.page = 0);
+        this.addRenderableWidget(this.searchBox);
+        CompoundTag request = new CompoundTag();
+        request.putString("action", "admin_grant_request");
+        ServerboundShopActionPayload.send(request);
+    }
+
+    private boolean skClick(double mx, double my) {
+        int x = this.leftPos;
+        int y = this.topPos;
+        int pages = Math.max(1, (filtered().size() + PAGE_SIZE - 1) / PAGE_SIZE);
+        if (pages > 1 && IOStyle.inside(x + LIST_X, y + 162, 40, 16, mx, my)) {
+            Bricks.click();
+            this.page = Math.max(0, this.page - 1);
+            return true;
+        }
+        if (pages > 1 && IOStyle.inside(x + LIST_X + LIST_W - 40, y + 162, 40, 16, mx, my)) {
+            Bricks.click();
+            this.page = Math.min(pages - 1, this.page + 1);
+            return true;
+        }
+        if (IOStyle.inside(x + LIST_X, y + 182, 71, 16, mx, my)) {
+            Bricks.click();
+            selectAll();
+            return true;
+        }
+        if (IOStyle.inside(x + LIST_X + 75, y + 182, 71, 16, mx, my)) {
+            Bricks.click();
+            this.selected.clear();
+            return true;
+        }
+        if (IOStyle.inside(x + LIST_X, y + 202, 86, 20, mx, my)) {
+            Bricks.click();
+            save();
+            return true;
+        }
+        if (IOStyle.inside(x + LIST_X + 90, y + 202, 56, 20, mx, my)) {
+            Bricks.click();
+            finish(false);
+            return true;
+        }
+        return false;
+    }
+
+    private void skBg(GuiGraphics g, int x, int y, int mouseX, int mouseY) {
+        this.rowRects.clear();
+        this.pageTargets.clear();
+        List<ClientShopData.GrantTarget> targets = filtered();
+        int pages = Math.max(1, (targets.size() + PAGE_SIZE - 1) / PAGE_SIZE);
+        this.page = Mth.clamp(this.page, 0, pages - 1);
+        cn.autoforged.module_shop.client.ui.render.SkiaFrame.draw(g, c -> {
+            SkiaDialog.bare(c, x, y, PANEL_W, PANEL_H);
+            cn.autoforged.module_shop.client.ui.render.Text.drawLine(c,
+                    Component.translatable("gui.module_shop.redeem.reward_title").getString(),
+                    cn.autoforged.module_shop.client.ui.AtomUi.BOLD, cn.autoforged.module_shop.client.ui.render.Text.BODY,
+                    IOStyle.TEXT, x + 8, y + 9, 166, cn.autoforged.module_shop.client.ui.render.Text.Align.LEFT);
+            for (int i = 0; i < 27; i++) {
+                SkiaDialog.slotFrame(c, x + 8 + (i % 9) * 18, y + 18 + (i / 9) * 18);
+            }
+            SkiaDialog.small(c, Component.translatable("gui.module_shop.grant.amount_label").getString(), x + 8,
+                    y + 104, 34, IOStyle.TEXT_2);
+            SkiaDialog.fieldFrame(c, x + 44, y + 96, 100, 16, this.amountBox.isFocused());
+            if (this.amountBox.getValue().isEmpty() && !this.amountBox.isFocused()) {
+                SkiaDialog.small(c, Component.translatable("gui.module_shop.grant.amount_hint").getString(), x + 48,
+                        y + 104, 92, IOStyle.TEXT_3);
+            }
+            String sel = this.selected.isEmpty()
+                    ? Component.translatable("gui.module_shop.redeem.all_players").getString()
+                    : Component.translatable("gui.module_shop.grant.selected", this.selected.size(), targets.size())
+                    .getString();
+            SkiaDialog.text(c, sel, x + 8, y + 124, LIST_X - 16, this.selected.isEmpty() ? IOStyle.BLUE
+                    : IOStyle.ORANGE);
+            SkiaDialog.small(c, this.playerInventoryTitle.getString(), x + 8, y + GrantMenu.INVENTORY_Y - 6, 160,
+                    IOStyle.TEXT_3);
+            SkiaDialog.playerSlots(c, x + 8, y + GrantMenu.INVENTORY_Y);
+            SkiaDialog.card(c, x + LIST_X - 4, y + 14, LIST_W + 8, 214);
+            SkiaDialog.fieldFrame(c, x + LIST_X, y + 18, LIST_W, 16, this.searchBox.isFocused());
+            if (this.searchBox.getValue().isEmpty() && !this.searchBox.isFocused()) {
+                SkiaDialog.small(c, Component.translatable("gui.module_shop.grant.search_hint").getString(),
+                        x + LIST_X + 4, y + 26, LIST_W - 8, IOStyle.TEXT_3);
+            }
+            for (int i = 0; i < PAGE_SIZE; i++) {
+                int index = this.page * PAGE_SIZE + i;
+                if (index >= targets.size()) {
+                    break;
+                }
+                ClientShopData.GrantTarget target = targets.get(index);
+                int rowY = y + LIST_Y + i * ROW_H;
+                boolean checked = this.selected.contains(target.uuid);
+                boolean hover = IOStyle.inside(x + LIST_X, rowY, LIST_W, ROW_H - 2, mouseX, mouseY);
+                cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x + LIST_X, rowY, LIST_W, ROW_H - 2, 3,
+                        checked ? IOStyle.BLUE_TINT : (hover ? IOStyle.ROW_HOVER : IOStyle.SIDEBAR));
+                cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, x + LIST_X + 4, rowY + 4.5F, 9, 9, 2, 1,
+                        checked ? IOStyle.BLUE : IOStyle.BORDER);
+                if (checked) {
+                    cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x + LIST_X + 4, rowY + 4.5F, 9, 9, 2,
+                            IOStyle.BLUE);
+                    cn.autoforged.module_shop.client.ui.render.Draw.line(c, x + LIST_X + 6, rowY + 9, x + LIST_X + 8,
+                            rowY + 11, 1.3F, 0xFFFFFFFF);
+                    cn.autoforged.module_shop.client.ui.render.Draw.line(c, x + LIST_X + 8, rowY + 11,
+                            x + LIST_X + 11.5F, rowY + 7, 1.3F, 0xFFFFFFFF);
+                }
+                String status = Component.translatable(target.online ? "gui.module_shop.grant.online"
+                        : "gui.module_shop.grant.offline").getString();
+                float sw = cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, status,
+                        cn.autoforged.module_shop.client.ui.AtomUi.REGULAR,
+                        cn.autoforged.module_shop.client.ui.render.Text.SMALL,
+                        target.online ? IOStyle.GREEN : IOStyle.TEXT_3, x + LIST_X, rowY + 9, LIST_W - 4,
+                        cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
+                SkiaDialog.text(c, target.name, x + LIST_X + 36, rowY + 9, LIST_W - 40 - sw - 4, IOStyle.TEXT);
+                this.rowRects.add(new int[]{x + LIST_X, rowY, LIST_W, ROW_H - 2, index});
+                this.pageTargets.add(target);
+            }
+            if (targets.isEmpty()) {
+                SkiaDialog.center(c, Component.translatable("gui.module_shop.grant.empty").getString(), x + LIST_X,
+                        y + 100, LIST_W, IOStyle.TEXT_2);
+            }
+            cn.autoforged.module_shop.client.ui.widget.Button.Kind n =
+                    cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL;
+            if (pages > 1) {
+                SkiaDialog.flatButton(c, x + LIST_X, y + 162, 40, 16, "‹", n, this.page > 0, mouseX, mouseY);
+                SkiaDialog.flatButton(c, x + LIST_X + LIST_W - 40, y + 162, 40, 16, "›", n, this.page < pages - 1,
+                        mouseX, mouseY);
+                SkiaDialog.center(c, Component.translatable("gui.module_shop.page", this.page + 1, pages).getString(),
+                        x + LIST_X, y + 170, LIST_W, IOStyle.TEXT_2);
+            }
+            SkiaDialog.flatButton(c, x + LIST_X, y + 182, 71, 16,
+                    Component.translatable("gui.module_shop.redeem.select_all").getString(), n, true, mouseX, mouseY);
+            SkiaDialog.flatButton(c, x + LIST_X + 75, y + 182, 71, 16,
+                    Component.translatable("gui.module_shop.redeem.select_none").getString(), n, true, mouseX,
+                    mouseY);
+            SkiaDialog.flatButton(c, x + LIST_X, y + 202, 86, 20,
+                    Component.translatable("gui.module_shop.schedule.save").getString(),
+                    cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, true, mouseX, mouseY);
+            SkiaDialog.flatButton(c, x + LIST_X + 90, y + 202, 56, 20,
+                    Component.translatable("gui.module_shop.schedule.cancel").getString(), n, true, mouseX, mouseY);
+        });
+        for (int i = 0; i < this.pageTargets.size(); i++) {
+            Skins.drawHead(g, this.pageTargets.get(i).uuid, x + LIST_X + 17, y + LIST_Y + i * ROW_H + 1, 16);
+        }
+    }
+
+    @Override
+    protected void renderLabels(GuiGraphics g, int mouseX, int mouseY) {
+        if (!this.skia) {
+            super.renderLabels(g, mouseX, mouseY);
+        }
+    }
+
     // =========================================================== 交互
 
     @Override
@@ -321,6 +499,9 @@ public class RedeemRewardEditorScreen extends AbstractContainerScreen<GrantMenu>
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (this.skia && button == 0 && skClick(mouseX, mouseY)) {
+            return true;
+        }
         for (int i = 0; i < this.rowRects.size(); i++) {
             int[] rect = this.rowRects.get(i);
             if (mouseX >= rect[0] && mouseX < rect[0] + rect[2] && mouseY >= rect[1] && mouseY < rect[1] + rect[3]) {

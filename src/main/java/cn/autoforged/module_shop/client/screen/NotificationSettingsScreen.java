@@ -14,7 +14,7 @@ import net.minecraft.network.chat.Component;
  * 顶部是整体提醒音效总开关，下面是各类型单独开关。
  * 界面点击音效（ui_click）不经过本开关，因此关闭提醒音效仍能听到界面点击声。
  */
-public class NotificationSettingsScreen extends Screen {
+public class NotificationSettingsScreen extends SkiaDialog {
     private static final int PANEL_W = 240;
     /** 比原来高一行：底部多了一行「界面点击音效」+ 一行提示，面板加高避免与返回按钮重叠。 */
     private static final int PANEL_H = 224;
@@ -43,6 +43,9 @@ public class NotificationSettingsScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         this.rows.clear();
         super.render(g, mouseX, mouseY, partialTick);
         int x = left();
@@ -85,6 +88,9 @@ public class NotificationSettingsScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         int x = left();
         int y = top();
         if (button == 0 && mouseX >= x + 10 && mouseX < x + 80
@@ -127,6 +133,56 @@ public class NotificationSettingsScreen extends Screen {
     @Override
     public boolean isPauseScreen() {
         return false;
+    }
+
+    // ------------------------------------------------------------------ Skija
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 240.0F;
+        float rowH = 20.0F;
+        int rowsN = 1 + NotificationType.values().length;
+        float h = HEADER_H + 8 + rowsN * rowH + 6 + 22 + 12 + 8 + 20 + PAD;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        panel(c, x, y, w, h, this.title.getString());
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        float ry = y + HEADER_H + 8;
+        card(c, innerX, ry, innerW, rowsN * rowH);
+        for (int i = 0; i < rowsN; i++) {
+            NotificationType type = i == 0 ? null : NotificationType.values()[i - 1];
+            float rowY = ry + i * rowH;
+            if (i > 0) {
+                cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX + 6, rowY, innerW - 12, 1, 0,
+                        IOStyle.HAIR);
+            }
+            String label = (type == null ? Component.translatable("gui.module_shop.notify.master")
+                    : Component.translatable("gui.module_shop.notify." + type.id())).getString();
+            text(c, label, innerX + 8, rowY + rowH / 2, innerW - 50, type == null ? IOStyle.TEXT : IOStyle.TEXT_2);
+            boolean on = type == null ? ClientNotifications.masterSound : ClientNotifications.typeSound(type);
+            toggle(c, "row" + i, innerX + innerW - 30, rowY + (rowH - 12) / 2, on, () -> {
+                if (type == null) {
+                    ClientNotifications.masterSound = !ClientNotifications.masterSound;
+                } else {
+                    ClientNotifications.setTypeSound(type, !ClientNotifications.typeSound(type));
+                }
+            });
+        }
+        float cy = ry + rowsN * rowH + 6;
+        float hv = hover("click", innerX, cy, innerW, 22);
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX, cy, innerW, 22, 3,
+                cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.CARD, IOStyle.GRAY_BTN_HOVER, hv));
+        cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, innerX, cy, innerW, 22, 3, 1,
+                cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, hv));
+        text(c, Component.translatable("gui.module_shop.notify.clicksound").getString(), innerX + 8, cy + 11,
+                innerW * 0.5F, IOStyle.TEXT);
+        right(c, ClickSound.displayName().getString() + "  ›", innerX, cy + 11, innerW - 8, IOStyle.BLUE);
+        hit(innerX, cy, innerW, 22, ClickSound::next, null);
+        small(c, Component.translatable("gui.module_shop.notify.clicksound_hint").getString(), innerX, cy + 30,
+                innerW, IOStyle.TEXT_3);
+        button(c, "back", Component.translatable("gui.module_shop.back").getString(), x + PAD, y + h - PAD - 20, 70,
+                20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, this::onClose);
     }
 
     private void drawButton(GuiGraphics g, int x, int y, int w, int h, Component label) {

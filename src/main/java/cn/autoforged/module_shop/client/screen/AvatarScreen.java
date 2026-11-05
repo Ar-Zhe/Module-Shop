@@ -16,7 +16,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * 第八轮：列表改成**整行滚动**（和收购 / 货币兑换列表同一套逻辑）——
  * 鼠标滚轮上下滑动、右侧一根滑块指示位置、底部还有内容时显示浮动小三角提示。
  */
-public class AvatarScreen extends Screen {
+public class AvatarScreen extends SkiaDialog {
     private static final int PANEL_W = 240;
     private static final int PANEL_H = 210;
     private static final int ROW_H = 30;
@@ -52,6 +52,9 @@ public class AvatarScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         this.rowRects.clear();
         super.render(g, mouseX, mouseY, partialTick);
         int x = left();
@@ -131,6 +134,9 @@ public class AvatarScreen extends Screen {
     /** 鼠标滚轮：整行上下滚动（与收购 / 货币兑换列表同一套逻辑）。 */
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (skia()) {
+            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        }
         if (scrollY != 0.0D) {
             int next = Math.max(0, Math.min(maxScroll(), this.scrollRow + (scrollY > 0.0D ? -1 : 1)));
             if (next != this.scrollRow) {
@@ -143,6 +149,9 @@ public class AvatarScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         int x = left();
         int y = top();
         Bricks.click();
@@ -183,6 +192,79 @@ public class AvatarScreen extends Screen {
             }
         }
         return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    // ------------------------------------------------------------------ Skija
+
+    private final cn.autoforged.module_shop.client.ui.widget.ScrollController skScroll =
+            new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 250.0F;
+        float rowH = 28.0F;
+        float listH = rowH * 6;
+        float h = HEADER_H + 8 + listH + 8 + 20 + PAD;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        panel(c, x, y, w, h, this.title.getString());
+        List<ClientShopData.StallPlayer> players = ClientShopData.stallPlayers;
+        float listY = y + HEADER_H + 8;
+        if (players.isEmpty()) {
+            center(c, Component.translatable("gui.module_shop.avatar_empty").getString(), innerX, listY + listH / 2,
+                    innerW, IOStyle.TEXT_2);
+        } else {
+            float oy = beginList(c, this.skScroll, innerX, listY, innerW, listH, players.size() * rowH);
+            for (int i = 0; i < players.size(); i++) {
+                float ry = oy + i * rowH;
+                if (ry + rowH < listY || ry > listY + listH) {
+                    continue;
+                }
+                ClientShopData.StallPlayer p = players.get(i);
+                float rw = innerW - 8;
+                float hv = hover("row" + i, innerX, ry, rw, rowH - 3);
+                cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX, ry, rw, rowH - 3, 3,
+                        cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.CARD, IOStyle.GRAY_BTN_HOVER, hv));
+                cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, innerX, ry, rw, rowH - 3, 3, 1,
+                        cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BLUE, hv));
+                final java.util.UUID uuid = p.uuid;
+                final float hx = innerX + 5;
+                final float hy = ry + (rowH - 3 - 16) / 2;
+                this.items.addCustom(hx, hy, 16, 16, (g, font) -> Skins.drawHead(g, uuid, (int) hx, (int) hy, 16));
+                small(c, "#" + (i + 1), innerX + 26, ry + (rowH - 3) / 2, 20, IOStyle.ORANGE);
+                text(c, p.name, innerX + 46, ry + 8, rw - 54, IOStyle.TEXT);
+                small(c, Component.translatable("gui.module_shop.avatar_items", p.count).getString(), innerX + 46,
+                        ry + 18, rw - 54, IOStyle.TEXT_2);
+                right(c, "›", innerX, ry + (rowH - 3) / 2, rw - 8,
+                        cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.TEXT_3, IOStyle.BLUE, hv));
+                hit(innerX, ry, rw, rowH - 3, () -> openStall(uuid), null);
+            }
+            endList(c);
+        }
+        float by = y + h - PAD - 20;
+        cn.autoforged.module_shop.client.ui.widget.Button.Kind n =
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL;
+        button(c, "back", Component.translatable("gui.module_shop.back").getString(), innerX, by, 60, 20, n, true,
+                Nav::back);
+        button(c, "manage", Component.translatable("gui.module_shop.stall_manage").getString(), innerX + 66, by, 90,
+                20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, true, Nav::backToShop);
+        if (players.size() > 0) {
+            right(c, Component.translatable("gui.module_shop.avatar.count", players.size()).getString(), innerX,
+                    by + 10, innerW, IOStyle.TEXT_3);
+        }
+    }
+
+    private static void openStall(java.util.UUID uuid) {
+        if (uuid == null) {
+            return;
+        }
+        Nav.rearm(StallBrowseScreen.class);
+        CompoundTag tag = new CompoundTag();
+        tag.putString("action", "open_stall");
+        tag.putString("owner", uuid.toString());
+        ServerboundShopActionPayload.send(tag);
     }
 
     @Override
