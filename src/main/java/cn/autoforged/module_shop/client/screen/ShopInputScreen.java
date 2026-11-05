@@ -388,7 +388,7 @@ public class ShopInputScreen extends SkiaDialog {
                     Rarity rarity = Rarity.values()[rect[4]];
                     boolean selected = rarity.id().equals(this.rarityValue);
                     if (selected) {
-                        IOStyle.ring(g, rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2, 0, rarity.color());
+                        IOStyle.ring(g, rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2, 0, IOStyle.rarity(rarity));
                     } else {
                         IOStyle.ring(g, rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2, 0, IOStyle.BORDER_DIM);
                     }
@@ -534,14 +534,16 @@ public class ShopInputScreen extends SkiaDialog {
                 Rarity current = Rarity.byId(this.rarityValue);
                 small(c, Component.translatable("gui.module_shop.quality_current",
                                 Component.translatable(current.translationKey())).getString(),
-                        innerX + labelW + 8, cy + 5, innerW - labelW - 8, current.color());
+                        innerX + labelW + 8, cy + 5, innerW - labelW - 8, IOStyle.rarity(current));
                 Rarity[] all = Rarity.values();
                 float gap = 4.0F;
                 float bw = (innerW - gap * (all.length - 1)) / all.length;
                 for (int k = 0; k < all.length; k++) {
                     Rarity r = all[k];
                     chip(c, "rarity:" + r.id(), Component.translatable(r.translationKey()).getString(),
-                            innerX + k * (bw + gap), ctrlY, bw, 18, r.id().equals(this.rarityValue), r.color(),
+                            // Rarity.color() 是不带透明度的 RGB，直接用会整块透明（选中项“消失”）；改用主题色
+                            innerX + k * (bw + gap), ctrlY, bw, 18, r.id().equals(this.rarityValue),
+                            IOStyle.rarity(r),
                             () -> this.rarityValue = r.id());
                 }
             } else if (this.choiceValues.containsKey(field)) {

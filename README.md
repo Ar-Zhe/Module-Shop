@@ -42,7 +42,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | **管理员发放** | `/shop admin money <金额> [目标...]` 发星币（不填目标 = 所有已知玩家，含离线；目标可写玩家名 / UUID / `all` / `@a`），`/shop admin money set <目标> <金额>` 直接改余额（0 = 清零），`/shop admin send` 打开图形发放界面：放入物品 + 勾选玩家或全体 + 可选金额 → 发送，玩家在邮箱领取；也可用 `/shop wallet give <在线玩家> <金额>` 只发一个人 |
 | **交易流水** | 所有资产变动都记流水（买卖 / 摊位 / 拍卖 / 转账 / 交易 / 邮箱 / 管理员发放 / 刷新商店 / 刷新收购 / 全清奖励），管理员用 `/shop admin history <玩家>` 翻页查看 |
 
-## 公共 API（当前 1.1.0）
+## 公共 API（当前 1.2.0）
 
 模组现在对外提供**稳定的公共 API**，供其他模组、KubeJS 脚本与外部服务调用：
 
@@ -57,6 +57,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | 商店 | `ModuleShopApi.shop()` | 只读商品/价格/库存 + 受校验的购买/出售 + 拍卖出价 / 求购发布 / 摊位上架 |
 | 事件 | `ModuleShopApi.events()` | 余额变更 / 邮件创建 / 奖励发放 / 签到 / 成交 …（业务成功后通知，不可取消） |
 | **附属页面**（1.1.0） | `api.client.ShopModules` | 客户端：附属模组在商店侧栏注册条目，`registerPage` 画在内容区（`AddonPage` + `ShopTheme` + UI 套件），`register` 弹出自己的界面 |
+| **皮肤**（1.2.0） | `api.client.ShopTheme` | 客户端：跟随玩家选择的界面皮肤取色；渐变端点、柔光，以及和主体一致的弹窗底板 `dialogPanel` |
 
 三条硬规则：**只在服务端主线程调用**、**只用 `ApiResult` 判断成败**、**写操作必须带幂等键**。
 
@@ -66,7 +67,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 2. **KubeJS**：脚本里直接用全局 `ModuleShop`（示例：[examples/kubejs](examples/kubejs)）；
 3. **HTTP / REST**：可选、**默认关闭**，需显式开启并设置 token（默认只监听 `127.0.0.1`、默认只读）。
 
-> API 版本 `1.1.0` 与模组版本独立；同一主版本内只增不改（UI 套件同样适用）。附属页面出错时商店会停用该页面并改用附属的回退界面，不会崩溃。
+> API 版本 `1.2.0` 与模组版本独立；同一主版本内只增不改（UI 套件同样适用）。附属页面出错时商店会停用该页面并改用附属的回退界面，不会崩溃。
 
 ## 安装
 

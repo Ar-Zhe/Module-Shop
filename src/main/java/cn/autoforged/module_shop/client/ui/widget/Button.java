@@ -138,8 +138,16 @@ public final class Button extends UiComponent {
             canvas.scale(scale, scale);
             canvas.translate(-cx, -cy);
 
-            Draw.fill(canvas, x, y, width, height, radius, fill);
-            Draw.stroke(canvas, x, y, width, height, radius, 1.0F, border);
+            if (enabled && kind == Kind.ACCENT) {
+                // 主按钮：强调色水平渐变（日间 / 夜间两端相同 = 纯色），描边用一层淡白高光
+                int to = Draw.lerp(Draw.lerp(IOStyle.ACCENT_2, IOStyle.BLUE_HOVER, hoverT * 0.4F),
+                        IOStyle.ACCENT_2, pressT);
+                Draw.gradientH(canvas, x, y, width, height, radius, fill, to);
+                Draw.stroke(canvas, x, y, width, height, radius, 1.0F, Draw.alpha(0xFFFFFFFF, 0.10F + 0.12F * hoverT));
+            } else {
+                Draw.fill(canvas, x, y, width, height, radius, fill);
+                Draw.stroke(canvas, x, y, width, height, radius, 1.0F, border);
+            }
             if (kind == Kind.TAB && selectT > 0.01F) {
                 float barH = (height - 6.0F) * selectT;
                 Draw.fill(canvas, x + 2.0F, y + (height - barH) / 2.0F, 2.0F, barH, 1.0F,

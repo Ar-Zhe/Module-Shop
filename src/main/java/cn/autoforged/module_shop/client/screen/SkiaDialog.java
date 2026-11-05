@@ -436,8 +436,8 @@ public abstract class SkiaDialog extends Screen {
         float h = 12.0F;
         float t = anim("toggle:" + key, on, 70.0F);
         float hv = hover("toggle:" + key, x, y, w, h);
-        int track = Draw.lerp(Draw.lerp(IOStyle.TOGGLE_OFF, IOStyle.GRAY_BTN_HOVER, hv), IOStyle.BLUE, t);
-        Draw.fill(canvas, x, y, w, h, h / 2.0F, track);
+        int off = Draw.lerp(IOStyle.TOGGLE_OFF, IOStyle.GRAY_BTN_HOVER, hv);
+        Draw.gradientH(canvas, x, y, w, h, h / 2.0F, Draw.lerp(off, IOStyle.BLUE, t), Draw.lerp(off, IOStyle.ACCENT_2, t));
         Draw.stroke(canvas, x, y, w, h, h / 2.0F, 1.0F, Draw.lerp(IOStyle.TOGGLE_OFF_RING, IOStyle.BLUE, t));
         float knob = h - 4.0F;
         // 滑块移动途中横向拉长一点（像被拖着走），到位后恢复圆形
@@ -522,9 +522,8 @@ public abstract class SkiaDialog extends Screen {
 
     /** 标准弹窗面板：底色 + 边框 + 标题（粗体居中）+ 标题下分隔线。 */
     protected final void panel(Canvas canvas, float x, float y, float w, float h, String title) {
-        Draw.shadow(canvas, x, y, w, h, 0.0F, 10.0F, 3.0F, IOStyle.SHADOW_TINT);
-        Draw.fill(canvas, x, y, w, h, 0.0F, IOStyle.SHEET);
-        Draw.stroke(canvas, x, y, w, h, 0.0F, 1.0F, IOStyle.BORDER);
+        Draw.glass(canvas, x, y, w, h, IOStyle.SHEET, IOStyle.SHEET_2, IOStyle.GLASS_DIALOG, IOStyle.BORDER,
+                IOStyle.INNER_LIGHT, IOStyle.GLOW_1, IOStyle.SHADOW_TINT, 10.0F, 3.0F);
         if (title != null) {
             Text.drawLine(canvas, title, AtomUi.BOLD, Text.TITLE, IOStyle.TEXT, x + PAD, y + HEADER_H / 2.0F,
                     w - PAD * 2, Text.Align.CENTER);
@@ -565,9 +564,14 @@ public abstract class SkiaDialog extends Screen {
             border = IOStyle.BORDER_DIM;
             textColor = IOStyle.DISABLED_TEXT;
         } else if (kind == Button.Kind.ACCENT) {
-            fill = hover ? IOStyle.BLUE_HOVER : IOStyle.BLUE;
-            border = fill;
-            textColor = 0xFFFFFFFF;
+            // 主按钮：强调色水平渐变（日间 / 夜间两端相同 = 纯色）
+            int from = hover ? IOStyle.BLUE_HOVER : IOStyle.BLUE;
+            int to = hover ? Draw.lerp(IOStyle.ACCENT_2, IOStyle.BLUE_HOVER, 0.4F) : IOStyle.ACCENT_2;
+            Draw.gradientH(canvas, x, y, w, h, 3.0F, from, to);
+            Draw.stroke(canvas, x, y, w, h, 3.0F, 1.0F, Draw.alpha(0xFFFFFFFF, hover ? 0.22F : 0.10F));
+            Text.drawLine(canvas, label, AtomUi.REGULAR, Text.BODY, 0xFFFFFFFF, x + 3, y + h / 2.0F, w - 6,
+                    Text.Align.CENTER);
+            return;
         } else if (kind == Button.Kind.DANGER) {
             fill = hover ? IOStyle.RED_TINT_HOVER : IOStyle.RED_TINT;
             border = hover ? IOStyle.RED : IOStyle.RED_TINT_HOVER;
@@ -603,9 +607,8 @@ public abstract class SkiaDialog extends Screen {
     /** 不带标题的弹窗面板（容器界面用）。 */
     public static void bare(Canvas canvas, float x, float y, float w, float h) {
         IOStyle.tickTheme();
-        Draw.shadow(canvas, x, y, w, h, 0.0F, 10.0F, 3.0F, IOStyle.SHADOW_TINT);
-        Draw.fill(canvas, x, y, w, h, 0.0F, IOStyle.SHEET);
-        Draw.stroke(canvas, x, y, w, h, 0.0F, 1.0F, IOStyle.BORDER);
+        Draw.glass(canvas, x, y, w, h, IOStyle.SHEET, IOStyle.SHEET_2, IOStyle.GLASS_DIALOG, IOStyle.BORDER,
+                IOStyle.INNER_LIGHT, IOStyle.GLOW_1, IOStyle.SHADOW_TINT, 10.0F, 3.0F);
     }
 
     /** 内容卡片（列表区、信息区的底）。 */

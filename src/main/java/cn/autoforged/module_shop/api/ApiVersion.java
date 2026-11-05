@@ -24,11 +24,14 @@ package cn.autoforged.module_shop.api;
  */
 public final class ApiVersion {
     /** 当前 API 版本（语义化版本）。 */
-    public static final String API_VERSION = "1.1.0";
+    public static final String API_VERSION = "1.2.0";
     /** 主版本号：外部可用它做依赖检查。 */
     public static final int API_MAJOR = 1;
-    /** 次版本号：1.1 起新增客户端扩展点 {@link cn.autoforged.module_shop.api.client.ShopModules}。 */
-    public static final int API_MINOR = 1;
+    /**
+     * 次版本号：1.1 起新增客户端扩展点 {@link cn.autoforged.module_shop.api.client.ShopModules}；
+     * 1.2 起 {@link cn.autoforged.module_shop.api.client.ShopTheme} 支持皮肤（渐变端点、柔光、弹窗底板等）。
+     */
+    public static final int API_MINOR = 2;
 
     private ApiVersion() {
     }

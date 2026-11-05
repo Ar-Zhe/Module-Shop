@@ -6,64 +6,83 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import net.minecraft.client.Minecraft;
 
+/**
+ * 客户端界面皮肤（日间 / 夜间 / 柔彩系列：樱糖 / 薄荷 / 雾蓝 / 奶茶 / 夜樱），保存在 config/module_shop_ui_theme.txt。
+ * 旧版本只存了 {@code dark=true/false}，读取时兼容。
+ */
 public final class UITheme {
    private static final String FILE_NAME = "module_shop_ui_theme.txt";
    private static boolean loaded = false;
-   private static boolean dark = true;
+   private static String skin = "dark";
 
    private UITheme() {
    }
 
    private static Path configPath() {
-      return Minecraft.getInstance().gameDirectory.toPath().resolve("config").resolve("module_shop_ui_theme.txt");
+      return Minecraft.getInstance().gameDirectory.toPath().resolve("config").resolve(FILE_NAME);
    }
 
    public static synchronized void ensureLoaded() {
       if (!loaded) {
          loaded = true;
-         boolean saved = false;
+         String saved = null;
 
          try {
             Path path = configPath();
             if (Files.exists(path)) {
                for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
                   String trimmed = line.trim();
-                  if (trimmed.startsWith("dark=")) {
-                     dark = Boolean.parseBoolean(trimmed.substring("dark=".length()).trim());
-                     saved = true;
+                  if (trimmed.startsWith("skin=")) {
+                     saved = trimmed.substring("skin=".length()).trim();
+                  } else if (saved == null && trimmed.startsWith("dark=")) {
+                     saved = Boolean.parseBoolean(trimmed.substring("dark=".length()).trim()) ? "dark" : "light";
                   }
                }
             }
-         } catch (Exception var5) {
+         } catch (Exception ignored) {
          }
 
-         // 测试分支：恢复日间 / 暗色切换（默认暗色）。旧绘制路径只做过暗色，AtomLib 不可用时固定暗色。
-         if (!saved || !cn.autoforged.module_shop.client.ui.AtomUi.available()) {
-            dark = true;
+         // 旧绘制路径只做过暗色：AtomLib 不可用时固定夜间
+         if (saved == null || !cn.autoforged.module_shop.client.ui.AtomUi.available()) {
+            saved = "dark";
          }
-         IOStyle.applyTheme(dark);
+         IOStyle.applySkin(saved);
+         skin = IOStyle.currentSkin();
       }
+   }
+
+   public static String skin() {
+      ensureLoaded();
+      return skin;
    }
 
    public static boolean isDark() {
       ensureLoaded();
-      return dark;
+      return IOStyle.dark;
    }
 
+   /** 旧接口：在日间 / 夜间之间切换。 */
    public static void toggle() {
-      setDark(!isDark());
+      setSkin(isDark() ? "light" : "dark");
    }
 
    public static void setDark(boolean value) {
+      setSkin(value ? "dark" : "light");
+   }
+
+   /** 切换皮肤（播放过渡）并保存。 */
+   public static void setSkin(String id) {
       ensureLoaded();
-      dark = value;
-      IOStyle.animateTheme(dark);
+      IOStyle.animateSkin(id);
+      skin = IOStyle.currentSkin();
 
       try {
          Path path = configPath();
          Files.createDirectories(path.getParent());
-         Files.writeString(path, "# Module Shop UI theme (client side)\ndark=" + dark + System.lineSeparator(), StandardCharsets.UTF_8);
-      } catch (Exception var2) {
+         Files.writeString(path, "# Module Shop UI skin (client side): "
+               + "light / dark / rose / sage / haze / oat / dusk\nskin=" + skin + System.lineSeparator(),
+               StandardCharsets.UTF_8);
+      } catch (Exception ignored) {
       }
    }
 }
