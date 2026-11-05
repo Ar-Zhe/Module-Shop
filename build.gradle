@@ -128,67 +128,14 @@ configurations {
     runtimeClasspath.extendsFrom localRuntime
 }
 
-// 固定 AtomLib v0.1.0-beta-beta3：
-// https://github.com/NoWordz/AtomLib/releases/download/v0.1.0-beta-beta3/atomlib-1.21.1-neoforge-0.1.0-beta.jar
-def atomlibJar = layout.projectDirectory.file("libs/atomlib-1.21.1-neoforge-0.1.0-beta.jar")
-def atomlibSha256 = "1955c061cb7ec9228af3a8aedcf6ceaac5026d7d5e6c9360bffe3e11c1402168"
-def skijaJar = layout.buildDirectory.file("atomlib-compile/skija-shared-0.143.18.jar")
-
-def verifyAtomLibPin = tasks.register("verifyAtomLibPin") {
-    inputs.file(atomlibJar)
-    inputs.property("sha256", atomlibSha256)
-    def stamp = layout.buildDirectory.file("atomlib-compile/atomlib.sha256")
-    outputs.file(stamp)
-    doLast {
-        def source = inputs.files.singleFile
-        def digest = java.security.MessageDigest.getInstance("SHA-256")
-        source.withInputStream { stream ->
-            byte[] buffer = new byte[8192]
-            int read
-            while ((read = stream.read(buffer)) > 0) {
-                digest.update(buffer, 0, read)
-            }
-        }
-        def actual = digest.digest().collect { String.format("%02x", it & 0xff) }.join("")
-        if (actual != atomlibSha256) {
-            throw new GradleException("AtomLib pin mismatch: expected ${atomlibSha256} but was ${actual}")
-        }
-        def out = stamp.get().asFile
-        out.parentFile.mkdirs()
-        out.text = actual + "\n"
-    }
-}
-
-def extractAtomSkija = tasks.register("extractAtomSkija") {
-    dependsOn verifyAtomLibPin
-    inputs.file(atomlibJar)
-    outputs.file(skijaJar)
-    doLast {
-        def source = inputs.files.singleFile
-        def dest = outputs.files.singleFile
-        dest.parentFile.mkdirs()
-        new java.util.zip.ZipFile(source).withCloseable { zip ->
-            def entry = zip.getEntry("META-INF/jarjar/skija-shared-0.143.18.jar")
-            if (entry == null) {
-                throw new GradleException("Pinned AtomLib jar is missing META-INF/jarjar/skija-shared-0.143.18.jar")
-            }
-            zip.getInputStream(entry).withCloseable { input ->
-                dest.withOutputStream { output -> output << input }
-            }
-        }
-    }
-}
+// AtomLib 客户端 UI 前置（版本固定、自动下载与 SHA-256 校验），详见 gradle/atomlib.gradle。
+apply from: 'gradle/atomlib.gradle'
 
 dependencies {
     // JEI 软依赖：只在编译期用 API（运行时不打包、不硬依赖）。
     // 刻意编译**最早的 1.21.1 版本**，这样任何 19.x 的 JEI 都能兼容（只用到最稳定的那几个接口）。
     compileOnly "mezz.jei:jei-${minecraft_version}-common-api:${jei_version}"
     compileOnly "mezz.jei:jei-${minecraft_version}-neoforge-api:${jei_version}"
-
-    // AtomLib 0.1.0-beta（发布标签 v0.1.0-beta-beta3）。只进编译和开发运行时，不打进 module_shop。
-    // Skija / Yoga 留在 AtomLib 自己的 Jar-in-Jar 里，这里只把 Skija 类暴露给 javac。
-    implementation files(atomlibJar)
-    compileOnly files(skijaJar)
 
     // Example optional mod dependency with JEI
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
@@ -223,6 +170,7 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
             mod_name               : mod_name,
             mod_license            : mod_license,
             mod_version            : mod_version,
+            atomlib_version_range  : atomlibVersionRange,
     ]
     inputs.properties replaceProperties
     expand replaceProperties
@@ -252,9 +200,6 @@ publishing {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
 }
-tasks.named("compileJava").configure {
-    dependsOn verifyAtomLibPin, extractAtomSkija
-}
 
 // AutoForge: 资源模板里的中文（如 displayName="模块商店"）必须按 UTF-8 读写。
 // 否则在默认编码为 GBK 的 Windows 上，generateModMetadata 会把中文写成非法 UTF-8 字节，
@@ -262,6 +207,23 @@ tasks.named("compileJava").configure {
 tasks.withType(ProcessResources).configureEach {
     filteringCharset = 'UTF-8'
 }
+
+// 公共 API 单独打一个 jar（只含 cn.autoforged.module_shop.api.**）：附属模组只对它编译，
+// 从构建层面保证附属碰不到 ShopManager / ShopSavedData 等内部实现。运行时仍由完整的 module_shop jar 提供。
+def apiJar = tasks.register('apiJar', Jar) {
+    archiveClassifier = 'api'
+    from(sourceSets.main.output) {
+        include 'cn/autoforged/module_shop/api/**'
+        // UI 套件（AtomLib 薄适配层）：附属的内容区页面用它和内置页面保持同样的绘制与控件。
+        include 'cn/autoforged/module_shop/client/ui/AtomUi.class'
+        include 'cn/autoforged/module_shop/client/ui/render/Draw*.class'
+        include 'cn/autoforged/module_shop/client/ui/render/Text*.class'
+        include 'cn/autoforged/module_shop/client/ui/render/SkiaFrame*.class'
+        include 'cn/autoforged/module_shop/client/ui/widget/**'
+    }
+    exclude 'cn/autoforged/module_shop/api/internal/**'
+}
+tasks.named('assemble').configure { dependsOn apiJar }
 
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.
 idea {

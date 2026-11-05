@@ -1,7 +1,6 @@
 package cn.autoforged.module_shop.client;
 
 import cn.autoforged.module_shop.ModuleShopMod;
-import cn.autoforged.module_shop.client.atom.AtomUi;
 import cn.autoforged.module_shop.client.screen.BatchAddScreen;
 import cn.autoforged.module_shop.client.screen.DepositScreen;
 import cn.autoforged.module_shop.client.screen.GrantScreen;
@@ -29,15 +28,6 @@ public final class ClientEvents {
             InputConstants.Type.KEYSYM,
             GLFW.GLFW_KEY_K,
             CATEGORY));
-    /**
-     * 开发用：打开 AtomLib 空壳。默认 F8，不替代商店键，也不发网络包。
-     */
-    public static final Lazy<KeyMapping> OPEN_ATOM_SHELL = Lazy.of(() -> new KeyMapping(
-            "key." + ModuleShopMod.MODID + ".open_atom_shell",
-            KeyConflictContext.IN_GAME,
-            InputConstants.Type.KEYSYM,
-            GLFW.GLFW_KEY_F8,
-            CATEGORY));
 
     private ClientEvents() {
     }
@@ -57,7 +47,6 @@ public final class ClientEvents {
     @SubscribeEvent
     public static void registerKeys(RegisterKeyMappingsEvent event) {
         event.register(OPEN_SHOP.get());
-        event.register(OPEN_ATOM_SHELL.get());
     }
 
     /**
@@ -118,6 +107,5 @@ public final class ClientEvents {
     @SubscribeEvent
     public static void onClientLogout(net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingOut event) {
         cn.autoforged.module_shop.client.screen.Nav.clear();
-        AtomUi.close();
     }
 }
