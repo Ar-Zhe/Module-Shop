@@ -400,14 +400,22 @@ public final class ShopManager {
     }
 
     /** 全局每日清理：摊位到期，未售出物品经邮箱退还。 */
+    /** 邮件到期清理的最小间隔：邮件有效期按天计，分钟级精度足够，没必要每秒扫一遍全服邮箱。 */
+    private static final long MAIL_PURGE_INTERVAL_MS = 60_000L;
+    private static long lastMailPurgeMs;
+
     /**
      * 第七轮：按单封邮件的到期时间清理（未领取也删，与鸣潮邮箱一致）。
      * <p>
      * 全局兜底 {@link Config#mailExpireDays} 仍由旧逻辑处理「已领取/已查看」的邮件，互不冲突。
      */
     public static void purgeExpiredMails(MinecraftServer server) {
-        ShopSavedData data = data(server);
         long now = System.currentTimeMillis();
+        if (now - lastMailPurgeMs < MAIL_PURGE_INTERVAL_MS) {
+            return;
+        }
+        lastMailPurgeMs = now;
+        ShopSavedData data = data(server);
         boolean changed = false;
         for (PlayerAccount account : data.accounts().values()) {
             if (account.mailbox.isEmpty()) {
@@ -1164,10 +1172,42 @@ public final class ShopManager {
         }
     }
 
-    /** 静默地把最新快照推送给所有在线玩家，保证摊位等展示数据实时同步。 */
+    /** 本 tick 内是否有人请求过全服快照（见 {@link #broadcastSnapshots}）。只在服务端主线程读写。 */
+    private static boolean broadcastPending;
+
+    /**
+     * 静默地把最新快照推送给所有在线玩家，保证摊位等展示数据实时同步。
+     *
+     * <p>⚠ 不再立刻发送，只打一个标记，由 {@link #flushBroadcastSnapshots} 在本 tick 结束时统一发一次：
+     * 一份完整快照包含整个购物城货架（可达数千件物品），每个在线玩家都要单独序列化 + gzip，
+     * 同一 tick 里多次调用（例如摊位到期、求购到期、库存刷新恰好同时触发，或一次操作里连调两次）
+     * 以前会把这笔开销翻几倍。客户端收到静默快照只更新数据、不切界面，延后不超过 1 tick，玩家无感。
+     */
     public static void broadcastSnapshots(MinecraftServer server) {
-        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-            sendSnapshot(player, null, true);
+        if (server == null) {
+            return;
+        }
+        broadcastPending = true;
+    }
+
+    /** 由 {@code ShopServerEvents} 在每个服务端 tick 末尾调用：把本 tick 合并起来的全服快照一次性发出。 */
+    public static void flushBroadcastSnapshots(MinecraftServer server) {
+        if (!broadcastPending || server == null) {
+            return;
+        }
+        broadcastPending = false;
+        List<ServerPlayer> players = server.getPlayerList().getPlayers();
+        if (players.isEmpty()) {
+            return;
+        }
+        // 同一次广播里，货架 / 求购 / 拍卖等共享物品只编码一次（见 ShopNbt.beginBatch）。
+        ShopNbt.beginBatch();
+        try {
+            for (ServerPlayer player : new ArrayList<>(players)) {
+                sendSnapshot(player, null, true);
+            }
+        } finally {
+            ShopNbt.endBatch();
         }
     }
 

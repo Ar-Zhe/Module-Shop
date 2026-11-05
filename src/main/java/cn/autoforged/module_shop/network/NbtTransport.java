@@ -29,6 +29,12 @@ public final class NbtTransport {
     public static final int CHUNK = 512 * 1024;
     /** 解压时的内存上限：正常快照远小于此值，只用来兜住异常/恶意包。 */
     public static final long MAX_TAG_BYTES = 64L * 1024L * 1024L;
+    /**
+     * 服务端收**玩家上报**时的上限（压缩后字节 / 解压后 NBT 内存都用它）。
+     * 上报来自不可信的客户端，而且是在服务端主线程上解压解析的；最大的正常上报
+     * （整模组导入，上限 2000 件）也远小于这个值，没必要给到和下发快照一样的 64 MiB。
+     */
+    public static final long SERVERBOUND_MAX_BYTES = 8L * 1024L * 1024L;
 
     private NbtTransport() {
     }
@@ -47,11 +53,16 @@ public final class NbtTransport {
 
     /** gzip 字节 -> NBT；解压失败/超限时抛 {@link IOException}，由调用方忽略这一包（不踢人）。 */
     public static CompoundTag decompress(byte[] raw) throws IOException {
+        return decompress(raw, MAX_TAG_BYTES);
+    }
+
+    /** 同上，但指定解压后 NBT 的内存上限（服务端收玩家上报时用 {@link #SERVERBOUND_MAX_BYTES}）。 */
+    public static CompoundTag decompress(byte[] raw, long maxTagBytes) throws IOException {
         // 1.20.1 的 readCompressed(InputStream) 不接受 NbtAccounter 上限；
         // 这里自己包 GZIPInputStream + NbtIo.read(DataInput, NbtAccounter)，保留自定义的防炸上限。
         try (java.io.DataInputStream in = new java.io.DataInputStream(
                 new java.util.zip.GZIPInputStream(new ByteArrayInputStream(raw)))) {
-            return NbtIo.read(in, new NbtAccounter(MAX_TAG_BYTES));
+            return NbtIo.read(in, new NbtAccounter(maxTagBytes));
         }
     }
 
