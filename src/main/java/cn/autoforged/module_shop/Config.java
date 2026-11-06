@@ -331,7 +331,7 @@ public final class Config {
                 .defineList("shippingDailyLimits", List.of("1000", "2500", "6000"), () -> "1000", o -> o instanceof String);
         shippingSettleTick = builder.comment("每天结算的游戏刻（0 = 早上 06:00；结算窗口见下一项）")
                 .defineInRange("shippingSettleTick", 0, 0, 23999);
-        shippingSettleWindow = builder.comment("结算窗口长度（刻，默认 180 = 游戏内 9 秒；窗口内只会结算一次）")
+        shippingSettleWindow = builder.comment("（已不再限制结算：现在到点后第一次 tick 就结算，错过时间也会补结算；保留此项只为兼容旧配置）")
                 .defineInRange("shippingSettleWindow", 180, 1, 12000);
         shippingResetTime = builder.comment("每日额度按【现实时间】在几点重置（HH:mm，默认 00:00 = 现实零点）")
                 .define("shippingResetTime", "00:00");

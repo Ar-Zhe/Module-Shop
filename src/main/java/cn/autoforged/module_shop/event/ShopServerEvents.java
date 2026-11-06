@@ -26,6 +26,7 @@ public final class ShopServerEvents {
         cn.autoforged.module_shop.shop.http.ShopHttpApi.start(event.getServer());
         cn.autoforged.module_shop.shop.auction.AuctionService.reset();
         cn.autoforged.module_shop.shop.stall.StallService.reset();
+        cn.autoforged.module_shop.shop.ShopManager.resetShippingTick();
     }
 
     @SubscribeEvent
