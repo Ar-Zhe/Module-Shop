@@ -24,6 +24,7 @@ public final class ShopServerEvents {
     @SubscribeEvent
     public static void onServerStarted(net.neoforged.neoforge.event.server.ServerStartedEvent event) {
         cn.autoforged.module_shop.shop.http.ShopHttpApi.start(event.getServer());
+        cn.autoforged.module_shop.shop.ShopManager.resetShippingTick();
     }
 
     @SubscribeEvent

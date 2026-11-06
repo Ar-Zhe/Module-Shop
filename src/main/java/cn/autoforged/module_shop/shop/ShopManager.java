@@ -2023,8 +2023,16 @@ public final class ShopManager {
     // 箱子随之清空。每天能结算的**金额**有上限（按等级配置，现实时间 0 点刷新），
     // 超出上限的那部分物品**留在箱子里**，第二天继续结算（不会凭空消失）。
 
-    /** 出货箱：结算窗口内判定用的每服务器状态（避免每 tick 遍历）。 */
+    /** 出货箱：本游戏日是否已经遍历结算过（避免每 tick 遍历）。服务器启动时重置，见 {@link #resetShippingTick}。 */
     private static long shippingLoggedDay = Long.MIN_VALUE;
+
+    /**
+     * 服务器启动时调用：清掉上一个存档留下的「今天已结算」标记。
+     * 单人游戏切换存档时静态字段不会自动清空，新存档恰好处在同一个游戏日就会整天不结算。
+     */
+    public static void resetShippingTick() {
+        shippingLoggedDay = Long.MIN_VALUE;
+    }
 
     /** 出货箱：放不进去的提醒节流（玩家 UUID → 上次提醒时刻）。 */
     private static final Map<UUID, Long> SHIPPING_REJECT_WARNED = new HashMap<>();
@@ -2201,14 +2209,20 @@ public final class ShopManager {
             return;
         }
         long dayTime = server.overworld().getDayTime();
-        long gameDay = dayTime / 24000L;
-        long timeOfDay = dayTime % 24000L;
+        long gameDay = Math.floorDiv(dayTime, 24000L);
+        long timeOfDay = Math.floorMod(dayTime, 24000L);
         long start = Config.INSTANCE.shippingSettleTick.get();
-        long window = Config.INSTANCE.shippingSettleWindow.get();
+        // 游戏时间被调回（/time set day、/time set 0 …会把 DayTime 设成绝对值，游戏日从 0 重新数）：旧标记作废。
+        if (shippingLoggedDay != Long.MIN_VALUE && shippingLoggedDay > gameDay) {
+            shippingLoggedDay = Long.MIN_VALUE;
+        }
         if (shippingLoggedDay == gameDay) {
             return;
         }
-        if (timeOfDay < start || timeOfDay > start + window) {
+        // 以前只在 [start, start + shippingSettleWindow] 这 9 秒窗口里结算：/time add、/time set noon、
+        // 或服务器在窗口内卡顿超过 9 秒，都会把窗口整个跳过，当天就不出货了。
+        // 现在改为「当天到点后的第一次 tick 结算」（每个箱子仍然每个游戏日只结算一次，由 lastSettleGameDay 保证）。
+        if (timeOfDay < start) {
             return;
         }
         shippingLoggedDay = gameDay;
@@ -2410,7 +2424,15 @@ public final class ShopManager {
             bin.soldToday = 0L;
             bin.ruleUsed.clear();
         }
-        // 这个游戏日已经结算过了就不再结算（用存档里的标记，服务器在窗口内重启也不会重复结算）。
+        // 游戏时间被调回过：箱子里记的「上次结算日」比今天还大。
+        // 以前这里会被当成「今天已经结算过」，于是每天都跳过、一直不出货，直到游戏日重新数过那个旧值。
+        if (bin.lastSettleGameDay != Long.MIN_VALUE && bin.lastSettleGameDay > gameDay) {
+            org.slf4j.LoggerFactory.getLogger("module_shop").info(
+                    "出货箱：检测到游戏时间被调回（上次结算日 {} > 当前 {}），已重置结算标记（玩家 {}）",
+                    bin.lastSettleGameDay, gameDay, owner);
+            bin.lastSettleGameDay = gameDay - 1L;
+        }
+        // 这个游戏日已经结算过了就不再结算（用存档里的标记，服务器重启也不会重复结算）。
         if (bin.lastSettleGameDay >= gameDay) {
             return;
         }
@@ -2480,9 +2502,11 @@ public final class ShopManager {
         if (payout <= 0L) {
             // 余额满到一分钱都装不下：一件都不卖（物品原样留在箱子里，绝不会"吞掉"）。
             ServerPlayer blocked = server.getPlayerList().getPlayer(owner);
-            if (blocked != null && bankFull && !bin.isEmpty()) {
-                notifyPlayer(blocked, Component.translatable("msg.module_shop.shipping_bank_full")
-                        .withStyle(ChatFormatting.YELLOW));
+            if (blocked != null && !bin.isEmpty()) {
+                // 以前只有「余额已满」会提示；今日额度用完 / 规则当日份数用完时一声不吭，
+                // 玩家看到的就是「倒计时到了却没出货」。这里一并说明原因（物品都还在箱子里）。
+                notifyPlayer(blocked, Component.translatable(bankFull ? "msg.module_shop.shipping_bank_full"
+                        : "msg.module_shop.shipping_capped").withStyle(ChatFormatting.YELLOW));
             }
             return;
         }
