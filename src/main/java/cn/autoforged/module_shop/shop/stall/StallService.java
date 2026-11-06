@@ -228,10 +228,18 @@ public final class StallService {
 
     // =================================================================== 补货
 
-    /** 背包里与模板完全相同（物品 + 全部组件）的数量。 */
+    /** 盔甲栏（36-39）：玩家正穿在身上的装备不算「背包里的」，补货不能把它扒下来。 */
+    private static boolean isArmorSlot(int slot) {
+        return slot >= Inventory.INVENTORY_SIZE && slot < Inventory.INVENTORY_SIZE + 4;
+    }
+
+    /** 背包（主背包 + 副手，不含盔甲栏）里与模板完全相同（物品 + 全部组件）的数量。 */
     public static int countMatching(Inventory inventory, ItemStack template) {
         int n = 0;
         for (int i = 0; i < inventory.getContainerSize(); i++) {
+            if (isArmorSlot(i)) {
+                continue;
+            }
             ItemStack st = inventory.getItem(i);
             if (!st.isEmpty() && ItemStack.isSameItemSameComponents(st, template)) {
                 n += st.getCount();
@@ -243,6 +251,9 @@ public final class StallService {
     private static int takeMatching(Inventory inventory, ItemStack template, int max) {
         int taken = 0;
         for (int i = 0; i < inventory.getContainerSize() && taken < max; i++) {
+            if (isArmorSlot(i)) {
+                continue;
+            }
             ItemStack st = inventory.getItem(i);
             if (st.isEmpty() || !ItemStack.isSameItemSameComponents(st, template)) {
                 continue;
