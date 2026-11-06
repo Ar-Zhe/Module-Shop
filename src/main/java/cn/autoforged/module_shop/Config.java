@@ -58,6 +58,25 @@ public final class Config {
     public final ModConfigSpec.BooleanValue antiSnipe;
     public final ModConfigSpec.IntValue antiSnipeSeconds;
     public final ModConfigSpec.IntValue antiSnipeExtensionSeconds;
+    // ---- 拍卖行升级（新增，全部有安全默认值）----
+    public final ModConfigSpec.BooleanValue auctionEnabled;
+    public final ModConfigSpec.IntValue maxAuctionsGlobal;
+    public final ModConfigSpec.IntValue antiSnipeMaxExtensions;
+    public final ModConfigSpec.ConfigValue<List<? extends String>> auctionDurationOptions;
+    public final ModConfigSpec.LongValue auctionListingFeeFixed;
+    public final ModConfigSpec.DoubleValue auctionListingFeePercent;
+    public final ModConfigSpec.LongValue auctionMinStartPrice;
+    public final ModConfigSpec.LongValue auctionMaxStartPrice;
+    public final ModConfigSpec.BooleanValue auctionAllowBuyout;
+    public final ModConfigSpec.IntValue auctionMaxItemCount;
+    public final ModConfigSpec.ConfigValue<List<? extends String>> auctionBlacklist;
+    public final ModConfigSpec.BooleanValue auctionAllowBound;
+    public final ModConfigSpec.ConfigValue<List<? extends String>> auctionBoundMarkers;
+    public final ModConfigSpec.BooleanValue auctionAllowCustomData;
+    public final ModConfigSpec.IntValue auctionMaxItemNbtBytes;
+    public final ModConfigSpec.BooleanValue auctionBlockCreative;
+    public final ModConfigSpec.IntValue auctionEndingSoonSeconds;
+    public final ModConfigSpec.IntValue auctionHistoryLimit;
 
     // ---- 邮箱 ----
     /** 邮箱上限（默认 100；界面每页 45 封，可翻页）。达到上限时系统资产返还优先改为掉落入包，防止溢出刷物品。 */
@@ -193,7 +212,32 @@ public final class Config {
         auctionFeePercent = builder.comment("拍卖成交手续费百分比（从卖家所得中扣除）").defineInRange("auctionFeePercent", 5.0D, 0.0D, 100.0D);
         antiSnipe = builder.comment("是否开启防狙击").define("antiSnipe", true);
         antiSnipeSeconds = builder.comment("剩余多少秒内出价算狙击（现实秒）").defineInRange("antiSnipeSeconds", 60, 0, 3600);
-        antiSnipeExtensionSeconds = builder.comment("每次狙击延长多少秒（现实秒，0 表示不延长）").defineInRange("antiSnipeExtensionSeconds", 0, 0, Integer.MAX_VALUE);
+        antiSnipeExtensionSeconds = builder.comment("每次狙击延长多少秒（现实秒，0 表示不延长）").defineInRange("antiSnipeExtensionSeconds", 30, 0, Integer.MAX_VALUE);
+        auctionEnabled = builder.comment("是否开放拍卖行（关闭后不能上架/出价/一口价，已有拍卖照常到期结算）").define("auctionEnabled", true);
+        maxAuctionsGlobal = builder.comment("全服同时进行的拍卖上限").defineInRange("maxAuctionsGlobal", 500, 1, 5000);
+        antiSnipeMaxExtensions = builder.comment("同一场拍卖防截拍最多延长几次（0=不限，仍受总时长 2 倍封顶）").defineInRange("antiSnipeMaxExtensions", 10, 0, 1000);
+        auctionDurationOptions = builder.comment("上架时可选的拍卖时长（现实分钟），第一个为默认值；最长时长即其中的最大值")
+                .defineList("auctionDurationOptions", List.of("30", "60", "180", "360", "720", "1440", "2880"), () -> "60", o -> o instanceof String);
+        auctionListingFeeFixed = builder.comment("上架手续费：固定部分（星币，0=不收）").defineInRange("auctionListingFeeFixed", 0L, 0L, 1_000_000_000L);
+        auctionListingFeePercent = builder.comment("上架手续费：按起拍价百分比（0=不收）").defineInRange("auctionListingFeePercent", 0.0D, 0.0D, 100.0D);
+        auctionMinStartPrice = builder.comment("最低起拍价").defineInRange("auctionMinStartPrice", 1L, 1L, Long.MAX_VALUE);
+        auctionMaxStartPrice = builder.comment("最高起拍价（0=只受余额上限约束）").defineInRange("auctionMaxStartPrice", 0L, 0L, Long.MAX_VALUE);
+        auctionAllowBuyout = builder.comment("是否允许卖家设置一口价").define("auctionAllowBuyout", true);
+        auctionMaxItemCount = builder.comment("单场拍卖最多上架几件（不超过该物品的堆叠上限）").defineInRange("auctionMaxItemCount", 64, 1, 64);
+        auctionBlacklist = builder.comment("禁止拍卖的物品：物品 id（minecraft:bedrock）、标签（#c:ores）或整个模组（somemod:*）。容器里装的物品同样检查")
+                .defineList("auctionBlacklist", List.of("minecraft:bedrock", "minecraft:barrier", "minecraft:command_block",
+                        "minecraft:chain_command_block", "minecraft:repeating_command_block", "minecraft:command_block_minecart",
+                        "minecraft:structure_block", "minecraft:structure_void", "minecraft:jigsaw", "minecraft:light",
+                        "minecraft:debug_stick", "minecraft:knowledge_book", "minecraft:spawner", "minecraft:trial_spawner"),
+                        () -> "minecraft:bedrock", o -> o instanceof String);
+        auctionAllowBound = builder.comment("是否允许拍卖绑定物品（带绑定诅咒，或自定义数据里含下方标记的物品）").define("auctionAllowBound", false);
+        auctionBoundMarkers = builder.comment("自定义数据（custom_data）里出现这些键名即视为绑定物品")
+                .defineList("auctionBoundMarkers", List.of("Soulbound", "soulbound", "Bound", "bound", "BoundTo", "Owner"), () -> "Soulbound", o -> o instanceof String);
+        auctionAllowCustomData = builder.comment("是否允许拍卖带自定义数据（custom_data，即特殊 NBT）的物品").define("auctionAllowCustomData", true);
+        auctionMaxItemNbtBytes = builder.comment("拍品序列化后的最大字节数（防止超大 NBT 物品拖垮网络与存档）").defineInRange("auctionMaxItemNbtBytes", 32768, 1024, 1_048_576);
+        auctionBlockCreative = builder.comment("创造模式玩家不能上架拍卖（创造模式可凭空生成物品）").define("auctionBlockCreative", true);
+        auctionEndingSoonSeconds = builder.comment("剩余多少秒时提醒卖家与领先者「即将结束」（0=不提醒）").defineInRange("auctionEndingSoonSeconds", 300, 0, 86400);
+        auctionHistoryLimit = builder.comment("保留多少条已结束的拍卖记录（全服）").defineInRange("auctionHistoryLimit", 2000, 100, 100000);
         builder.pop();
 
         builder.push("mailbox");

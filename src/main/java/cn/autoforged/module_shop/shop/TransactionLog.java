@@ -29,6 +29,12 @@ public final class TransactionLog {
     public static final String AUCTION_REFUND = "auction_refund";
     public static final String AUCTION_WIN = "auction_win";
     public static final String AUCTION_SELL = "auction_sell";
+    /** 拍卖上架手续费。 */
+    public static final String AUCTION_LISTING = "auction_listing";
+    /** 一口价购买。 */
+    public static final String AUCTION_BUYOUT = "auction_buyout";
+    /** 拍卖撤销（卖家 / 管理员）。 */
+    public static final String AUCTION_CANCEL = "auction_cancel";
     public static final String TRANSFER_IN = "transfer_in";
     public static final String TRANSFER_OUT = "transfer_out";
     public static final String TRADE_IN = "trade_in";

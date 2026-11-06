@@ -3012,6 +3012,8 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     // =========================================================== 拍卖
 
     private void drawAuction(GuiGraphics g, int cx, int cy, int cw, int ch, int mx, int my) {
+        // 拍卖列表单独下发：打开拍卖页时拉取（有节流，版本未变不重复请求）
+        cn.autoforged.module_shop.client.AuctionClient.ensureList();
         List<ClientShopData.AuctionView> auctions = ClientShopData.auctions;
         int pageSize = 5;
         int pages = Math.max(1, (auctions.size() + pageSize - 1) / pageSize);
@@ -6122,7 +6124,8 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             case "bid_gui" -> {
                 ClientShopData.AuctionView view = findAuction(extra == null ? 0L : extra.getLong("id"));
                 if (view != null) {
-                    Nav.open(new AuctionBidScreen(view));
+                    // Skija 可用时打开新详情页（出价 / 一口价 / 竞价记录），否则仍用旧出价界面
+                    cn.autoforged.module_shop.client.screen.auction.AuctionUi.openDetail(view.id);
                 }
             }
             // 需求：删除邮件；未领取/未查看时必须先二次确认，防止误删资产。

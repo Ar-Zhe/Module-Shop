@@ -32,7 +32,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | **每日商店** | 卡牌翻牌查看商品；3 列 × 2 行；每件商品独立限购；普通档每日最多 3 个；可用星币**付费刷新**（默认第 1 次 200、第 2 次 500，每日 2 次，价格与次数可配） |
 | **每日收购** | 每日随机最多 6 项收购需求；按物品显示收购价与剩余可收数量；**当日清单全部卖满额外奖励 1000 星币**（可配） |
 | **购物城** | 管理员上架的**常驻货架**（不会每日重抽）：两行六列一页 12 件，显示价格与库存，**品质只用 1px 颜色细边框表示**；支持**搜索**（物品名 / 模组名）、**排序**（价格 / 库存 升降序）、**按模组分类**（下拉，按首字母排序）、**只收藏**（本地收藏，★）与**最近购买**记录；库存实时扣减、售罄变灰；管理员可单件上架，也可**一次导入整个模组的全部物品**（统一价格 / 库存 / 品质） |
-| **拍卖行** | 上架拍卖、**出价即从余额扣款**、**被超价自动全额退回**（余额装不下时自动转金额邮件）、到期自动结算（买家收物品邮件、卖家收货款、按比例手续费）、无人出价原物退回 |
+| **拍卖行** | 独立上架界面（直接从背包选物品，数量 / 起拍价 / 加价幅度 / 一口价 / 时长 / 是否允许竞价）、**搜索（名称 / 物品ID / 模组 / 附魔 / 卖家）+ 9 种分类 + 7 种排序 + 分页**、详情页（完整属性、竞价记录）、**一口价**、**防截拍自动延时**、无人出价可撤销、**我的拍卖**（出售中 / 我的竞拍 / 已成交 / 已流拍 / 已撤销 + 重新上架）；出价资金托管，被超价同一时刻全额退回；结算幂等、重启续结算；上架费 / 成交费 / 黑名单（含容器内物品）/ 绑定与特殊 NBT 限制；管理员界面与 `/shop auction` 审计命令。详见 [docs/拍卖行.md](docs/拍卖行.md) |
 | **玩家摊位** | 上架 / 改价 / 下架 / 浏览购买，支持库存与售出统计；可配置上架手续费 |
 | **玩家交易** | 双方放入物品与星币 → 双方同意 → 倒计时 → 双方确认后原子交换；闲置 10 分钟自动结束并按"背包 → 邮箱 → 掉落"退回 |
 | **钱包** | 余额查询、玩家间转账（同 IP 拦截、冷却、余额上限饱和处理，不溢出不变负） |
@@ -131,6 +131,8 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 /shop admin money set <目标> <金额>  把某玩家余额**直接设为**该值（写 0 = 清零，离线也可）
 /shop admin send                   打开发放界面（物品 + 星币，邮箱领取）
 /shop admin history <玩家> [页码]   查看交易流水
+/shop auction list | history [页] | anomalies | audit       拍卖行：进行中 / 历史 / 异常 / 资金审计
+/shop auction cancel <id> | end <id>                        强制撤销（全额退款）/ 强制结束（按当前状态结算）
 /shop wallet balance | pay <玩家> <金额> | give <玩家> <金额>
 ```
 
@@ -151,6 +153,11 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
                 buybackRefreshCosts = ["200", "500"]
 [mailbox]       maxMailboxSize = 100       transactionHistorySize = 50
 [trade]         tradeRequestExpireSeconds = 60   tradeSessionTimeoutSeconds = 600
+[auction]       auctionEnabled = true      maxAuctionsGlobal = 500   maxConcurrentAuctions = 6
+                auctionDurationOptions = ["30","60","180","360","720","1440","2880"]
+                auctionListingFeeFixed = 0  auctionListingFeePercent = 0.0  auctionFeePercent = 5.0
+                antiSnipe = true  antiSnipeSeconds = 60  antiSnipeExtensionSeconds = 30  antiSnipeMaxExtensions = 10
+                auctionBlacklist = [...]   auctionAllowBound = false  auctionAllowCustomData = true
 ```
 > 付费刷新：`dailyRefreshCosts` 是**每日商店**的价格表，`buybackRefreshCosts` 是**每日收购**的价格表，
 > 两者各自独立，**列表长度 = 每天可刷新次数**（例如 `["300"]` = 每天只能刷 1 次、每次 300 星币）。
@@ -163,6 +170,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | --- | --- |
 | [使用教程.md](docs/使用教程.md) | 服主上手：安装、模块、权限、常用流程 |
 | [模组介绍.md](docs/模组介绍.md) | 面向玩家的功能说明 |
+| [拍卖行.md](docs/拍卖行.md) | 拍卖行：玩法、配置、资金托管与安全设计、管理命令、测试清单 |
 | [公共API-使用文档.md](docs/公共API-使用文档.md) | 开发者接入：接口、返回码、事件、KubeJS、HTTP、附属页面（第 10 节） |
 | [atomlib-migration.md](docs/atomlib-migration.md) | AtomLib 界面迁移方案、进度与游戏内 QA 清单 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |

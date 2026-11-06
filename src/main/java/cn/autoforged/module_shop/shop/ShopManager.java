@@ -544,12 +544,34 @@ public final class ShopManager {
                     entry.currencyAmount = rest;
                     account.mailbox.add(entry);
                 }
-            } else if (online != null) {
+            } else {
+                // 物品：在线时先塞背包；背包放不下的（以及离线玩家的全部物品）**超额存进邮箱**。
+                // 以前离线时这里什么都不做（物品凭空消失），在线时会丢在地上（可能被捡走或消失）。
+                // 系统投递的资产宁可让邮箱暂时超过上限，也绝不销毁。
+                MailEntry overflow = null;
                 for (ItemStack stack : entry.itemStacks()) {
                     ItemStack remaining = stack.copy();
-                    online.getInventory().add(remaining);
+                    if (online != null) {
+                        online.getInventory().add(remaining);
+                    }
                     if (!remaining.isEmpty()) {
-                        online.drop(remaining, false);
+                        if (overflow == null) {
+                            overflow = MailEntry.item(remaining, entry.source, entry.sender, null, entry.receivedDay);
+                            overflow.title = entry.title;
+                            overflow.content = entry.content;
+                            overflow.kind = entry.kind;
+                            overflow.starred = entry.starred;
+                        } else {
+                            overflow.addStack(remaining);
+                        }
+                    }
+                }
+                if (overflow != null) {
+                    account.mailbox.add(overflow);
+                    NotificationManager.notify(server, owner, NotificationType.MAIL);
+                    if (online != null) {
+                        notifyPlayer(online, Component.translatable("msg.module_shop.mailbox_overflow")
+                                .withStyle(ChatFormatting.GOLD));
                     }
                 }
             }
@@ -648,99 +670,8 @@ public final class ShopManager {
 
     /** 拍卖结算。 */
     public static void tickAuctions(MinecraftServer server) {
-        ShopSavedData data = data(server);
-        if (data.auctions.isEmpty()) {
-            return;
-        }
-        // 现实时间：拍卖到期时间以毫秒墙钟为准
-        long now = System.currentTimeMillis();
-        boolean changed = false;
-        Iterator<AuctionEntry> iterator = data.auctions.iterator();
-        while (iterator.hasNext()) {
-            AuctionEntry auction = iterator.next();
-            if (now < auction.endTime) {
-                continue;
-            }
-            iterator.remove();
-            changed = true;
-            if (auction.hasBid()) {
-                if (auction.stack.isEmpty()) {
-                    // 存档里的物品解析失败（例如物品所属模组被移除）：不能成交，把买家的出价退回。
-                    PlayerAccount winnerAccount = data.account(auction.topBidder);
-                    long refundedAmount = credit(winnerAccount, auction.currentBid,
-                            Config.maxBalanceLimit());
-                    if (refundedAmount < auction.currentBid) {
-                        addMoneyMail(server, auction.topBidder, auction.currentBid - refundedAmount,
-                                ItemStack.EMPTY, SOURCE_AUCTION_REFUND, "系统", null);
-                    }
-                    TransactionLog.record(server, auction.topBidder, TransactionLog.AUCTION_REFUND, "拍卖",
-                            refundedAmount, winnerAccount.balance, "拍卖物品缺失，已退款");
-                    ServerPlayer refundedPlayer = server.getPlayerList().getPlayer(auction.topBidder);
-                    if (refundedPlayer != null) {
-                        notifyPlayer(refundedPlayer, Component.translatable("msg.module_shop.auction_broken_refund",
-                                auction.currentBid).withStyle(ChatFormatting.GOLD));
-                    }
-                    data.setDirty();
-                    continue;
-                }
-                addMailDraft(server, auction.topBidder, MailTemplates.build(MailTemplates.Template.AUCTION_WON,
-                        MailTemplates.map("player", nameOf(server, auction.topBidder),
-                                "item", MailTemplates.itemText(auction.stack, false),
-                                "price", Long.toString(auction.currentBid)))
-                .source(SOURCE_AUCTION_WON)
-                .addItem(auction.stack));
-                // 需求：拍卖成交所得以金额类邮件发放给卖家，玩家在邮箱中查看领取。
-                long fee = auctionFee(auction.currentBid);
-                long net = auction.currentBid - fee;
-                addMailDraft(server, auction.seller, MailTemplates.build(MailTemplates.Template.AUCTION_SOLD,
-                            MailTemplates.map("player", nameOf(server, auction.seller),
-                                    "item", MailTemplates.itemText(auction.stack, false),
-                                    "price", Long.toString(auction.currentBid),
-                                    "fee", Long.toString(Math.max(0L, auction.currentBid - net)),
-                                    "income", Long.toString(net)))
-                    .source(SOURCE_AUCTION_SOLD)
-                    .sender(auction.topBidderName)
-                    .money(net)
-                    .moneyDisplay(auction.stack));
-                data.setDirty();
-                // 流水：买家拿到物品（钱在出价时已扣），卖家货款进邮箱。
-                TransactionLog.record(server, auction.topBidder, TransactionLog.AUCTION_WIN, "拍卖", 0L,
-                        balanceOf(data, auction.topBidder), auction.stack.getHoverName().getString());
-                TransactionLog.record(server, auction.seller, TransactionLog.AUCTION_SELL,
-                        auction.topBidderName == null ? "" : auction.topBidderName, net,
-                        balanceOf(data, auction.seller),
-                        auction.stack.getHoverName().getString() + "（货款存邮箱）");
-                // 需求 10：卖家物品卖出、买家竞拍成功都要有提示红点（邮件红点由 addMail 负责）。
-                NotificationManager.notify(server, auction.seller, NotificationType.AUCTION);
-                NotificationManager.notify(server, auction.topBidder, NotificationType.AUCTION);
-                ServerPlayer sellerPlayer = server.getPlayerList().getPlayer(auction.seller);
-                if (sellerPlayer != null) {
-                    notifyPlayer(sellerPlayer, Component.translatable("msg.module_shop.auction_sold_fee",
-                            auction.stack.getHoverName(), auction.currentBid, fee, net)
-                            .withStyle(ChatFormatting.GREEN));
-                }
-                ServerPlayer winner = server.getPlayerList().getPlayer(auction.topBidder);
-                if (winner != null) {
-                    notifyPlayer(winner, Component.translatable("msg.module_shop.auction_won",
-                            auction.stack.getHoverName()).withStyle(ChatFormatting.GREEN));
-                }
-            } else {
-                addMailDraft(server, auction.seller, MailTemplates.build(MailTemplates.Template.AUCTION_UNSOLD,
-                        MailTemplates.map("player", nameOf(server, auction.seller),
-                                "item", MailTemplates.itemText(auction.stack, false)))
-                .source(SOURCE_AUCTION_UNSOLD)
-                .addItem(auction.stack));
-                NotificationManager.notify(server, auction.seller, NotificationType.AUCTION);
-                ServerPlayer sellerPlayer = server.getPlayerList().getPlayer(auction.seller);
-                if (sellerPlayer != null) {
-                    notifyPlayer(sellerPlayer, Component.translatable("msg.module_shop.auction_expired",
-                            auction.stack.getHoverName()).withStyle(ChatFormatting.YELLOW));
-                }
-            }
-        }
-        if (changed) {
-            data.setDirty();
-        }
+        // 到期结算、即将结束提醒、增量推送都在 AuctionService（结算幂等，重启后到期未结算的拍卖照常结算）。
+        cn.autoforged.module_shop.shop.auction.AuctionService.tick(server);
     }
 
     // =========================================================== 快照与输入界面
@@ -856,24 +787,9 @@ public final class ShopManager {
         }
         tag.putInt("buybackLeft", buybackLeft);
 
-        ListTag auctions = new ListTag();
-        long now = System.currentTimeMillis();
-        for (AuctionEntry auction : data.auctions) {
-            CompoundTag c = ShopNbt.saveStack(auction.stack, regs);
-            c.putLong("id", auction.id);
-            c.putString("seller", auction.sellerName);
-            c.putLong("startPrice", auction.startPrice);
-            c.putLong("currentBid", auction.currentBid);
-            // 需求 3：下发上一次出价，竞拍界面把它划掉展示（0 表示尚无人出价，显示起拍价）。
-            c.putLong("lastBid", auction.lastBid);
-            c.putString("topBidder", auction.topBidderName);
-            c.putLong("remaining", Math.max(0, auction.endTime - now));
-            c.putBoolean("own", auction.seller != null && auction.seller.equals(player.getUUID()));
-            // 让界面能显示“最高：你”，玩家一眼看出自己的出价是否还在冻结中。
-            c.putBoolean("topMe", auction.topBidder != null && auction.topBidder.equals(player.getUUID()));
-            auctions.add(c);
-        }
-        tag.put("auctions", auctions);
+        // 拍卖列表不再随每次快照全量下发：玩家打开拍卖页时单独拉取（auction_list），之后只收增量（auction_delta）。
+        // 这里只带版本号，客户端发现版本变了且正在看拍卖页时再去拉。
+        tag.putLong("auctionVersion", data.auctionVersion);
 
         ListTag stall = new ListTag();
         for (StallEntry entry : account.stall) {
@@ -1417,6 +1333,10 @@ public final class ShopManager {
         String action = tag.getString("action");
         // 服务端权威：管理操作必须校验权限，客户端不再可信（canAdmin 只是显示开关）。
         if (action.startsWith("admin_") && !player.hasPermissions(2)) {
+            return;
+        }
+        // 拍卖行（上架 / 出价 / 一口价 / 撤销 / 列表 / 详情 / 管理）统一由 AuctionService 处理。
+        if (cn.autoforged.module_shop.shop.auction.AuctionService.handle(player, action, tag)) {
             return;
         }
         switch (action) {
@@ -2822,110 +2742,14 @@ public final class ShopManager {
             notifyPlayer(player, Component.translatable("msg.module_shop.invalid_price").withStyle(ChatFormatting.RED));
             return;
         }
-        ShopSavedData data = data(player.server);
-        if (data.auctionsOf(player.getUUID()).size() >= Config.INSTANCE.maxConcurrentAuctions.get()) {
-            addItemOrMail(player, stack, SOURCE_ADMIN);
-            notifyPlayer(player, Component.translatable("msg.module_shop.auction_limit").withStyle(ChatFormatting.RED));
-            return;
-        }
-        AuctionEntry auction = new AuctionEntry();
-        auction.id = data.nextAuctionId++;
-        auction.seller = player.getUUID();
-        auction.sellerName = player.getGameProfile().getName();
-        auction.stack = stack;
-        auction.startPrice = price;
-        auction.currentBid = 0;
-        // 现实时间：持续 auctionDurationSeconds 秒（默认 2 小时）
-        auction.endTime = System.currentTimeMillis() + Config.INSTANCE.auctionDurationSeconds.get() * 1000L;
-        data.auctions.add(auction);
-        data.setDirty();
-        notifyPlayer(player, Component.translatable("msg.module_shop.auction_created", stack.getHoverName(), price)
-                .withStyle(ChatFormatting.GREEN));
+        // 旧流程（存放槽 + 起拍价）保留给无 Skija 界面的客户端：规则、手续费、黑名单与新界面完全一致。
+        cn.autoforged.module_shop.shop.auction.AuctionService.createLegacy(player, stack, price);
         sendSnapshot(player, "auction");
     }
 
+    /** 出价（兼容入口：公共 API 与旧界面都走这里），实际逻辑见 AuctionService.bid。 */
     public static void placeBid(ServerPlayer player, CompoundTag tag) {
-        // 需求 8：竞拍校验与扣款/退款必须在同一把锁内，避免同时出价导致余额错乱。
-        synchronized (LOCK) {
-        ShopSavedData data = data(player.server);
-        long id = tag.getLong("id");
-        long amount = parsePositive(tag.getString("amount"));
-        AuctionEntry auction = null;
-        for (AuctionEntry entry : data.auctions) {
-            if (entry.id == id) {
-                auction = entry;
-                break;
-            }
-        }
-        if (auction == null) {
-            return;
-        }
-        if (System.currentTimeMillis() >= auction.endTime) {
-            // 已经到期但还没被结算的挂单不再接受出价，避免“截止后再出价也算成交”。
-            return;
-        }
-        if (auction.seller != null && auction.seller.equals(player.getUUID())) {
-            notifyPlayer(player, Component.translatable("msg.module_shop.bid_own").withStyle(ChatFormatting.RED));
-            return;
-        }
-        long minimum = auction.hasBid()
-                ? auction.currentBid + Config.INSTANCE.auctionMinIncrement.get()
-                : auction.startPrice;
-        if (amount < minimum) {
-            notifyPlayer(player, Component.translatable("msg.module_shop.bid_too_low", minimum)
-                    .withStyle(ChatFormatting.RED));
-            return;
-        }
-        PlayerAccount bidder = account(player);
-        if (bidder.balance < amount) {
-            notifyPlayer(player, Component.translatable("msg.module_shop.no_money").withStyle(ChatFormatting.RED));
-            return;
-        }
-        // 退还上一位出价者
-        if (auction.hasBid()) {
-            // 需求三：被超价日志同时附带旧价格（上一次最高价）与新价格（本次出价）。
-            long previousPrice = auction.currentBid;
-            PlayerAccount previous = data.account(auction.topBidder);
-            // 退款同样走饱和入账：余额装不下的部分改成金额邮件退回，绝不静默销毁。
-            long refunded = credit(previous, previousPrice, Config.maxBalanceLimit());
-            if (refunded < previousPrice) {
-                addMoneyMail(player.server, auction.topBidder, previousPrice - refunded, ItemStack.EMPTY,
-                        SOURCE_AUCTION_REFUND, "系统", null);
-            }
-            TransactionLog.record(player.server, auction.topBidder, TransactionLog.AUCTION_REFUND, "拍卖",
-                    refunded, previous.balance, auction.stack.getHoverName().getString());
-            ServerPlayer previousPlayer = player.server.getPlayerList().getPlayer(auction.topBidder);
-            if (previousPlayer != null) {
-                notifyPlayer(previousPlayer, Component.translatable("msg.module_shop.outbid",
-                        auction.stack.getHoverName(), previousPrice, amount).withStyle(ChatFormatting.YELLOW));
-                // 钱已经退回（余额或邮箱），立刻刷新他的界面余额，避免显示还在冻结中。
-                sendSnapshot(previousPlayer, "auction", true);
-            }
-            // 需求 10：被超价的一方收到拍卖提示红点（离线也持久化）。
-            NotificationManager.notify(player.server, auction.topBidder, NotificationType.AUCTION);
-        }
-        if (debit(bidder, amount, "auction_bid") < 0L) { return; }
-        TransactionLog.record(player.server, player.getUUID(), TransactionLog.AUCTION_BID,
-                auction.sellerName == null ? "" : auction.sellerName, -amount, bidder.balance,
-                auction.stack.getHoverName().getString());
-        // 需求 3：记录上一次出价，供竞拍界面把被超过的价格划掉展示。
-        auction.lastBid = auction.currentBid;
-        auction.currentBid = amount;
-        auction.topBidder = player.getUUID();
-        auction.topBidderName = player.getGameProfile().getName();
-        if (Config.INSTANCE.antiSnipe.get()) {
-            long remaining = auction.endTime - System.currentTimeMillis();
-            long threshold = Config.INSTANCE.antiSnipeSeconds.get() * 1000L;
-            long extension = Config.INSTANCE.antiSnipeExtensionSeconds.get() * 1000L;
-            if (extension > 0 && remaining < threshold) {
-                auction.endTime += extension;
-            }
-        }
-        data.setDirty();
-        notifyPlayer(player, Component.translatable("msg.module_shop.bid_placed", amount, auction.stack.getHoverName())
-                .withStyle(ChatFormatting.GREEN));
-        sendSnapshot(player, "auction");
-        }
+        cn.autoforged.module_shop.shop.auction.AuctionService.bid(player, tag);
     }
 
     // =========================================================== 摊位
@@ -6267,6 +6091,7 @@ public final class ShopManager {
     public static void onLogout(ServerPlayer player) {
         returnPending(player);
         TradeManager.onLogout(player);
+        cn.autoforged.module_shop.shop.auction.AuctionService.onLogout(player);
         DEPOSIT_CONTEXT.remove(player.getUUID());
         ADMIN_EDIT_TYPE.remove(player.getUUID());
         ADMIN_TEMPLATE.remove(player.getUUID());

@@ -33,6 +33,29 @@ public final class ShopCommands {
                     ShopManager.sendSnapshotOpen(ctx.getSource().getPlayerOrException(), "daily");
                     return 1;
                 })
+                // 拍卖行管理：/shop auction list|history|anomalies|audit|cancel <id>|end <id>
+                .then(Commands.literal("auction")
+                        .requires(source -> source.hasPermission(2))
+                        .executes(ctx -> {
+                            ShopManager.sendSnapshotOpen(ctx.getSource().getPlayerOrException(), "auction");
+                            return 1;
+                        })
+                        .then(Commands.literal("list").executes(ctx -> AuctionCommands.list(ctx.getSource())))
+                        .then(Commands.literal("history")
+                                .executes(ctx -> AuctionCommands.history(ctx.getSource(), 1))
+                                .then(Commands.argument("page", IntegerArgumentType.integer(1))
+                                        .executes(ctx -> AuctionCommands.history(ctx.getSource(),
+                                                IntegerArgumentType.getInteger(ctx, "page")))))
+                        .then(Commands.literal("anomalies").executes(ctx -> AuctionCommands.anomalies(ctx.getSource())))
+                        .then(Commands.literal("audit").executes(ctx -> AuctionCommands.audit(ctx.getSource())))
+                        .then(Commands.literal("cancel")
+                                .then(Commands.argument("id", LongArgumentType.longArg(1))
+                                        .executes(ctx -> AuctionCommands.force(ctx.getSource(),
+                                                LongArgumentType.getLong(ctx, "id"), true))))
+                        .then(Commands.literal("end")
+                                .then(Commands.argument("id", LongArgumentType.longArg(1))
+                                        .executes(ctx -> AuctionCommands.force(ctx.getSource(),
+                                                LongArgumentType.getLong(ctx, "id"), false)))))
                 .then(Commands.literal("mailbox").executes(ctx -> {
                     ShopManager.sendSnapshotOpen(ctx.getSource().getPlayerOrException(), "mail");
                     return 1;
