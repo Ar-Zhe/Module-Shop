@@ -36,8 +36,12 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
     private final List<int[]> rowRects = new ArrayList<>();
     private int page;
 
-    private record Entry(ItemStack stack, long price, int stock, int sold, int index) {
+    /** id = 商品 id（服务端 StallEntry.order），购买按它定位；index 只给旧流程用。 */
+    private record Entry(ItemStack stack, long price, int stock, int sold, int index, long id) {
     }
+
+    /** 这是不是我自己的摊位（自己不能买）。 */
+    private boolean ownStall;
 
     public StallBrowseScreen(CompoundTag tag) {
         super(Component.translatable("gui.module_shop.stall_browse_title"));
@@ -59,6 +63,9 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
     }
 
     private void applyEntries(CompoundTag tag) {
+        this.ownStall = tag.getBoolean("own");
+        // 服务端推回最新库存 = 上一次购买请求已处理完
+        this.buying = false;
         ListTag list = tag.getList("entries", 10);
         var registries = Minecraft.getInstance().level == null ? null : Minecraft.getInstance().level.registryAccess();
         for (int i = 0; i < list.size(); i++) {
@@ -68,7 +75,8 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
             int stock = c.contains("stock") ? c.getInt("stock") : Math.max(1, stack.getCount());
             // 需求 9：按商品分别显示已售出件数。
             int sold = c.contains("sold") ? c.getInt("sold") : 0;
-            this.entries.add(new Entry(stack, c.getLong("price"), stock, sold, c.getInt("index")));
+            this.entries.add(new Entry(stack, c.getLong("price"), stock, sold, c.getInt("index"),
+                    c.contains("id") ? c.getLong("id") : -1L - i));
         }
     }
 
@@ -226,85 +234,293 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
         return super.mouseClicked(mouseX, mouseY, button);
     }
 
-    // ------------------------------------------------------------------ Skija
+    // ------------------------------------------------------------------ Skija：摊位详情（原版容器风格）
+    //
+    // 顶部：店名 / 店主 / 营业状态 / 商品数；左侧：物品格子卡片（图标、名称、单价、库存），分页；
+    // 右侧：选中商品的详情、购买数量（− / 输入 / + / 最大）、总价 = 单价 × 数量、购买按钮。
+    // 购买请求带商品 id + 我看到的单价 + 请求号；服务端核对后成交并推回最新库存（就地刷新，不重建界面）。
 
-    private final cn.autoforged.module_shop.client.ui.widget.ScrollController skScroll =
-            new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+    private long selectedId = -1L;
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField qtyField;
+    private boolean buying;
+    private long buyingAt;
+    private int gridPage;
+    private int perPage = 1;
+    private int pages = 1;
+    private boolean jumpToSelection;
+
+    @Override
+    protected void initSkia() {
+        String keep = this.qtyField == null ? "1" : this.qtyField.value();
+        this.qtyField = field(6, "1");
+        this.qtyField.setValue(keep.isEmpty() ? "1" : keep);
+        if (this.selectedId < 0L && cn.autoforged.module_shop.client.StallClient.pendingSelect >= 0L) {
+            // 从商店大厅点进来：预选那件商品并翻到它所在的页
+            this.selectedId = cn.autoforged.module_shop.client.StallClient.pendingSelect;
+            this.jumpToSelection = true;
+            cn.autoforged.module_shop.client.StallClient.pendingSelect = -1L;
+        }
+    }
+
+    private Entry selected() {
+        for (Entry e : this.entries) {
+            if (e.id() == this.selectedId) {
+                return e;
+            }
+        }
+        return null;
+    }
+
+    private int quantity() {
+        try {
+            return Integer.parseInt(this.qtyField.value().trim());
+        } catch (NumberFormatException ex) {
+            return -1;
+        }
+    }
+
+    private void setQuantity(int q, Entry e) {
+        int max = Math.max(1, e.stock());
+        this.qtyField.setValue(Integer.toString(Math.max(1, Math.min(max, q))));
+    }
+
+    private void buy(Entry e) {
+        int q = quantity();
+        if (q < 1 || q > e.stock() || this.ownStall) {
+            return;
+        }
+        if (this.buying && System.currentTimeMillis() - this.buyingAt < 4000L) {
+            return; // 等服务端回包，防止连点重复购买（服务端另有请求号去重）
+        }
+        this.buying = true;
+        this.buyingAt = System.currentTimeMillis();
+        CompoundTag tag = new CompoundTag();
+        tag.putString("owner", this.owner);
+        tag.putLong("id", e.id());
+        tag.putInt("index", e.index());
+        tag.putString("quantity", Integer.toString(q));
+        tag.putLong("expect", e.price());
+        cn.autoforged.module_shop.client.StallClient.sendOnce("stall_buy", tag);
+    }
+
+    private static long safeTotal(long price, int count) {
+        if (price <= 0L || count <= 0) {
+            return 0L;
+        }
+        return price > Long.MAX_VALUE / count ? Long.MAX_VALUE : price * count;
+    }
+
+    @Override
+    protected boolean onScroll(double mx, double my, double amount) {
+        this.gridPage = Math.max(0, Math.min(this.pages - 1, this.gridPage + (amount > 0 ? -1 : 1)));
+        return true;
+    }
+
+    @Override
+    protected boolean onEnter() {
+        Entry e = selected();
+        if (e != null) {
+            buy(e);
+            return true;
+        }
+        return false;
+    }
 
     @Override
     protected void paint(io.github.humbleui.skija.Canvas c) {
-        float w = 270.0F;
-        float rowH = 30.0F;
-        float listH = rowH * 6;
-        float h = HEADER_H + 8 + listH + 8 + 20 + PAD;
+        float w = Math.min(410.0F, this.width - 16.0F);
+        float h = Math.min(260.0F, this.height - 16.0F);
         float x = Math.round((this.width - w) / 2.0F);
         float y = Math.round((this.height - h) / 2.0F);
-        float innerX = x + PAD;
-        float innerW = w - PAD * 2;
-        panel(c, x, y, w, h, this.ownerName);
+        float ix = x + PAD;
+        float iw = w - PAD * 2;
+        float bottom = y + h - PAD;
+        panel(c, x, y, w, h, Component.translatable("gui.module_shop.stall.shop_name", this.ownerName).getString());
         if (this.ownerUuid != null) {
             final UUID uuid = this.ownerUuid;
             final int hx = (int) (x + PAD);
             final int hy = (int) (y + (HEADER_H - 14) / 2);
             this.items.addCustom(hx, hy, 14, 14, (g, font) -> Skins.drawHead(g, uuid, hx, hy, 14));
         }
-        float listY = y + HEADER_H + 8;
-        if (this.entries.isEmpty()) {
-            center(c, Component.translatable("gui.module_shop.stall_empty").getString(), innerX, listY + listH / 2,
-                    innerW, IOStyle.TEXT_2);
-        } else {
-            float oy = beginList(c, this.skScroll, innerX, listY, innerW, listH, this.entries.size() * rowH);
-            for (int i = 0; i < this.entries.size(); i++) {
-                float ry = oy + i * rowH;
-                if (ry + rowH < listY || ry > listY + listH) {
-                    continue;
-                }
-                Entry e = this.entries.get(i);
-                float rw = innerW - 8;
-                boolean soldOut = e.stock <= 0;
-                float hv = soldOut ? 0 : hover("row" + i, innerX, ry, rw, rowH - 3);
-                cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX, ry, rw, rowH - 3, 3,
-                        cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.CARD, IOStyle.GRAY_BTN_HOVER, hv));
-                cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, innerX, ry, rw, rowH - 3, 3, 1,
-                        cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BLUE, hv));
-                cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX + 4, ry + 4, 19, 19, 2, IOStyle.FIELD_BG);
-                item(e.stack, innerX + 5.5F, ry + 5.5F);
-                float statusW = 64;
-                text(c, e.stack.getHoverName().getString(), innerX + 28, ry + 8, rw - 36 - statusW,
-                        soldOut ? IOStyle.TEXT_3 : IOStyle.TEXT);
-                small(c, Component.translatable("gui.module_shop.stall_unit_price",
-                                cn.autoforged.module_shop.client.ClientShopData.money(e.price)).getString(), innerX + 28,
-                        ry + 19, rw - 36 - statusW, IOStyle.ORANGE);
-                float sx = innerX + rw - statusW - 6;
-                if (soldOut) {
-                    cn.autoforged.module_shop.client.ui.render.Text.drawLine(c,
-                            Component.translatable("gui.module_shop.stall_sold_out").getString(),
-                            cn.autoforged.module_shop.client.ui.AtomUi.REGULAR,
-                            cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.RED, sx, ry + 8, statusW,
-                            cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
-                } else {
-                    cn.autoforged.module_shop.client.ui.render.Text.drawLine(c,
-                            Component.translatable("gui.module_shop.stall_stock", e.stock).getString(),
-                            cn.autoforged.module_shop.client.ui.AtomUi.REGULAR,
-                            cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_2, sx, ry + 8, statusW,
-                            cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
-                }
-                cn.autoforged.module_shop.client.ui.render.Text.drawLine(c,
-                        Component.translatable("gui.module_shop.stall_sold_count", e.sold).getString(),
-                        cn.autoforged.module_shop.client.ui.AtomUi.REGULAR,
-                        cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.BLUE, sx, ry + 19, statusW,
-                        cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
-                if (!soldOut) {
-                    hit(innerX, ry, rw, rowH - 3, () -> openBuy(e), null);
-                }
+        // ---- 顶部信息 ----
+        int inStock = 0;
+        for (Entry e : this.entries) {
+            if (e.stock() > 0) {
+                inStock++;
             }
-            endList(c);
         }
-        button(c, "back", Component.translatable("gui.module_shop.back").getString(), innerX, y + h - PAD - 20, 64,
-                20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, this::backToShop);
-        if (!this.entries.isEmpty()) {
-            right(c, Component.translatable("gui.module_shop.mall.count", this.entries.size()).getString(), innerX,
-                    y + h - PAD - 10, innerW, IOStyle.TEXT_3);
+        boolean open = inStock > 0;
+        float infoY = y + HEADER_H + 9;
+        String info = Component.translatable("gui.module_shop.stall.owner_line", this.ownerName).getString();
+        float iwidth = small(c, info, ix, infoY, iw * 0.5F, IOStyle.TEXT_2);
+        String status = Component.translatable(open ? "gui.module_shop.stall.status_open"
+                : "gui.module_shop.stall.status_closed").getString();
+        float sx = ix + iwidth + 10;
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, sx, infoY - 4, 6, 6, 3, open ? IOStyle.GREEN : IOStyle.TEXT_3);
+        float stw = small(c, status, sx + 9, infoY, 80, open ? IOStyle.GREEN : IOStyle.TEXT_3);
+        small(c, Component.translatable("gui.module_shop.stall.goods_count", this.entries.size(), inStock).getString(),
+                sx + 9 + stw + 10, infoY, ix + iw - (sx + 9 + stw + 10), IOStyle.TEXT_2);
+
+        // ---- 左：商品格子 ----
+        float detailW = 132.0F;
+        float gx = ix;
+        float gy = infoY + 9;
+        float gw = iw - detailW - 8;
+        float gh = bottom - 24 - gy;
+        int cols = gw >= 230 ? 3 : 2;
+        float cellGap = 3.0F;
+        float cellW = (gw - cellGap * (cols - 1)) / cols;
+        float cellH = 34.0F;
+        int rows = Math.max(1, (int) ((gh + cellGap) / (cellH + cellGap)));
+        this.perPage = rows * cols;
+        this.pages = Math.max(1, (this.entries.size() + this.perPage - 1) / this.perPage);
+        if (this.jumpToSelection && selected() != null) {
+            this.jumpToSelection = false;
+            int pos = this.entries.indexOf(selected());
+            if (pos >= this.perPage) {
+                this.gridPage = pos / this.perPage; // 从大厅点进来：翻到预选商品所在页（只翻一次）
+            }
+        }
+        this.gridPage = Math.max(0, Math.min(this.gridPage, this.pages - 1));
+        if (this.entries.isEmpty()) {
+            center(c, Component.translatable("gui.module_shop.stall_empty").getString(), gx, gy + gh / 2, gw,
+                    IOStyle.TEXT_2);
+        }
+        for (int i = 0; i < this.perPage; i++) {
+            int idx = this.gridPage * this.perPage + i;
+            if (idx >= this.entries.size()) {
+                break;
+            }
+            Entry e = this.entries.get(idx);
+            float cx = gx + (i % cols) * (cellW + cellGap);
+            float cy = gy + (i / cols) * (cellH + cellGap);
+            boolean sel = e.id() == this.selectedId;
+            boolean soldOut = e.stock() <= 0;
+            float hv = hover("cell" + e.id(), cx, cy, cellW, cellH);
+            int fill = sel ? IOStyle.BLUE_TINT : cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.CARD,
+                    IOStyle.ROW_HOVER, hv);
+            cn.autoforged.module_shop.client.ui.render.Draw.fill(c, cx, cy, cellW, cellH, 2, fill);
+            cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, cx, cy, cellW, cellH, 2, 1,
+                    sel ? IOStyle.BLUE : IOStyle.BORDER_DIM);
+            slotFrame(c, cx + 4, cy + 4);
+            item(e.stack(), cx + 4, cy + 4);
+            if (over(cx + 3, cy + 3, 18, 18)) {
+                this.items.setHovered(e.stack());
+            }
+            float tx = cx + 25;
+            float tw = cellW - 28;
+            small(c, e.stack().getHoverName().getString(), tx, cy + 8, tw, soldOut ? IOStyle.TEXT_3 : IOStyle.TEXT);
+            cn.autoforged.module_shop.client.ui.render.Text.drawLine(c,
+                    cn.autoforged.module_shop.client.ClientShopData.money(e.price()),
+                    cn.autoforged.module_shop.client.ui.AtomUi.BOLD, cn.autoforged.module_shop.client.ui.render.Text.SMALL,
+                    soldOut ? IOStyle.TEXT_3 : IOStyle.ORANGE, tx, cy + 17, tw,
+                    cn.autoforged.module_shop.client.ui.render.Text.Align.LEFT);
+            small(c, soldOut ? Component.translatable("gui.module_shop.stall_sold_out").getString()
+                            : Component.translatable("gui.module_shop.stall_stock", e.stock()).getString(), tx, cy + 26,
+                    tw, soldOut ? IOStyle.RED : IOStyle.TEXT_2);
+            final long id = e.id();
+            hit(cx, cy, cellW, cellH, () -> {
+                if (this.selectedId != id) {
+                    this.selectedId = id;
+                    this.qtyField.setValue("1");
+                }
+            }, null);
+        }
+
+        // ---- 右：商品详情与购买 ----
+        float dx = ix + iw - detailW;
+        float dy = gy;
+        float dh = bottom - 24 - dy;
+        card(c, dx, dy, detailW, dh);
+        Entry e = selected();
+        float px = dx + 6;
+        float pw = detailW - 12;
+        if (e == null) {
+            this.qtyField.visible(false);
+            paragraph(c, Component.translatable("gui.module_shop.stall.pick_hint").getString(), px, dy + dh / 2 - 10,
+                    pw, cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_3, 3, true);
+        } else {
+            cn.autoforged.module_shop.client.ui.render.Draw.fill(c, px, dy + 6, 22, 22, 2, IOStyle.SLOT_INNER);
+            cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, px, dy + 6, 22, 22, 2, 1, IOStyle.SLOT_BORDER);
+            this.items.add(e.stack(), px + 2, dy + 8, 18.0F, false);
+            if (over(px, dy + 6, 22, 22)) {
+                this.items.setHovered(e.stack());
+            }
+            text(c, e.stack().getHoverName().getString(), px + 27, dy + 13, pw - 27, IOStyle.TEXT);
+            small(c, Component.translatable("gui.module_shop.stall_sold_count", e.sold()).getString(), px + 27,
+                    dy + 23, pw - 27, IOStyle.TEXT_3);
+            float ly = dy + 38;
+            small(c, Component.translatable("gui.module_shop.stall.unit_price").getString(), px, ly, pw / 2, IOStyle.TEXT_3);
+            right(c, cn.autoforged.module_shop.client.ClientShopData.money(e.price()), px, ly, pw, IOStyle.ORANGE);
+            ly += 12;
+            small(c, Component.translatable("gui.module_shop.stall.stock_label").getString(), px, ly, pw / 2, IOStyle.TEXT_3);
+            right(c, Integer.toString(e.stock()), px, ly, pw, e.stock() > 0 ? IOStyle.TEXT : IOStyle.RED);
+            ly += 14;
+            boolean canBuy = !this.ownStall && e.stock() > 0;
+            if (canBuy) {
+                // 数量：− [输入] +   最大
+                float bw = 16.0F;
+                float fw = pw - bw * 2 - 4 - 26;
+                button(c, "qminus", "-", px, ly, bw, 16, cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL,
+                        quantity() > 1, () -> setQuantity(quantity() - 1, e));
+                this.qtyField.bounds(px + bw + 2, ly, fw, 16).visible(true);
+                button(c, "qplus", "+", px + bw + 2 + fw + 2, ly, bw, 16,
+                        cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, quantity() < e.stock(),
+                        () -> setQuantity(quantity() + 1, e));
+                button(c, "qmax", Component.translatable("gui.module_shop.stall.max").getString(), px + pw - 24, ly, 24,
+                        16, cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true,
+                        () -> setQuantity(e.stock(), e));
+                ly += 22;
+                int q = quantity();
+                boolean qOk = q >= 1 && q <= e.stock();
+                long total = qOk ? safeTotal(e.price(), q) : 0L;
+                small(c, Component.translatable("gui.module_shop.stall.total").getString(), px, ly, pw / 2, IOStyle.TEXT_2);
+                cn.autoforged.module_shop.client.ui.render.Text.drawLine(c,
+                        qOk ? cn.autoforged.module_shop.client.ClientShopData.money(total) : "-",
+                        cn.autoforged.module_shop.client.ui.AtomUi.BOLD, cn.autoforged.module_shop.client.ui.render.Text.BODY,
+                        IOStyle.ORANGE, px, ly, pw, cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
+                ly += 12;
+                long balance = cn.autoforged.module_shop.client.ClientShopData.balance;
+                String hint;
+                int hintColor;
+                if (!qOk) {
+                    hint = Component.translatable("gui.module_shop.stall.qty_range", e.stock()).getString();
+                    hintColor = IOStyle.RED;
+                } else if (total > balance) {
+                    hint = Component.translatable("gui.module_shop.stall.no_money",
+                            cn.autoforged.module_shop.client.ClientShopData.money(balance)).getString();
+                    hintColor = IOStyle.RED;
+                } else {
+                    hint = Component.translatable("gui.module_shop.stall.balance_line",
+                            cn.autoforged.module_shop.client.ClientShopData.money(balance)).getString();
+                    hintColor = IOStyle.TEXT_3;
+                }
+                small(c, hint, px, ly, pw, hintColor);
+                boolean busy = this.buying && System.currentTimeMillis() - this.buyingAt < 4000L;
+                button(c, "buy", Component.translatable(busy ? "gui.module_shop.auction.submitting"
+                                : "gui.module_shop.stall.buy").getString(), px, dy + dh - 24, pw, 18,
+                        cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT,
+                        qOk && total <= balance && !busy, () -> buy(e));
+            } else {
+                this.qtyField.visible(false);
+                paragraph(c, Component.translatable(this.ownStall ? "gui.module_shop.stall.own_hint"
+                                : "gui.module_shop.stall_sold_out").getString(), px, ly, pw,
+                        cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_3, 3, false);
+            }
+        }
+
+        // ---- 底栏：返回 + 翻页 ----
+        button(c, "back", Component.translatable("gui.module_shop.back").getString(), ix, bottom - 18, 60, 18,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, this::backToShop);
+        if (this.pages > 1) {
+            float nx = ix + gw - 40;
+            button(c, "next", Component.translatable("gui.module_shop.page_next").getString(), nx, bottom - 18, 40, 18,
+                    cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, this.gridPage < this.pages - 1,
+                    () -> this.gridPage++);
+            center(c, (this.gridPage + 1) + " / " + this.pages, nx - 50, bottom - 9, 46, IOStyle.TEXT_2);
+            button(c, "prev", Component.translatable("gui.module_shop.page_prev").getString(), nx - 94, bottom - 18, 40,
+                    18, cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, this.gridPage > 0,
+                    () -> this.gridPage--);
         }
     }
 
@@ -320,6 +536,11 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
         request.putString("title", "gui.module_shop.input.stall_buy");
         request.putString("owner", this.owner);
         request.putInt("index", entry.index);
+        if (entry.id() >= 0L) {
+            // 按商品 id 定位 + 带上看到的单价：卖家改价 / 下架其它商品时不会买错
+            request.putLong("id", entry.id());
+            request.putLong("expect", entry.price());
+        }
         request.putString("default_quantity", "1");
         request.putBoolean("confirm_right", false);
         request.putLong("unit_price", entry.price);

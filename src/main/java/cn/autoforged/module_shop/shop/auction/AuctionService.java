@@ -57,9 +57,6 @@ import net.minecraft.world.item.ItemStack;
  * {@link #audit} 校验「进行中：托管 = 当前价；已结束：托管 = 0」，不一致写入异常日志。
  */
 public final class AuctionService {
-    /** 同一玩家最近处理过的请求号（防网络重发 / 连点导致重复出价、重复上架）。 */
-    private static final Map<UUID, Deque<Long>> NONCES = new HashMap<>();
-    private static final int NONCE_KEEP = 64;
     /** 打开过拍卖大厅的在线玩家：拍卖变化时只给他们推增量。 */
     private static final Set<UUID> SUBSCRIBERS = new LinkedHashSet<>();
     /** 正在看某场拍卖详情的玩家 → 拍卖 id。 */
@@ -105,7 +102,7 @@ public final class AuctionService {
 
     /** 服务器启动时清空静态缓存（单人游戏切换存档时，不同存档可能有相同的拍卖 id）。 */
     public static void reset() {
-        NONCES.clear();
+        cn.autoforged.module_shop.shop.RequestGuard.clear();
         SUBSCRIBERS.clear();
         DETAIL_VIEWERS.clear();
         DIRTY.clear();
@@ -120,7 +117,7 @@ public final class AuctionService {
         UUID id = player.getUUID();
         SUBSCRIBERS.remove(id);
         DETAIL_VIEWERS.remove(id);
-        NONCES.remove(id);
+        cn.autoforged.module_shop.shop.RequestGuard.forget(id);
     }
 
     // =================================================================== 工具
@@ -170,21 +167,8 @@ public final class AuctionService {
         ClientboundShopSyncPayload.send(player, reply);
     }
 
-    /** 请求号去重：同一个 nonce 只处理一次。nonce=0（旧客户端 / API 调用）不参与去重。 */
     private static boolean duplicate(ServerPlayer player, CompoundTag tag) {
-        long nonce = tag.getLong("nonce");
-        if (nonce == 0L) {
-            return false;
-        }
-        Deque<Long> seen = NONCES.computeIfAbsent(player.getUUID(), k -> new ArrayDeque<>());
-        if (seen.contains(nonce)) {
-            return true;
-        }
-        seen.addLast(nonce);
-        while (seen.size() > NONCE_KEEP) {
-            seen.removeFirst();
-        }
-        return false;
+        return cn.autoforged.module_shop.shop.RequestGuard.duplicate(player, tag);
     }
 
     /** 解析金额：非数字 / 负数 / 超过余额上限 → -1（非法）。空串 → 0。 */

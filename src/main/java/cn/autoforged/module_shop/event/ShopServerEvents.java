@@ -25,6 +25,7 @@ public final class ShopServerEvents {
     public static void onServerStarted(net.neoforged.neoforge.event.server.ServerStartedEvent event) {
         cn.autoforged.module_shop.shop.http.ShopHttpApi.start(event.getServer());
         cn.autoforged.module_shop.shop.auction.AuctionService.reset();
+        cn.autoforged.module_shop.shop.stall.StallService.reset();
     }
 
     @SubscribeEvent

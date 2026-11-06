@@ -799,9 +799,16 @@ public final class ShopManager {
             c.putInt("stock", entry.stock);
             // 需求 9：按商品统计的累计已售出件数。
             c.putInt("sold", entry.sold);
+            // 商品 id（改价 / 补货 / 下架都按它定位，不受下标变化影响）
+            c.putLong("order", entry.order);
             stall.add(c);
         }
         tag.put("stall", stall);
+        // 玩家商店：大厅数据的版本号（变化了才重新拉取）、库存上限与上架费率（上架界面预览用，以服务端校验为准）
+        tag.putLong("stallVersion", cn.autoforged.module_shop.shop.stall.StallService.marketHash(data));
+        tag.putInt("stallMaxStock", Config.INSTANCE.stallMaxStock.get());
+        tag.putInt("stallSlots", Config.INSTANCE.stallSlots.get());
+        tag.putDouble("stallFeePercent", Config.INSTANCE.stallListingFeePercent.get());
 
         ListTag stallPlayers = new ListTag();
         List<Map.Entry<UUID, PlayerAccount>> stalls = new ArrayList<>();
@@ -1336,7 +1343,9 @@ public final class ShopManager {
             return;
         }
         // 拍卖行（上架 / 出价 / 一口价 / 撤销 / 列表 / 详情 / 管理）统一由 AuctionService 处理。
-        if (cn.autoforged.module_shop.shop.auction.AuctionService.handle(player, action, tag)) {
+        if (cn.autoforged.module_shop.shop.auction.AuctionService.handle(player, action, tag)
+                // 玩家商店新增：商店大厅 / 从背包上架 / 补货（原有摊位动作仍在下面的 switch 里）
+                || cn.autoforged.module_shop.shop.stall.StallService.handle(player, action, tag)) {
             return;
         }
         switch (action) {
@@ -1415,7 +1424,7 @@ public final class ShopManager {
             case "open_stall" -> openStallBrowse(player, tag.getString("owner"));
             case "stall_buy" -> stallBuy(player, tag);
             case "stall_apply_price" -> stallApplyPrice(player, tag);
-            case "remove_stall" -> removeStall(player, tag.getInt("index"));
+            case "remove_stall" -> removeStall(player, tag);
             // 需求五：已取消补货，售完的商品只能下架后重新上架。
             // 需求 10：客户端打开对应界面后请求清除该类型红点（服务端权威清零并回传）。
             case "notif_clear" -> NotificationManager.clear(player, NotificationType.byId(tag.getString("type")));
@@ -2762,7 +2771,7 @@ public final class ShopManager {
         long price = parsePrice(tag.getString("price"));
         // 需求 4：上架时可设置库存数量（单件价格），最大 64，且不能超过实际持有量。
         int requested = parseInt(tag.getString("quantity"));
-        int total = Math.min(64, requested <= 0 ? Math.max(1, stack.getCount()) : requested);
+        int total = Math.min(Config.INSTANCE.stallMaxStock.get(), requested <= 0 ? Math.max(1, stack.getCount()) : requested);
         total = Math.min(total, Math.max(1, stack.getCount()));
         PlayerAccount account = account(player);
         ShopSavedData data = data(player.server);
@@ -3358,32 +3367,54 @@ public final class ShopManager {
         }
     }
 
-    private static void stallApplyPrice(ServerPlayer player, CompoundTag tag) {
-        int index = tag.getInt("index");
-        long price = parsePrice(tag.getString("price"));
-        PlayerAccount account = account(player);
-        if (index < 0 || index >= account.stall.size() || price <= 0) {
-            return;
+    /**
+     * 自己摊位上的商品：优先按商品 id（order，全服唯一、不随下架变化）定位；
+     * 旧客户端 / 旧输入框只带 index 时退回按下标。
+     */
+    private static int stallIndex(PlayerAccount account, CompoundTag tag) {
+        if (tag.contains("id")) {
+            return cn.autoforged.module_shop.shop.stall.StallService.indexOf(account, tag.getLong("id"));
         }
-        account.stall.get(index).price = price;
-        data(player.server).setDirty();
+        int index = tag.getInt("index");
+        return index >= 0 && index < account.stall.size() ? index : -1;
+    }
+
+    private static void stallApplyPrice(ServerPlayer player, CompoundTag tag) {
+        long price = parsePrice(tag.getString("price"));
+        synchronized (LOCK) {
+            PlayerAccount account = account(player);
+            int index = stallIndex(account, tag);
+            if (index < 0 || price <= 0) {
+                notifyPlayer(player, Component.translatable(price <= 0 ? "msg.module_shop.invalid_price"
+                        : "msg.module_shop.stall.err_gone").withStyle(ChatFormatting.RED));
+                return;
+            }
+            StallEntry entry = account.stall.get(index);
+            entry.price = price;
+            data(player.server).setDirty();
+            notifyPlayer(player, Component.translatable("msg.module_shop.stall.price_changed",
+                    entry.stack.getHoverName(), price).withStyle(ChatFormatting.GREEN));
+        }
         sendSnapshot(player, "stall");
         broadcastSnapshots(player.server);
     }
 
-    private static void removeStall(ServerPlayer player, int index) {
-        PlayerAccount account = account(player);
-        if (index < 0 || index >= account.stall.size()) {
-            return;
+    private static void removeStall(ServerPlayer player, CompoundTag tag) {
+        synchronized (LOCK) {
+            PlayerAccount account = account(player);
+            int index = stallIndex(account, tag);
+            if (index < 0) {
+                return;
+            }
+            StallEntry entry = account.stall.remove(index);
+            // 需求 6：下架时把剩余库存（不是 1 件）全部退还（背包放不下的进邮箱，不丢不复制：先移出摊位再退）。
+            if (entry.stock > 0) {
+                ItemStack refund = entry.stack.copy();
+                refund.setCount(entry.stock);
+                addItemOrMail(player, refund, SOURCE_STALL_UNSOLD);
+            }
+            data(player.server).setDirty();
         }
-        StallEntry entry = account.stall.remove(index);
-        // 需求 6：下架时把剩余库存（不是 1 件）全部退还。
-        if (entry.stock > 0) {
-            ItemStack refund = entry.stack.copy();
-            refund.setCount(entry.stock);
-            addItemOrMail(player, refund, SOURCE_STALL_UNSOLD);
-        }
-        data(player.server).setDirty();
         sendSnapshot(player, "stall");
         broadcastSnapshots(player.server);
     }
@@ -3405,6 +3436,8 @@ public final class ShopManager {
         tag.putString("kind", "stall_browse");
         tag.putString("owner", owner.toString());
         tag.putString("ownerName", account.name.isEmpty() ? "Unknown" : account.name);
+        tag.putBoolean("own", owner.equals(player.getUUID()));
+        tag.putLong("balance", account(player).balance);
         ListTag list = new ListTag();
         for (int i = 0; i < account.stall.size(); i++) {
             StallEntry entry = account.stall.get(i);
@@ -3414,6 +3447,8 @@ public final class ShopManager {
             // 需求 9：浏览摊位时也显示该商品已售出件数。
             c.putInt("sold", entry.sold);
             c.putInt("index", i);
+            // 商品 id：购买时按它定位，卖家下架 / 调整其它商品也不会买错
+            c.putLong("id", entry.order);
             list.add(c);
         }
         tag.put("entries", list);
@@ -3427,26 +3462,53 @@ public final class ShopManager {
         } catch (IllegalArgumentException ex) {
             return;
         }
-        int index = tag.getInt("index");
-        // 需求 5：购买数量由玩家在弹窗中选择，服务端再次夹取到库存与余额上限。
+        // 需求 5：购买数量由玩家选择；服务端校验必须在 1..库存 之间（超过库存直接拒绝，不偷偷少卖）。
         int requested = parseInt(tag.getString("quantity"));
         int want = requested <= 0 ? 1 : requested;
         if (owner.equals(player.getUUID())) {
             return;
         }
         synchronized (LOCK) {
+            // 重复点击 / 网络重发：同一请求号只处理一次
+            if (RequestGuard.duplicate(player, tag)) {
+                return;
+            }
             ShopSavedData data = data(player.server);
             PlayerAccount sellerAccount = data.peek(owner);
-            // 需求 9：按索引从服务端真实摊位数据取物品与价格，不信任客户端。
-            if (sellerAccount == null || index < 0 || index >= sellerAccount.stall.size()) {
+            // 从服务端真实摊位数据取物品与价格，不信任客户端；优先按商品 id 定位（下标会因卖家下架其它商品而错位）。
+            int index = -1;
+            if (sellerAccount != null) {
+                if (tag.contains("id")) {
+                    index = cn.autoforged.module_shop.shop.stall.StallService.indexOf(sellerAccount, tag.getLong("id"));
+                } else {
+                    int raw = tag.getInt("index");
+                    index = raw >= 0 && raw < sellerAccount.stall.size() ? raw : -1;
+                }
+            }
+            if (index < 0) {
+                notifyPlayer(player, Component.translatable("msg.module_shop.stall.err_gone").withStyle(ChatFormatting.RED));
+                openStallBrowse(player, owner.toString());
                 return;
             }
             StallEntry entry = sellerAccount.stall.get(index);
+            // 卖家刚改过价：按买家看到的价格才成交，否则拒绝并刷新
+            if (tag.contains("expect") && tag.getLong("expect") != entry.price) {
+                notifyPlayer(player, Component.translatable("msg.module_shop.stall.err_price_changed",
+                        entry.price).withStyle(ChatFormatting.RED));
+                openStallBrowse(player, owner.toString());
+                return;
+            }
             if (entry.stock <= 0) {
                 notifyPlayer(player, Component.translatable("msg.module_shop.stall_sold_out").withStyle(ChatFormatting.RED));
                 return;
             }
-            int buyCount = Math.min(want, entry.stock);
+            if (want > entry.stock) {
+                notifyPlayer(player, Component.translatable("msg.module_shop.stall.err_stock", entry.stock)
+                        .withStyle(ChatFormatting.RED));
+                openStallBrowse(player, owner.toString());
+                return;
+            }
+            int buyCount = want;
             // 摊位单价由玩家自己设置，同样必须做溢出保护（裸乘溢出为负 → 判定失效 + 给买家加钱）。
             long total = safeMultiply(entry.price, buyCount);
             if (total <= 0L) {
@@ -3503,10 +3565,10 @@ public final class ShopManager {
             NotificationManager.notify(player.server, owner, NotificationType.STALL);
             String sellerName = sellerAccount.name == null || sellerAccount.name.isEmpty() ? "摊位" : sellerAccount.name;
             TransactionLog.record(player.server, player.getUUID(), TransactionLog.STALL_BUY, sellerName,
-                    -total, buyer.balance, rewardName + "×" + buyCount);
+                    -total, buyer.balance, rewardName.getString() + "×" + buyCount);
             TransactionLog.record(player.server, owner, TransactionLog.STALL_SELL,
                     player.getGameProfile().getName(), total, sellerAccount.balance,
-                    rewardName + "×" + buyCount + "（货款存邮箱）");
+                    rewardName.getString() + "×" + buyCount + "（货款进钱包）");
         }
         // 静默刷新买家缓存，并把最新库存推回正在浏览的摊位界面（需求 5：买完还剩多少显示多少）。
         sendSnapshot(player, "stall", true);

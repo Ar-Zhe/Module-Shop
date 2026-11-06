@@ -6149,6 +6149,8 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             case "trade_select" -> Nav.open(new TradeSelectScreen(false));
             case "trade_gui" -> openInput("trade_request", "gui.module_shop.input.trade_target", null, "target");
             case "stall_edit_gui" -> openInput("stall_apply_price", "gui.module_shop.input.stall_price", extra, "price");
+            // 我的商店 → 补货：输入补货数量（默认 = 背包里同样物品的数量），服务端只收完全相同的物品
+            case "stall_restock_gui" -> openInput("stall_restock", "gui.module_shop.input.stall_restock", extra, "quantity");
             // 需求 6/7：管理界面可编辑价值(price)、品质(rarity)、数量(quantity)，并带出当前值。
             case "admin_edit_gui" -> openAdminEdit(extra);
             // 右键删除条目（每日商店 / 收购 / 购物城 / 出货箱规则都走这里）。

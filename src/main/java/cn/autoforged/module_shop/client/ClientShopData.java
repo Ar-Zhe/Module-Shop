@@ -532,6 +532,7 @@ public final class ClientShopData {
         if (tag.contains("auctionVersion")) {
             AuctionClient.serverVersion = tag.getLong("auctionVersion");
         }
+        StallClient.fromSnapshot(tag);
         if (tag.contains("auctions", Tag.TAG_LIST)) {
         List<AuctionView> newAuctions = new ArrayList<>();
         ListTag auctionTag = tag.getList("auctions", Tag.TAG_COMPOUND);

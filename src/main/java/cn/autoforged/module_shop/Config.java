@@ -88,6 +88,8 @@ public final class Config {
     // ---- 摊位 ----
     public final ModConfigSpec.IntValue stallSlots;
     public final ModConfigSpec.DoubleValue stallListingFeePercent;
+    /** 单件商品的库存上限（上架与补货共用）。 */
+    public final ModConfigSpec.IntValue stallMaxStock;
     /** 玩家摊位自动下架方式：permanent=永久 / game=按游戏时间 / real=按现实时间。 */
     /** 购物城：库存刷新方式（off / real / game）与周期（real=小时、game=天）。 */
     public final ModConfigSpec.ConfigValue<String> mallRefreshMode;
@@ -250,6 +252,7 @@ public final class Config {
         stallSlots = builder.comment("摊位槽位数量").defineInRange("stallSlots", 12, 1, 45);
         // 需求冲突：free_listing=true 与 listing_fee="上架价5%"。默认免费，百分比留给服主调节。
         stallListingFeePercent = builder.comment("上架手续费百分比（0=免费上架）").defineInRange("stallListingFeePercent", 0.0D, 0.0D, 100.0D);
+        stallMaxStock = builder.comment("摊位单件商品的库存上限（上架与补货共用，默认 64）").defineInRange("stallMaxStock", 64, 1, 100000);
 
         // 玩家摊位自动下架：商店设置里的「下架时间」（永久 / 按游戏天数 / 按现实小时）。
         stallExpireMode = builder.comment("玩家摊位自动下架方式：permanent=永久 / game=按游戏时间 / real=按现实时间")
