@@ -20,16 +20,13 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * 选中一个模组后点底下「添加模组 +」，进入统一价格 / 库存 / 品质的输入界面，
  * 保存后服务端把该模组的全部物品一次性导入货架。
  */
-public class MallImportScreen extends Screen {
+public class MallImportScreen extends SkiaDialog {
     private static final int PANEL_W = 260;
     private static final int PANEL_H = 244;
     private static final int ROW_H = 14;
     private static final int LIST_ROWS = 9;
     /** 位掩码最多支持多少件（再多就不做过滤，交给服务端按数量上限处理）。 */
     private static final int MASK_LIMIT = 8192;
-    private static final int COLOR_TEXT = IOStyle.TEXT;
-    private static final int COLOR_MUTED = IOStyle.TEXT_2;
-    private static final int COLOR_GOLD = IOStyle.ORANGE;
 
     /** 全部模组（命名空间 → 显示名），按显示名排序；客户端注册表不会变，所以只建一次。 */
     private static List<String[]> modCache;
@@ -82,7 +79,7 @@ public class MallImportScreen extends Screen {
 
     @Override
     protected void init() {
-        super.init();
+        skiaInit();
         this.left = (this.width - PANEL_W) / 2;
         this.top = (this.height - PANEL_H) / 2;
     }
@@ -95,18 +92,24 @@ public class MallImportScreen extends Screen {
     @Override
     public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         super.renderBackground(g, mouseX, mouseY, partialTick);
+        if (skia()) {
+            return;
+        }
         Bricks.panel(g, this.left, this.top, PANEL_W, PANEL_H);
     }
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         super.render(g, mouseX, mouseY, partialTick);
         this.rowRects.clear();
         int x = this.left;
         int y = this.top;
-        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 10, COLOR_GOLD);
+        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 10, IOStyle.ORANGE);
         IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.mall.import_hint"),
-                x + PANEL_W / 2, y + 24, COLOR_MUTED);
+                x + PANEL_W / 2, y + 24, IOStyle.TEXT_2);
 
         // ① 上方的「选择模组分类」折叠条：点一下展开 / 收起。
         int headY = y + 38;
@@ -116,7 +119,7 @@ public class MallImportScreen extends Screen {
         String head = this.selected.isEmpty()
                 ? Component.translatable("gui.module_shop.mall.choose_mod").getString()
                 : displayName(this.selected);
-        drawSmall(g, x + 16, headY + 5, Component.literal(head), this.selected.isEmpty() ? COLOR_TEXT : COLOR_GOLD);
+        drawSmall(g, x + 16, headY + 5, Component.literal(head), this.selected.isEmpty() ? IOStyle.TEXT : IOStyle.ORANGE);
         // 直边倒三角：展开朝下、收起朝右（这里统一用三角方向表示状态）
         IOStyle.triangleDown(g, x + PANEL_W - 22, headY + 7, 4, 4,
                 this.listOpen ? IOStyle.BLUE : IOStyle.TEXT_2);
@@ -144,7 +147,7 @@ public class MallImportScreen extends Screen {
                 if (this.font.width(name) > nameMax) {
                     name = this.font.plainSubstrByWidth(name, Math.max(1, nameMax - 6)) + "…";
                 }
-                drawSmall(g, x + 18, ry + 3, Component.literal(name), current ? IOStyle.BLUE : COLOR_TEXT);
+                drawSmall(g, x + 18, ry + 3, Component.literal(name), current ? IOStyle.BLUE : IOStyle.TEXT);
                 drawSmallRight(g, x + PANEL_W - 18, ry + 3, Component.literal(mod[0]), IOStyle.TEXT_3);
                 this.rowRects.add(new int[]{x + 12, ry, PANEL_W - 24, ROW_H - 1, i});
             }
@@ -199,6 +202,123 @@ public class MallImportScreen extends Screen {
         }
     }
 
+    // ------------------------------------------------------------------ Skija
+
+    private final cn.autoforged.module_shop.client.ui.widget.ScrollController skScroll =
+            new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 270.0F;
+        float listH = this.listOpen ? 10 * 14.0F + 4 : 0;
+        float h = HEADER_H + 8 + 12 + 6 + 20 + (this.listOpen ? 6 + listH : 0) + 10 + 16 + 8
+                + (this.confirmRemove ? 22 : 0) + 20 + PAD;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        panel(c, x, y, w, h, this.title.getString());
+        float cy = y + HEADER_H + 8;
+        paragraph(c, Component.translatable("gui.module_shop.mall.import_hint").getString(), innerX, cy, innerW,
+                cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_2, 2, true);
+        cy += 18;
+        // 折叠条
+        float hv = hover("head", innerX, cy, innerW, 20);
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX, cy, innerW, 20, 3,
+                cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.CARD, IOStyle.ROW_HOVER, hv));
+        cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, innerX, cy, innerW, 20, 3, 1,
+                this.listOpen ? IOStyle.BLUE : IOStyle.BORDER);
+        String head = this.selected.isEmpty() ? Component.translatable("gui.module_shop.mall.choose_mod").getString()
+                : displayName(this.selected);
+        text(c, head, innerX + 8, cy + 10, innerW - 30, this.selected.isEmpty() ? IOStyle.TEXT : IOStyle.ORANGE);
+        float chx = innerX + innerW - 12;
+        float d = this.listOpen ? -2F : 2F;
+        cn.autoforged.module_shop.client.ui.render.Draw.line(c, chx - 4, cy + 10 - d, chx, cy + 10 + d, 1.3F,
+                IOStyle.TEXT_2);
+        cn.autoforged.module_shop.client.ui.render.Draw.line(c, chx, cy + 10 + d, chx + 4, cy + 10 - d, 1.3F,
+                IOStyle.TEXT_2);
+        hit(innerX, cy, innerW, 20, () -> this.listOpen = !this.listOpen, null);
+        cy += 20;
+        if (this.listOpen) {
+            cy += 6;
+            List<String[]> mods = mods();
+            card(c, innerX, cy, innerW, listH);
+            float rowH = 14.0F;
+            float oy = beginList(c, this.skScroll, innerX + 2, cy + 2, innerW - 4, listH - 4, mods.size() * rowH);
+            int first = Math.max(0, (int) ((cy + 2 - oy) / rowH));
+            for (int i = first; i < Math.min(mods.size(), first + 12); i++) {
+                String[] mod = mods.get(i);
+                float ry = oy + i * rowH;
+                boolean current = mod[0].equals(this.selected);
+                boolean rowHover = over(innerX + 2, ry, innerW - 10, rowH);
+                if (current || rowHover) {
+                    cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX + 2, ry, innerW - 10, rowH, 2,
+                            current ? IOStyle.BLUE_TINT : IOStyle.ROW_HOVER);
+                }
+                float nsW = cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, mod[0],
+                        cn.autoforged.module_shop.client.ui.AtomUi.REGULAR,
+                        cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_3, innerX + 2,
+                        ry + rowH / 2, innerW - 16, cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
+                small(c, mod[1], innerX + 8, ry + rowH / 2, innerW - 30 - nsW, current ? IOStyle.BLUE : IOStyle.TEXT);
+                final String ns = mod[0];
+                hit(innerX + 2, ry, innerW - 10, rowH, () -> {
+                    this.selected = ns;
+                    this.confirmRemove = false;
+                    this.removeCount = countInMall(ns);
+                }, null);
+            }
+            endList(c);
+            cy += listH;
+        }
+        cy += 10;
+        // 跳过技术物品
+        toggle(c, "skip", innerX, cy + 2, this.skipUnnamed, () -> this.skipUnnamed = !this.skipUnnamed);
+        text(c, Component.translatable("gui.module_shop.mall.skip_unnamed").getString(), innerX + 28, cy + 8,
+                innerW - 28, IOStyle.TEXT);
+        if (over(innerX, cy, innerW, 16)) {
+            tip(Component.translatable("gui.module_shop.mall.skip_unnamed_tip"));
+        }
+        cy += 16 + 8;
+        if (this.confirmRemove) {
+            cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX, cy, innerW, 18, 3, IOStyle.RED_TINT);
+            center(c, Component.translatable("gui.module_shop.mall.remove_confirm", displayName(this.selected),
+                    this.removeCount).getString(), innerX, cy + 9, innerW, IOStyle.RED);
+            cy += 22;
+        }
+        float bw = (innerW - 12) / 3;
+        float by = y + h - PAD - 20;
+        boolean canAdd = !this.selected.isEmpty() && !this.confirmRemove;
+        button(c, "add", Component.translatable("gui.module_shop.mall.add_mod").getString(), innerX, by, bw, 20,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, canAdd, this::startImport);
+        if (this.selected.isEmpty() && over(innerX, by, bw, 20)) {
+            tip(Component.translatable("gui.module_shop.mall.choose_first"));
+        }
+        boolean delEnabled = !this.selected.isEmpty() && this.removeCount > 0;
+        button(c, "del", Component.translatable(this.confirmRemove ? "gui.module_shop.mall.remove_yes"
+                        : "gui.module_shop.mall.remove_mod").getString(), innerX + bw + 6, by, bw, 20,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.DANGER, delEnabled, () -> {
+                    if (this.confirmRemove) {
+                        CompoundTag tag = new CompoundTag();
+                        tag.putString("action", "admin_mall_remove_mod");
+                        tag.putString("mod", this.selected);
+                        ServerboundShopActionPayload.send(tag);
+                        this.confirmRemove = false;
+                        this.onClose();
+                    } else {
+                        this.confirmRemove = true;
+                        this.removeCount = countInMall(this.selected);
+                    }
+                });
+        button(c, "cancel", Component.translatable("gui.module_shop.cancel").getString(), innerX + (bw + 6) * 2, by,
+                bw, 20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, () -> {
+                    if (this.confirmRemove) {
+                        this.confirmRemove = false;
+                    } else {
+                        this.onClose();
+                    }
+                });
+    }
+
     private void drawSmall(GuiGraphics g, int x, int y, Component text, int color) {
         g.pose().pushPose();
         g.pose().translate(x, y, 0.0F);
@@ -213,6 +333,9 @@ public class MallImportScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         int x = this.left;
         int y = this.top;
         int headY = y + 38;
@@ -369,6 +492,9 @@ public class MallImportScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (skia()) {
+            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        }
         if (this.listOpen && scrollY != 0.0D) {
             this.scroll = Math.max(0, this.scroll + (scrollY > 0 ? -1 : 1));
             return true;

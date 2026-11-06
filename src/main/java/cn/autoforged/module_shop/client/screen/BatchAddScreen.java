@@ -30,6 +30,7 @@ public class BatchAddScreen extends AbstractContainerScreen<BatchAddMenu> {
     @Override
     protected void init() {
         super.init();
+        this.skia = cn.autoforged.module_shop.client.ui.AtomUi.available();
         this.titleLabelX = 8;
         this.titleLabelY = 8;
     }
@@ -50,6 +51,10 @@ public class BatchAddScreen extends AbstractContainerScreen<BatchAddMenu> {
     protected void renderBg(GuiGraphics g, float partialTick, int mouseX, int mouseY) {
         int x = this.leftPos;
         int y = this.topPos;
+        if (this.skia) {
+            skBg(g, x, y, mouseX, mouseY);
+            return;
+        }
         Bricks.panel(g, x, y, this.imageWidth, this.imageHeight);
         // 幽灵槽区域加一层淡底，和背包区分
         g.fill(x + 6, BatchAddMenu.SLOT_Y + y - 4, x + 170, y + BatchAddMenu.SLOT_Y + 54, 0x30101114);
@@ -67,6 +72,15 @@ public class BatchAddScreen extends AbstractContainerScreen<BatchAddMenu> {
         super.render(g, mouseX, mouseY, partialTick);
         int x = this.leftPos;
         int y = this.topPos;
+        if (this.skia) {
+            int by = y + BatchAddMenu.SLOT_Y + 62;
+            if (getMenu().filled() <= 0 && IOStyle.inside(x + 8, by, 78, 18, mouseX, mouseY)) {
+                g.renderTooltip(this.font, Component.translatable("gui.module_shop.batch.empty"), mouseX, mouseY);
+            } else if (this.hoveredSlot != null && this.hoveredSlot.hasItem()) {
+                g.renderTooltip(this.font, this.hoveredSlot.getItem(), mouseX, mouseY);
+            }
+            return;
+        }
         // 右侧说明（0.8 倍小字，逐行排，不重叠）
         int ty = y + 30;
         drawSmall(g, x + INFO_X, ty, Component.translatable("gui.module_shop.batch.count",
@@ -96,12 +110,58 @@ public class BatchAddScreen extends AbstractContainerScreen<BatchAddMenu> {
 
     @Override
     protected void renderLabels(GuiGraphics g, int mouseX, int mouseY) {
+        if (this.skia) {
+            return;
+        }
         IOStyle.text(g, this.font, Component.translatable("gui.module_shop.batch.title",
                 ClientShopData.adminModeName()), 8, 6, IOStyle.TEXT);
         IOStyle.text(g, this.font, Component.translatable("gui.module_shop.batch.subtitle"), 8, 20,
                 IOStyle.TEXT_3);
         IOStyle.text(g, this.font, Component.translatable("gui.module_shop.shipping.bag"),
                 8, BatchAddMenu.INVENTORY_Y - 10, IOStyle.TEXT_3);
+    }
+
+    // ------------------------------------------------------------------ Skija（只换绘制，点击沿用旧矩形）
+
+    private boolean skia;
+
+    private void skBg(GuiGraphics g, int x, int y, int mouseX, int mouseY) {
+        cn.autoforged.module_shop.client.ui.render.SkiaFrame.draw(g, c -> {
+            SkiaDialog.bare(c, x, y, this.imageWidth, this.imageHeight);
+            cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, Component.translatable(
+                            "gui.module_shop.batch.title", ClientShopData.adminModeName()).getString(),
+                    cn.autoforged.module_shop.client.ui.AtomUi.BOLD, cn.autoforged.module_shop.client.ui.render.Text.BODY,
+                    IOStyle.TEXT, x + 8, y + 10, PANEL_W - 16, cn.autoforged.module_shop.client.ui.render.Text.Align.LEFT);
+            SkiaDialog.small(c, Component.translatable("gui.module_shop.batch.subtitle").getString(), x + 8, y + 22,
+                    PANEL_W - 16, IOStyle.TEXT_3);
+            cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x + 6, y + BatchAddMenu.SLOT_Y - 4, 164, 58, 3,
+                    IOStyle.CARD);
+            for (int i = 0; i < BatchAddMenu.GHOST_SLOTS; i++) {
+                SkiaDialog.slotFrame(c, x + BatchAddMenu.SLOT_X + (i % 9) * 18,
+                        y + BatchAddMenu.SLOT_Y + (i / 9) * 18);
+            }
+            SkiaDialog.small(c, Component.translatable("gui.module_shop.shipping.bag").getString(), x + 8,
+                    y + BatchAddMenu.INVENTORY_Y - 6, 160, IOStyle.TEXT_3);
+            SkiaDialog.playerSlots(c, x + BatchAddMenu.SLOT_X, y + BatchAddMenu.INVENTORY_Y);
+            float cardX = x + INFO_X - 8;
+            float cardW = PANEL_W - INFO_X - 2;
+            SkiaDialog.card(c, cardX, y + 34, cardW, PANEL_H - 70);
+            SkiaDialog.text(c, Component.translatable("gui.module_shop.batch.count", getMenu().filled(),
+                    BatchAddMenu.GHOST_SLOTS).getString(), cardX + 8, y + 46, cardW - 16, IOStyle.ORANGE);
+            float ty = y + 58;
+            for (String key : new String[]{"gui.module_shop.batch.tip1", "gui.module_shop.batch.tip2",
+                    "gui.module_shop.batch.tip3"}) {
+                ty += SkiaDialog.paragraph(c, Component.translatable(key).getString(), cardX + 8, ty, cardW - 16,
+                        cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_2, 3, false) + 4;
+            }
+            int by = y + BatchAddMenu.SLOT_Y + 62;
+            boolean canConfirm = getMenu().filled() > 0;
+            SkiaDialog.flatButton(c, x + 8, by, 78, 18, Component.translatable("gui.module_shop.batch.confirm")
+                            .getString(), cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, canConfirm,
+                    mouseX, mouseY);
+            SkiaDialog.flatButton(c, x + 92, by, 78, 18, Component.translatable("gui.module_shop.cancel").getString(),
+                    cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, mouseX, mouseY);
+        });
     }
 
     private void drawSmall(GuiGraphics g, int x, int y, Component text, int color) {

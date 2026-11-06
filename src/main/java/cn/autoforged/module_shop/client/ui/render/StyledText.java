@@ -29,6 +29,18 @@ public final class StyledText {
             0xFF555555, 0xFF5555FF, 0xFF55FF55, 0xFF55FFFF, 0xFFFF5555, 0xFFFF55FF, 0xFFFFFF55, 0xFFFFFFFF,
     };
 
+    /** 日间主题下的同名颜色：原版的亮黄、亮绿、白色在白底上几乎看不见，换成同色相的深色。 */
+    private static final int[] COLORS_LIGHT = {
+            0xFF000000, 0xFF0000AA, 0xFF00800F, 0xFF00808A, 0xFFAA0000, 0xFF9A1C9A, 0xFFB86E00, 0xFF6B7484,
+            0xFF4A4A4A, 0xFF3446D6, 0xFF1C8F3A, 0xFF0C849C, 0xFFD13A3A, 0xFFB03AB3, 0xFFA07A00, 0xFF111620,
+    };
+
+    /** 按当前主题（含切换过渡）取 § 颜色。 */
+    private static int color(int idx) {
+        return Draw.lerp(COLORS[idx], COLORS_LIGHT[idx],
+                cn.autoforged.module_shop.client.screen.IOStyle.themeProgress());
+    }
+
     private StyledText() {
     }
 
@@ -51,7 +63,7 @@ public final class StyledText {
                 if (idx >= 0 || code == 'r' || code == 'l') {
                     flush(runs, buf, color, bold);
                     if (idx >= 0) {
-                        color = COLORS[idx];
+                        color = color(idx);
                         bold = false; // 与原版一致：颜色代码会清除格式
                     } else if (code == 'r') {
                         color = baseColor;

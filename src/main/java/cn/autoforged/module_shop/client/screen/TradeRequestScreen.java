@@ -18,14 +18,11 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * 需求 1：交易请求列表。打开后可以看到别人发来的交易请求，点击即可进入交易界面；
  * 失效（超时/被取消）的请求由服务端清理并刷新本列表。
  */
-public class TradeRequestScreen extends Screen {
+public class TradeRequestScreen extends SkiaDialog {
     private static final int PANEL_W = 300;
     private static final int PANEL_H = 210;
     private static final int ROW_H = 30;
     private static final int PAGE_SIZE = 5;
-    private static final int COLOR_TEXT = IOStyle.TEXT;
-    private static final int COLOR_MUTED = IOStyle.TEXT_2;
-    private static final int COLOR_GOLD = IOStyle.ORANGE;
 
     private int page;
     private int left;
@@ -41,7 +38,7 @@ public class TradeRequestScreen extends Screen {
 
     @Override
     protected void init() {
-        super.init();
+        skiaInit();
         this.left = (this.width - PANEL_W) / 2;
         this.top = (this.height - PANEL_H) / 2;
         // 需求 10：确认界面已打开后再清除交易请求红点（服务端权威清零）。
@@ -55,15 +52,21 @@ public class TradeRequestScreen extends Screen {
     @Override
     public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         super.renderBackground(g, mouseX, mouseY, partialTick);
+        if (skia()) {
+            return;
+        }
         Bricks.panel(g, this.left, this.top, PANEL_W, PANEL_H);
     }
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         super.render(g, mouseX, mouseY, partialTick);
         int x = this.left;
         int y = this.top;
-        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 8, COLOR_GOLD);
+        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 8, IOStyle.ORANGE);
 
         var requests = ClientShopData.tradeRequests;
         int pages = Math.max(1, (requests.size() + PAGE_SIZE - 1) / PAGE_SIZE);
@@ -76,7 +79,7 @@ public class TradeRequestScreen extends Screen {
             ClientShopData.TradeRequest request = requests.get(index);
             int rowY = y + 24 + i * ROW_H;
             g.fill(x + 8, rowY, x + PANEL_W - 8, rowY + ROW_H - 4, 0xFF232427);
-            g.fill(x + 8, rowY, x + 10, rowY + ROW_H - 4, COLOR_GOLD);
+            g.fill(x + 8, rowY, x + 10, rowY + ROW_H - 4, IOStyle.ORANGE);
             if (request.from != null && !request.from.isEmpty()) {
                 PlayerInfo info = Minecraft.getInstance().getConnection() == null ? null
                         : Minecraft.getInstance().getConnection().getPlayerInfo(request.from);
@@ -86,33 +89,33 @@ public class TradeRequestScreen extends Screen {
             }
             // 需求二：整行展示“请求来自谁 + 剩余时间”，进入交易改由独立绿色【接受】按钮触发。
             g.drawString(this.font, Component.translatable("gui.module_shop.trade.request_from", request.from),
-                    x + 36, rowY + 3, COLOR_TEXT, true);
+                    x + 36, rowY + 3, IOStyle.TEXT, true);
             long expireMs = Config.INSTANCE.tradeRequestExpireSeconds.get() * 1000L;
             // 需求二：倒计时数字实时递减——快照里的 age 加上快照到达后的本地流逝时间。
             long elapsed = request.ageMs + Math.max(0L, System.currentTimeMillis() - request.receivedAt);
             long remainSec = Math.max(0L, (expireMs - elapsed + 999L) / 1000L);
             String remain = Component.translatable("gui.module_shop.trade.request_remaining", remainSec).getString();
-            g.drawString(this.font, remain, x + 36, rowY + 14, COLOR_GOLD, false);
+            g.drawString(this.font, remain, x + 36, rowY + 14, IOStyle.ORANGE, false);
             // 需求二：绿色【接受】按钮（进入交易）。
             int acceptX = x + PANEL_W - 112;
             g.fill(acceptX, rowY + 6, acceptX + 46, rowY + 20, 0xFF245E2A);
             g.fill(acceptX, rowY + 6, acceptX + 46, rowY + 7, 0xFF3E9E48);
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.accept"),
-                    acceptX + 23, rowY + 9, COLOR_TEXT);
+                    acceptX + 23, rowY + 9, IOStyle.TEXT);
             // 需求二：保留红色【拒绝】按钮。
             int rejectX = x + PANEL_W - 60;
             g.fill(rejectX, rowY + 6, rejectX + 46, rowY + 20, 0xFF5A2A2A);
             g.fill(rejectX, rowY + 6, rejectX + 46, rowY + 7, 0xFF8A4A4A);
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.decline"),
-                    rejectX + 23, rowY + 9, COLOR_TEXT);
+                    rejectX + 23, rowY + 9, IOStyle.TEXT);
         }
         if (requests.isEmpty()) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.request_empty"),
-                    x + PANEL_W / 2, y + 100, COLOR_MUTED);
+                    x + PANEL_W / 2, y + 100, IOStyle.TEXT_2);
         }
         if (pages > 1) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.page", this.page + 1, pages),
-                    x + PANEL_W / 2, y + PANEL_H - 34, COLOR_MUTED);
+                    x + PANEL_W / 2, y + PANEL_H - 34, IOStyle.TEXT_2);
         }
         drawButton(g, x + 10, y + PANEL_H - 24, 70, 16, Component.translatable("gui.module_shop.back"));
         if (pages > 1) {
@@ -124,6 +127,9 @@ public class TradeRequestScreen extends Screen {
     /** 鼠标滚轮翻页。 */
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (skia()) {
+            return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        }
         if (scrollY != 0.0D) {
             int pages = Math.max(1, (ClientShopData.tradeRequests.size() + PAGE_SIZE - 1) / PAGE_SIZE);
             int next = Math.max(0, Math.min(pages - 1, this.page + (scrollY > 0.0D ? -1 : 1)));
@@ -137,6 +143,9 @@ public class TradeRequestScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         int x = this.left;
         int y = this.top;
         if (button == 0 && mouseX >= x + 10 && mouseX < x + 80
@@ -185,6 +194,73 @@ public class TradeRequestScreen extends Screen {
             }
         }
         return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    // ------------------------------------------------------------------ Skija
+
+    private final cn.autoforged.module_shop.client.ui.widget.ScrollController skScroll =
+            new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 300.0F;
+        float rowH = 30.0F;
+        float listH = rowH * 5;
+        float h = HEADER_H + 8 + listH + 8 + 20 + PAD;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        panel(c, x, y, w, h, this.title.getString());
+        var requests = ClientShopData.tradeRequests;
+        float listY = y + HEADER_H + 8;
+        if (requests.isEmpty()) {
+            center(c, Component.translatable("gui.module_shop.trade.request_empty").getString(), innerX,
+                    listY + listH / 2, innerW, IOStyle.TEXT_2);
+        } else {
+            float oy = beginList(c, this.skScroll, innerX, listY, innerW, listH, requests.size() * rowH);
+            long expireMs = Config.INSTANCE.tradeRequestExpireSeconds.get() * 1000L;
+            for (int i = 0; i < requests.size(); i++) {
+                float ry = oy + i * rowH;
+                if (ry + rowH < listY || ry > listY + listH) {
+                    continue;
+                }
+                ClientShopData.TradeRequest request = requests.get(i);
+                float rw = innerW - 8;
+                float rh = rowH - 3;
+                card(c, innerX, ry, rw, rh);
+                if (request.from != null && !request.from.isEmpty()) {
+                    PlayerInfo info = Minecraft.getInstance().getConnection() == null ? null
+                            : Minecraft.getInstance().getConnection().getPlayerInfo(request.from);
+                    if (info != null) {
+                        final int hx = (int) (innerX + 5);
+                        final int hy = (int) (ry + (rh - 16) / 2);
+                        this.items.addCustom(hx, hy, 16, 16,
+                                (g, font) -> PlayerFaceRenderer.draw(g, info.getSkin(), hx, hy, 16));
+                    }
+                }
+                float bw = 44;
+                float textW = rw - 28 - bw * 2 - 14;
+                text(c, Component.translatable("gui.module_shop.trade.request_from", request.from).getString(),
+                        innerX + 28, ry + 9, textW, IOStyle.TEXT);
+                long elapsed = request.ageMs + Math.max(0L, System.currentTimeMillis() - request.receivedAt);
+                long remainSec = Math.max(0L, (expireMs - elapsed + 999L) / 1000L);
+                small(c, Component.translatable("gui.module_shop.trade.request_remaining", remainSec).getString(),
+                        innerX + 28, ry + 19, textW, remainSec <= 10 ? IOStyle.RED : IOStyle.ORANGE);
+                final long id = request.id;
+                float bx = innerX + rw - 6 - bw * 2 - 4;
+                button(c, "acc" + id, Component.translatable("gui.module_shop.trade.accept").getString(), bx,
+                        ry + (rh - 16) / 2, bw, 16, cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, true,
+                        () -> send("trade_accept", id));
+                button(c, "dec" + id, Component.translatable("gui.module_shop.trade.decline").getString(),
+                        bx + bw + 4, ry + (rh - 16) / 2, bw, 16,
+                        cn.autoforged.module_shop.client.ui.widget.Button.Kind.DANGER, true,
+                        () -> send("trade_decline", id));
+            }
+            endList(c);
+        }
+        button(c, "back", Component.translatable("gui.module_shop.back").getString(), innerX, y + h - PAD - 20, 64,
+                20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, Nav::back);
     }
 
     private void send(String action, long id) {

@@ -24,7 +24,6 @@ import net.minecraft.network.chat.Component;
 public final class AuctionPage implements ShopPage {
     private static final float ROW_H = 31.0F;
     private static final float CARD_H = 28.0F;
-    private static final int LAST_BID_COLOR = 0xFF8A8A9A;
 
     private static float savedScroll;
 
@@ -139,10 +138,10 @@ public final class AuctionPage implements ShopPage {
             if (v.lastBid > 0L) {
                 String last = Component.translatable("gui.module_shop.auction_last_bid",
                         ClientShopData.money(v.lastBid)).getString();
-                float lw = Text.drawLine(canvas, last, AtomUi.REGULAR, Text.SMALL, LAST_BID_COLOR,
+                float lw = Text.drawLine(canvas, last, AtomUi.REGULAR, Text.SMALL, cn.autoforged.module_shop.client.screen.IOStyle.TEXT_3,
                         colB, bottom, midW, Text.Align.CENTER);
                 float lx = colB + (midW - lw) / 2.0F;
-                Draw.fill(canvas, lx, bottom - 0.25F, lw, 0.75F, 0.0F, LAST_BID_COLOR);
+                Draw.fill(canvas, lx, bottom - 0.25F, lw, 0.75F, 0.0F, cn.autoforged.module_shop.client.screen.IOStyle.TEXT_3);
             }
             // 右栏：倒计时 + 最高出价者
             Text.drawLine(canvas, time, AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_2,

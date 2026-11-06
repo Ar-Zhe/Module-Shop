@@ -2,6 +2,10 @@ package cn.autoforged.module_shop.client.screen;
 
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.ShippingFavorites;
+import cn.autoforged.module_shop.client.ui.AtomUi;
+import cn.autoforged.module_shop.client.ui.render.Draw;
+import cn.autoforged.module_shop.client.ui.render.SkiaFrame;
+import cn.autoforged.module_shop.client.ui.render.Text;
 import cn.autoforged.module_shop.menu.ShippingBinMenu;
 import cn.autoforged.module_shop.shop.ShippingRules;
 import java.util.ArrayList;
@@ -223,6 +227,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
     @Override
     protected void init() {
         super.init();
+        this.skia = cn.autoforged.module_shop.client.ui.AtomUi.available();
         this.titleLabelX = 8;
         this.titleLabelY = 8;
         ShippingFavorites.ensureLoaded();
@@ -260,6 +265,10 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
     protected void renderBg(GuiGraphics g, float partialTick, int mouseX, int mouseY) {
         int x = this.leftPos;
         int y = this.topPos;
+        if (this.skia) {
+            skBg(g, x, y);
+            return;
+        }
         Bricks.panel(g, x, y, this.imageWidth, this.imageHeight);
         int rows = Math.max(1, (getMenu().binSlots() + 8) / 9);
         g.fill(x + 6, y + ShippingBinMenu.BIN_Y - 4, x + ShippingBinMenu.BIN_X + 162,
@@ -279,6 +288,10 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         super.render(g, mouseX, mouseY, partialTick);
         int x = this.leftPos;
         int y = this.topPos;
+        if (this.skia) {
+            skOverlay(g, x, y, mouseX, mouseY);
+            return;
+        }
         this.jeiHover = ItemStack.EMPTY;
         this.rowRects.clear();
         this.starRects.clear();
@@ -319,6 +332,9 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
 
     @Override
     protected void renderLabels(GuiGraphics g, int mouseX, int mouseY) {
+        if (this.skia) {
+            return;
+        }
         IOStyle.text(g, this.font, Component.translatable("gui.module_shop.shipping.title",
                 ClientShopData.shipLevel, ClientShopData.shipSlots), 8, 6, IOStyle.TEXT);
         IOStyle.text(g, this.font, Component.translatable("gui.module_shop.shipping.bag"),
@@ -536,6 +552,264 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
     /** 两个矩形是否相交（用来判断清单行的物品图标会不会被下拉面板盖住）。 */
     private static boolean overlaps(int ax, int ay, int aw, int ah, int bx, int by, int bw, int bh) {
         return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
+    }
+
+    // =========================================================== Skija 绘制
+    // 只换绘制：控件位置与旧版一致，并填充同样的命中矩形（rowRects / starRects / sortRects / catRects），
+    // 因此点击、滚轮、一键放入等交互逻辑完全复用旧代码。
+
+    private boolean skia;
+    private final cn.autoforged.module_shop.client.ui.render.ItemOverlay listItems =
+            new cn.autoforged.module_shop.client.ui.render.ItemOverlay();
+    private final cn.autoforged.module_shop.client.ui.widget.Motion.Clock clock =
+            new cn.autoforged.module_shop.client.ui.widget.Motion.Clock();
+    private final Map<String, Float> skAnim = new java.util.HashMap<>();
+    private float skDt;
+
+    private float skHover(String key, boolean on) {
+        float v = cn.autoforged.module_shop.client.ui.widget.Motion.approach(skAnim.getOrDefault(key, 0.0F),
+                on ? 1.0F : 0.0F, this.skDt, cn.autoforged.module_shop.client.ui.widget.Motion.HOVER_MS);
+        skAnim.put(key, v);
+        return v;
+    }
+
+    private void skBg(GuiGraphics g, int x, int y) {
+        this.skDt = this.clock.tick();
+        int rows = Math.max(1, (getMenu().binSlots() + 8) / 9);
+        SkiaFrame.draw(g, c -> {
+            SkiaDialog.bare(c, x, y, this.imageWidth, this.imageHeight);
+            Text.drawLine(c, Component.translatable("gui.module_shop.shipping.title", ClientShopData.shipLevel,
+                            ClientShopData.shipSlots).getString(), AtomUi.BOLD, Text.BODY, IOStyle.TEXT, x + 8, y + 10,
+                    160, Text.Align.LEFT);
+            long value = liveValue();
+            Text.drawLine(c, Component.translatable("gui.module_shop.shipping.next_payout",
+                            ClientShopData.money(value), liveItems()).getString(), AtomUi.REGULAR, Text.SMALL,
+                    value > 0L ? IOStyle.ORANGE : IOStyle.TEXT_2, x + 8, y + 21, 156, Text.Align.LEFT);
+            Text.drawLine(c, (ClientShopData.shipLimit > 0L
+                            ? Component.translatable("gui.module_shop.shipping.today_line",
+                            ClientShopData.money(ClientShopData.shipSoldToday),
+                            ClientShopData.money(ClientShopData.shipLimit))
+                            : Component.translatable("gui.module_shop.shipping.today_line_unlimited",
+                            ClientShopData.money(ClientShopData.shipSoldToday))).getString(), AtomUi.REGULAR,
+                    Text.SMALL, IOStyle.TEXT_2, x + 8, y + 29, 160, Text.Align.LEFT);
+            Draw.fill(c, x + 6, y + ShippingBinMenu.BIN_Y - 4, ShippingBinMenu.BIN_X + 156,
+                    rows * 18 + 4, 3, IOStyle.CARD);
+            for (int i = 0; i < getMenu().binSlots(); i++) {
+                SkiaDialog.slotFrame(c, x + ShippingBinMenu.BIN_X + (i % 9) * 18,
+                        y + ShippingBinMenu.BIN_Y + (i / 9) * 18);
+            }
+            Text.drawLine(c, Component.translatable("gui.module_shop.shipping.bag").getString(), AtomUi.REGULAR,
+                    Text.SMALL, IOStyle.TEXT_3, x + 8, y + getMenu().inventoryY() - 6, 160, Text.Align.LEFT);
+            SkiaDialog.playerSlots(c, x + ShippingBinMenu.BIN_X, y + getMenu().inventoryY());
+            // 右侧清单底板 + 搜索框底（搜索文字由原版输入框画在上面）
+            SkiaDialog.card(c, x + LIST_X - 6, y + 2, LIST_W + 12, this.imageHeight - 6);
+            boolean focused = this.searchBox != null && this.searchBox.isFocused();
+            Draw.fill(c, x + LIST_X, y + SEARCH_Y, LIST_W, CTRL_H, 3, IOStyle.FIELD_BG);
+            Draw.stroke(c, x + LIST_X, y + SEARCH_Y, LIST_W, CTRL_H, 3, 1, focused ? IOStyle.BLUE : IOStyle.BORDER_DIM);
+            SkiaDialog.themeBox(this.searchBox);
+            if (this.searchBox != null && this.searchBox.getValue().isEmpty() && !focused) {
+                Text.drawLine(c, Component.translatable("gui.module_shop.shipping.search_hint").getString(),
+                        AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_3, x + LIST_X + 5, y + SEARCH_Y + CTRL_H / 2.0F,
+                        LIST_W - 10, Text.Align.LEFT);
+            }
+        });
+    }
+
+    private void skOverlay(GuiGraphics g, int x, int y, int mouseX, int mouseY) {
+        this.jeiHover = ItemStack.EMPTY;
+        this.pendingTooltipStack = ItemStack.EMPTY;
+        this.rowRects.clear();
+        this.starRects.clear();
+        this.sortRects.clear();
+        this.catRects.clear();
+        rebuildVisible();
+        int[] dd = openDropdownRect();
+        boolean underDropdown = dd != null && overlaps(dd[0], dd[1], dd[2], dd[3], mouseX, mouseY, 1, 1);
+        this.listItems.begin(mouseX, mouseY, !underDropdown);
+        SkiaFrame.draw(g, c -> {
+            skHighlight(c, x, y);
+            skList(c, x, y, mouseX, mouseY, underDropdown);
+        });
+        this.listItems.flush(g, this.font);
+        if (dd != null) {
+            SkiaFrame.draw(g, c -> skDropdowns(c, x, y, mouseX, mouseY));
+        }
+        if (!this.pendingTooltipStack.isEmpty()) {
+            List<Component> tooltip = new ArrayList<>(getTooltipFromItem(this.minecraft, this.pendingTooltipStack));
+            tooltip.add(Component.translatable("gui.module_shop.shipping.tip_click")
+                    .withStyle(net.minecraft.ChatFormatting.DARK_GRAY));
+            g.renderTooltip(this.font, tooltip, java.util.Optional.empty(), this.pendingTooltipStack, mouseX, mouseY);
+            this.pendingTooltipStack = ItemStack.EMPTY;
+        } else if (this.hoveredSlot != null && this.hoveredSlot.hasItem()) {
+            g.renderTooltip(this.font, this.hoveredSlot.getItem(), mouseX, mouseY);
+        }
+    }
+
+    private void skHighlight(io.github.humbleui.skija.Canvas c, int x, int y) {
+        if (!this.onlyOwned && !this.onlyMarked) {
+            return;
+        }
+        for (Slot slot : getMenu().slots) {
+            if (slot.container != this.minecraft.player.getInventory() || !slot.hasItem()) {
+                continue;
+            }
+            ItemStack stack = slot.getItem();
+            int color = 0;
+            if (this.onlyMarked && ShippingFavorites.contains(itemId(stack))) {
+                color = IOStyle.ORANGE;
+            } else if (this.onlyOwned && sellable(stack)) {
+                color = IOStyle.GREEN;
+            }
+            if (color != 0) {
+                Draw.stroke(c, x + slot.x - 1, y + slot.y - 1, 18, 18, 2, 1.2F, color);
+                Draw.stroke(c, x + slot.x - 2.5F, y + slot.y - 2.5F, 21, 21, 3, 1, Draw.alpha(color, 0.35F));
+            }
+        }
+    }
+
+    private void skControl(io.github.humbleui.skija.Canvas c, String key, float x, float y, float w, float h,
+                           String label, boolean active, boolean chevron, boolean open, int mouseX, int mouseY) {
+        float hv = skHover(key, mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + h);
+        float on = skHover(key + ":on", active);
+        Draw.fill(c, x, y, w, h, 3, Draw.lerp(Draw.lerp(IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER, hv),
+                Draw.alpha(IOStyle.BLUE, 0.22F), on));
+        Draw.stroke(c, x, y, w, h, 3, 1, Draw.lerp(Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, hv),
+                IOStyle.BLUE, on));
+        float textW = w - 8 - (chevron ? 10 : 0);
+        Text.drawLine(c, label, AtomUi.REGULAR, Text.SMALL, active ? IOStyle.BLUE : IOStyle.TEXT, x + 4,
+                y + h / 2.0F, textW, Text.Align.LEFT);
+        if (chevron) {
+            float cx = x + w - 7;
+            float cy = y + h / 2.0F;
+            float d = open ? -1.5F : 1.5F;
+            Draw.line(c, cx - 3, cy - d, cx, cy + d, 1.2F, IOStyle.TEXT_2);
+            Draw.line(c, cx, cy + d, cx + 3, cy - d, 1.2F, IOStyle.TEXT_2);
+        }
+    }
+
+    private void skList(io.github.humbleui.skija.Canvas c, int x, int y, int mouseX, int mouseY,
+                        boolean underDropdown) {
+        int sx = x + LIST_X;
+        int halfW = (LIST_W - 4) / 2;
+        int sortX = sx + halfW + 4;
+        String catName = this.category.isEmpty()
+                ? Component.translatable("gui.module_shop.shipping.cat_all").getString() : modName(this.category);
+        skControl(c, "cat", sx, y + ROW2_Y, halfW, CTRL_H, catName, this.catOpen, true, this.catOpen, mouseX, mouseY);
+        skControl(c, "sort", sortX, y + ROW2_Y, halfW, CTRL_H,
+                Component.translatable("gui.module_shop.shipping.sort_label", sortName()).getString(), this.sortOpen,
+                true, this.sortOpen, mouseX, mouseY);
+        skControl(c, "owned", sx, y + ROW3_Y, halfW, CTRL_H,
+                Component.translatable("gui.module_shop.shipping.only_owned").getString(), this.onlyOwned, false,
+                false, mouseX, mouseY);
+        skControl(c, "marked", sortX, y + ROW3_Y, halfW, CTRL_H,
+                Component.translatable("gui.module_shop.shipping.only_marked").getString(), this.onlyMarked, false,
+                false, mouseX, mouseY);
+        int top = y + LIST_TOP;
+        int countY = y + this.imageHeight - 16;
+        int bottom = countY - 4;
+        int per = Math.max(1, (bottom - top) / LIST_ROW_H);
+        if (this.visible.isEmpty()) {
+            Text.drawLine(c, Component.translatable("gui.module_shop.shipping.list_empty").getString(),
+                    AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_3, sx, top + 14, LIST_W, Text.Align.CENTER);
+            return;
+        }
+        int maxScroll = Math.max(0, this.visible.size() - per);
+        this.listScroll = Mth.clamp(this.listScroll, 0, maxScroll);
+        int saved = c.save();
+        Draw.clip(c, sx, top, LIST_W, bottom - top);
+        this.listItems.pushClip(sx, top, LIST_W, bottom - top);
+        for (int i = this.listScroll; i < this.visible.size() && i - this.listScroll < per; i++) {
+            Entry entry = this.visible.get(i);
+            int ry = top + (i - this.listScroll) * LIST_ROW_H;
+            boolean hover = !underDropdown && IOStyle.inside(sx, ry, LIST_W, LIST_ROW_H - 1, mouseX, mouseY);
+            float hv = skHover("row:" + entry.id(), hover);
+            Draw.fill(c, sx, ry, LIST_W - 4, LIST_ROW_H - 1, 2, Draw.lerp(IOStyle.SIDEBAR, IOStyle.ROW_HOVER, hv));
+            boolean marked = ShippingFavorites.contains(entry.id());
+            boolean starHover = !underDropdown && IOStyle.inside(sx + 1, ry + 2, 11, LIST_ROW_H - 4, mouseX, mouseY);
+            Text.drawLine(c, marked ? "★" : "☆", AtomUi.REGULAR, Text.BODY,
+                    marked ? IOStyle.ORANGE : (starHover ? IOStyle.TEXT : IOStyle.TEXT_3), sx + 2, ry + LIST_ROW_H / 2.0F,
+                    10, Text.Align.CENTER);
+            this.listItems.add(entry.stack(), sx + 14, ry, 15, true);
+            String price = ClientShopData.money(entry.price());
+            float pw = Text.drawLine(c, price, AtomUi.REGULAR, Text.SMALL, IOStyle.ORANGE, sx, ry + LIST_ROW_H / 2.0F,
+                    LIST_W - 8, Text.Align.RIGHT);
+            Text.drawLine(c, entry.stack().getHoverName().getString(), AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT,
+                    sx + 32, ry + LIST_ROW_H / 2.0F, LIST_W - 8 - 32 - pw - 4, Text.Align.LEFT);
+            this.starRects.add(new int[]{sx + 1, ry + 2, 11, LIST_ROW_H - 4, i});
+            this.rowRects.add(new int[]{sx + 14, ry, LIST_W - 18, LIST_ROW_H - 1, i});
+            if (hover) {
+                this.pendingTooltipStack = entry.stack();
+                this.jeiHover = entry.stack();
+            }
+        }
+        this.listItems.popClip();
+        c.restoreToCount(saved);
+        if (maxScroll > 0) {
+            float viewH = per * LIST_ROW_H;
+            float thumbH = Math.max(12, viewH * per / Math.max(1, this.visible.size()));
+            float thumbY = top + (viewH - thumbH) * this.listScroll / Math.max(1, maxScroll);
+            Draw.fill(c, sx + LIST_W - 2.5F, top, 2, viewH, 1, IOStyle.HAIR);
+            Draw.fill(c, sx + LIST_W - 2.5F, thumbY, 2, thumbH, 1, IOStyle.TEXT_3);
+        }
+        Text.drawLine(c, Component.translatable("gui.module_shop.shipping.list_count", this.visible.size(),
+                        allEntries().size()).getString(), AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_3, sx, countY + 4,
+                LIST_W, Text.Align.LEFT);
+    }
+
+    private void skDropdowns(io.github.humbleui.skija.Canvas c, int x, int y, int mouseX, int mouseY) {
+        int sx = x + LIST_X;
+        int panelY = y + LIST_TOP;
+        List<String> labels = new ArrayList<>();
+        int current;
+        int first = 0;
+        int rows;
+        if (this.catOpen) {
+            List<String> cats = categories();
+            int total = cats.size() + 1;
+            rows = Math.min(DD_CAT_ROWS, total);
+            this.catScroll = Mth.clamp(this.catScroll, 0, Math.max(0, total - rows));
+            first = this.catScroll;
+            current = 0;
+            for (int i = 0; i < total; i++) {
+                String ns = i == 0 ? "" : cats.get(i - 1);
+                labels.add(i == 0 ? Component.translatable("gui.module_shop.shipping.cat_all").getString()
+                        : modName(ns));
+                if (ns.equals(this.category)) {
+                    current = i;
+                }
+            }
+            this.catRect[0] = sx;
+            this.catRect[1] = panelY;
+            this.catRect[2] = DD_CAT_W;
+            this.catRect[3] = rows * DD_ROW_H + 4;
+        } else {
+            rows = 4;
+            current = this.sort;
+            labels.add(Component.translatable("gui.module_shop.shipping.sort_default").getString());
+            labels.add(Component.translatable("gui.module_shop.shipping.sort_price_asc").getString());
+            labels.add(Component.translatable("gui.module_shop.shipping.sort_price_desc").getString());
+            labels.add(Component.translatable("gui.module_shop.shipping.sort_name").getString());
+        }
+        int pw = LIST_W;
+        int ph = rows * DD_ROW_H + 4;
+        Draw.fill(c, sx + 1, panelY + 2, pw, ph, 4, 0x50000000);
+        Draw.fill(c, sx, panelY, pw, ph, 4, IOStyle.SHEET);
+        Draw.stroke(c, sx, panelY, pw, ph, 4, 1, IOStyle.BORDER);
+        for (int i = first; i < Math.min(labels.size(), first + rows); i++) {
+            int ry = panelY + 2 + (i - first) * DD_ROW_H;
+            boolean cur = i == current;
+            boolean hover = IOStyle.inside(sx + 2, ry, pw - 4, DD_ROW_H, mouseX, mouseY);
+            if (cur || hover) {
+                Draw.fill(c, sx + 2, ry, pw - 4, DD_ROW_H, 3, cur ? IOStyle.BLUE_TINT : IOStyle.ROW_HOVER);
+            }
+            Text.drawLine(c, labels.get(i), AtomUi.REGULAR, Text.SMALL, cur ? IOStyle.BLUE : IOStyle.TEXT, sx + 8,
+                    ry + DD_ROW_H / 2.0F, pw - 16, Text.Align.LEFT);
+            if (this.catOpen) {
+                this.catRects.add(new int[]{sx + 2, ry, pw - 4, DD_ROW_H, i});
+            } else {
+                this.sortRects.add(new int[]{sx + 2, ry, pw - 4, DD_ROW_H, i});
+            }
+        }
     }
 
     // =========================================================== 交互
