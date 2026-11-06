@@ -76,14 +76,16 @@ public final class AtomUi {
     }
 
     public static synchronized TextService text() {
-        if (text == null) {
+        // 还没初始化就先初始化：附属的界面可能比商店先打开（例如收到红包详情时还没开过商店），
+        // 不能因为“没人先调 available()”就崩游戏。
+        if (text == null && !available()) {
             throw new IllegalStateException("AtomLib 不可用；调用前先检查 AtomUi.available()");
         }
         return text;
     }
 
     public static synchronized FontRegistry fonts() {
-        if (fonts == null) {
+        if (fonts == null && !available()) {
             throw new IllegalStateException("AtomLib 不可用；调用前先检查 AtomUi.available()");
         }
         return fonts;

@@ -27,7 +27,18 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * <p>
  * 界面只提交“发给谁 / 发多少钱”，物品以服务端容器内容为准，客户端无法伪造。
  */
-public class GrantScreen extends AbstractContainerScreen<GrantMenu> {
+public class GrantScreen extends AbstractContainerScreen<GrantMenu> implements SkiaContainerBackground.Painter {
+
+    @Override
+    public boolean usesSkiaBackground() {
+        return this.skia;
+    }
+
+    @Override
+    public void paintSkiaBackground(GuiGraphics g, int mouseX, int mouseY) {
+        skBg(g, this.leftPos, this.topPos, mouseX, mouseY);
+    }
+
     private static final int PANEL_W = 336;
     private static final int PANEL_H = 236;
     private static final int LIST_X = 182;
@@ -178,8 +189,7 @@ public class GrantScreen extends AbstractContainerScreen<GrantMenu> {
         int x = this.leftPos;
         int y = this.topPos;
         if (this.skia) {
-            skBg(g, x, y, mouseX, mouseY);
-            return;
+            return;   // Skija 底板在 paintSkiaBackground 里画（见 SkiaContainerBackground）
         }
         Bricks.panel(g, x, y, PANEL_W, PANEL_H);
         for (int row = 0; row < 3; row++) {

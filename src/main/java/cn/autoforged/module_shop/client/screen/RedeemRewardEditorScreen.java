@@ -30,7 +30,19 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * 与发放界面的区别只有落点：点「保存」不是立刻发给玩家，而是写进**服务端兑换码草稿**，
  * 然后回到兑换码生成器；生成器上「配置奖励」按钮可以再点进来继续改（草稿会预填回槽位与勾选）。
  */
-public class RedeemRewardEditorScreen extends AbstractContainerScreen<GrantMenu> {
+public class RedeemRewardEditorScreen extends AbstractContainerScreen<GrantMenu>
+        implements SkiaContainerBackground.Painter {
+
+    @Override
+    public boolean usesSkiaBackground() {
+        return this.skia;
+    }
+
+    @Override
+    public void paintSkiaBackground(GuiGraphics g, int mouseX, int mouseY) {
+        skBg(g, this.leftPos, this.topPos, mouseX, mouseY);
+    }
+
     private static final int PANEL_W = 336;
     private static final int PANEL_H = 236;
     private static final int LIST_X = 182;
@@ -220,8 +232,7 @@ public class RedeemRewardEditorScreen extends AbstractContainerScreen<GrantMenu>
         int x = this.leftPos;
         int y = this.topPos;
         if (this.skia) {
-            skBg(g, x, y, mouseX, mouseY);
-            return;
+            return;   // Skija 底板在 paintSkiaBackground 里画（见 SkiaContainerBackground）
         }
         Bricks.panel(g, x, y, PANEL_W, PANEL_H);
         for (int row = 0; row < 3; row++) {
