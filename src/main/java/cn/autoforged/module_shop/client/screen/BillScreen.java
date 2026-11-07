@@ -52,8 +52,21 @@ public class BillScreen extends SkiaDialog {
     private int pointerX;
     private int pointerY;
 
+    /** 只显示这些类型的流水（null = 全部）。「我的商店 → 交易记录」只看摊位买卖。 */
+    private final java.util.Set<String> onlyTypes;
+
     public BillScreen() {
-        super(Component.translatable("gui.module_shop.bill.title"));
+        this(null, "gui.module_shop.bill.title");
+    }
+
+    public BillScreen(java.util.Set<String> onlyTypes, String titleKey) {
+        super(Component.translatable(titleKey));
+        this.onlyTypes = onlyTypes;
+    }
+
+    /** 我的商店的交易记录：摊位购买 + 摊位出售。 */
+    public static BillScreen stallRecords() {
+        return new BillScreen(java.util.Set.of("stall_buy", "stall_sell"), "gui.module_shop.stall.records_title");
     }
 
     private int left() {
@@ -94,6 +107,9 @@ public class BillScreen extends SkiaDialog {
     private List<ClientShopData.BillEntry> filtered() {
         List<ClientShopData.BillEntry> list = new ArrayList<>();
         for (ClientShopData.BillEntry entry : ClientShopData.bill) {
+            if (this.onlyTypes != null && !this.onlyTypes.contains(entry.type)) {
+                continue;
+            }
             if (this.filter == FILTER_OUT && entry.amount >= 0L) {
                 continue;
             }

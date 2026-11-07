@@ -107,5 +107,8 @@ public final class ClientEvents {
     @SubscribeEvent
     public static void onClientLogout(net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingOut event) {
         cn.autoforged.module_shop.client.screen.Nav.clear();
+        // 拍卖缓存（列表 / 版本号 / 详情）也不能带到下一个服务器或存档
+        cn.autoforged.module_shop.client.AuctionClient.reset();
+        cn.autoforged.module_shop.client.StallClient.reset();
     }
 }

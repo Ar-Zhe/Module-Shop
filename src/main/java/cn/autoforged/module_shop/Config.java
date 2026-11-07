@@ -58,6 +58,25 @@ public final class Config {
     public final ModConfigSpec.BooleanValue antiSnipe;
     public final ModConfigSpec.IntValue antiSnipeSeconds;
     public final ModConfigSpec.IntValue antiSnipeExtensionSeconds;
+    // ---- 拍卖行升级（新增，全部有安全默认值）----
+    public final ModConfigSpec.BooleanValue auctionEnabled;
+    public final ModConfigSpec.IntValue maxAuctionsGlobal;
+    public final ModConfigSpec.IntValue antiSnipeMaxExtensions;
+    public final ModConfigSpec.ConfigValue<List<? extends String>> auctionDurationOptions;
+    public final ModConfigSpec.LongValue auctionListingFeeFixed;
+    public final ModConfigSpec.DoubleValue auctionListingFeePercent;
+    public final ModConfigSpec.LongValue auctionMinStartPrice;
+    public final ModConfigSpec.LongValue auctionMaxStartPrice;
+    public final ModConfigSpec.BooleanValue auctionAllowBuyout;
+    public final ModConfigSpec.IntValue auctionMaxItemCount;
+    public final ModConfigSpec.ConfigValue<List<? extends String>> auctionBlacklist;
+    public final ModConfigSpec.BooleanValue auctionAllowBound;
+    public final ModConfigSpec.ConfigValue<List<? extends String>> auctionBoundMarkers;
+    public final ModConfigSpec.BooleanValue auctionAllowCustomData;
+    public final ModConfigSpec.IntValue auctionMaxItemNbtBytes;
+    public final ModConfigSpec.BooleanValue auctionBlockCreative;
+    public final ModConfigSpec.IntValue auctionEndingSoonSeconds;
+    public final ModConfigSpec.IntValue auctionHistoryLimit;
 
     // ---- 邮箱 ----
     /** 邮箱上限（默认 100；界面每页 45 封，可翻页）。达到上限时系统资产返还优先改为掉落入包，防止溢出刷物品。 */
@@ -69,6 +88,8 @@ public final class Config {
     // ---- 摊位 ----
     public final ModConfigSpec.IntValue stallSlots;
     public final ModConfigSpec.DoubleValue stallListingFeePercent;
+    /** 单件商品的库存上限（上架与补货共用）。 */
+    public final ModConfigSpec.IntValue stallMaxStock;
     /** 玩家摊位自动下架方式：permanent=永久 / game=按游戏时间 / real=按现实时间。 */
     /** 购物城：库存刷新方式（off / real / game）与周期（real=小时、game=天）。 */
     public final ModConfigSpec.ConfigValue<String> mallRefreshMode;
@@ -193,7 +214,32 @@ public final class Config {
         auctionFeePercent = builder.comment("拍卖成交手续费百分比（从卖家所得中扣除）").defineInRange("auctionFeePercent", 5.0D, 0.0D, 100.0D);
         antiSnipe = builder.comment("是否开启防狙击").define("antiSnipe", true);
         antiSnipeSeconds = builder.comment("剩余多少秒内出价算狙击（现实秒）").defineInRange("antiSnipeSeconds", 60, 0, 3600);
-        antiSnipeExtensionSeconds = builder.comment("每次狙击延长多少秒（现实秒，0 表示不延长）").defineInRange("antiSnipeExtensionSeconds", 0, 0, Integer.MAX_VALUE);
+        antiSnipeExtensionSeconds = builder.comment("每次狙击延长多少秒（现实秒，0 表示不延长）").defineInRange("antiSnipeExtensionSeconds", 30, 0, Integer.MAX_VALUE);
+        auctionEnabled = builder.comment("是否开放拍卖行（关闭后不能上架/出价/一口价，已有拍卖照常到期结算）").define("auctionEnabled", true);
+        maxAuctionsGlobal = builder.comment("全服同时进行的拍卖上限").defineInRange("maxAuctionsGlobal", 500, 1, 5000);
+        antiSnipeMaxExtensions = builder.comment("同一场拍卖防截拍最多延长几次（0=不限，仍受总时长 2 倍封顶）").defineInRange("antiSnipeMaxExtensions", 10, 0, 1000);
+        auctionDurationOptions = builder.comment("上架时可选的拍卖时长（现实分钟），第一个为默认值；最长时长即其中的最大值")
+                .defineList("auctionDurationOptions", List.of("30", "60", "180", "360", "720", "1440", "2880"), () -> "60", o -> o instanceof String);
+        auctionListingFeeFixed = builder.comment("上架手续费：固定部分（星币，0=不收）").defineInRange("auctionListingFeeFixed", 0L, 0L, 1_000_000_000L);
+        auctionListingFeePercent = builder.comment("上架手续费：按起拍价百分比（0=不收）").defineInRange("auctionListingFeePercent", 0.0D, 0.0D, 100.0D);
+        auctionMinStartPrice = builder.comment("最低起拍价").defineInRange("auctionMinStartPrice", 1L, 1L, Long.MAX_VALUE);
+        auctionMaxStartPrice = builder.comment("最高起拍价（0=只受余额上限约束）").defineInRange("auctionMaxStartPrice", 0L, 0L, Long.MAX_VALUE);
+        auctionAllowBuyout = builder.comment("是否允许卖家设置一口价").define("auctionAllowBuyout", true);
+        auctionMaxItemCount = builder.comment("单场拍卖最多上架几件（不超过该物品的堆叠上限）").defineInRange("auctionMaxItemCount", 64, 1, 64);
+        auctionBlacklist = builder.comment("禁止拍卖的物品：物品 id（minecraft:bedrock）、标签（#c:ores）或整个模组（somemod:*）。容器里装的物品同样检查")
+                .defineList("auctionBlacklist", List.of("minecraft:bedrock", "minecraft:barrier", "minecraft:command_block",
+                        "minecraft:chain_command_block", "minecraft:repeating_command_block", "minecraft:command_block_minecart",
+                        "minecraft:structure_block", "minecraft:structure_void", "minecraft:jigsaw", "minecraft:light",
+                        "minecraft:debug_stick", "minecraft:knowledge_book", "minecraft:spawner", "minecraft:trial_spawner"),
+                        () -> "minecraft:bedrock", o -> o instanceof String);
+        auctionAllowBound = builder.comment("是否允许拍卖绑定物品（带绑定诅咒，或自定义数据里含下方标记的物品）").define("auctionAllowBound", false);
+        auctionBoundMarkers = builder.comment("自定义数据（custom_data）里出现这些键名即视为绑定物品")
+                .defineList("auctionBoundMarkers", List.of("Soulbound", "soulbound", "Bound", "bound", "BoundTo", "Owner"), () -> "Soulbound", o -> o instanceof String);
+        auctionAllowCustomData = builder.comment("是否允许拍卖带自定义数据（custom_data，即特殊 NBT）的物品").define("auctionAllowCustomData", true);
+        auctionMaxItemNbtBytes = builder.comment("拍品序列化后的最大字节数（防止超大 NBT 物品拖垮网络与存档）").defineInRange("auctionMaxItemNbtBytes", 32768, 1024, 1_048_576);
+        auctionBlockCreative = builder.comment("创造模式玩家不能上架拍卖（创造模式可凭空生成物品）").define("auctionBlockCreative", true);
+        auctionEndingSoonSeconds = builder.comment("剩余多少秒时提醒卖家与领先者「即将结束」（0=不提醒）").defineInRange("auctionEndingSoonSeconds", 300, 0, 86400);
+        auctionHistoryLimit = builder.comment("保留多少条已结束的拍卖记录（全服）").defineInRange("auctionHistoryLimit", 2000, 100, 100000);
         builder.pop();
 
         builder.push("mailbox");
@@ -206,6 +252,7 @@ public final class Config {
         stallSlots = builder.comment("摊位槽位数量").defineInRange("stallSlots", 12, 1, 45);
         // 需求冲突：free_listing=true 与 listing_fee="上架价5%"。默认免费，百分比留给服主调节。
         stallListingFeePercent = builder.comment("上架手续费百分比（0=免费上架）").defineInRange("stallListingFeePercent", 0.0D, 0.0D, 100.0D);
+        stallMaxStock = builder.comment("摊位单件商品的库存上限（上架与补货共用，默认 64）").defineInRange("stallMaxStock", 64, 1, 100000);
 
         // 玩家摊位自动下架：商店设置里的「下架时间」（永久 / 按游戏天数 / 按现实小时）。
         stallExpireMode = builder.comment("玩家摊位自动下架方式：permanent=永久 / game=按游戏时间 / real=按现实时间")
@@ -284,7 +331,7 @@ public final class Config {
                 .defineList("shippingDailyLimits", List.of("1000", "2500", "6000"), () -> "1000", o -> o instanceof String);
         shippingSettleTick = builder.comment("每天结算的游戏刻（0 = 早上 06:00；结算窗口见下一项）")
                 .defineInRange("shippingSettleTick", 0, 0, 23999);
-        shippingSettleWindow = builder.comment("结算窗口长度（刻，默认 180 = 游戏内 9 秒；窗口内只会结算一次）")
+        shippingSettleWindow = builder.comment("（已不再限制结算：现在到点后第一次 tick 就结算，错过时间也会补结算；保留此项只为兼容旧配置）")
                 .defineInRange("shippingSettleWindow", 180, 1, 12000);
         shippingResetTime = builder.comment("每日额度按【现实时间】在几点重置（HH:mm，默认 00:00 = 现实零点）")
                 .define("shippingResetTime", "00:00");

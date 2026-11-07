@@ -28,6 +28,7 @@ public class AuctionBidScreen extends SkiaDialog {
     private long currentBid;
     private long lastBid;
     private final long minIncrement;
+    private long minNext;
     /** 该拍卖是否还在列表里（不在说明已结束，出价没有意义）。 */
     private boolean listed = true;
     private EditBox amountBox;
@@ -41,11 +42,16 @@ public class AuctionBidScreen extends SkiaDialog {
         this.startPrice = view.startPrice;
         this.currentBid = view.currentBid;
         this.lastBid = view.lastBid;
-        this.minIncrement = Math.max(1L, Config.INSTANCE.auctionMinIncrement.get());
+        // 加价幅度 / 最低出价以服务端下发为准（客户端本地配置文件与服务器的不一定一样）
+        this.minIncrement = Math.max(1L, view.increment);
+        this.minNext = view.minNext;
     }
 
     /** 需求：最低出价 = 当前价 + 加价幅度（无人出价时为起拍价）。 */
     private long minimum() {
+        if (minNext > 0L) {
+            return minNext;
+        }
         return currentBid > 0L ? currentBid + minIncrement : Math.max(1L, startPrice);
     }
 
@@ -58,6 +64,7 @@ public class AuctionBidScreen extends SkiaDialog {
             if (view.id == this.id) {
                 this.currentBid = view.currentBid;
                 this.lastBid = view.lastBid;
+                this.minNext = view.minNext;
                 this.listed = true;
                 return;
             }
@@ -104,10 +111,11 @@ public class AuctionBidScreen extends SkiaDialog {
 
     private void confirm() {
         CompoundTag tag = new CompoundTag();
-        tag.putString("action", "bid");
+        // 带上「我看到的当前价」：别人刚出过价时服务端会拒绝，避免按过时价格出价；nonce 防重复提交
         tag.putLong("id", this.id);
         tag.putString("amount", this.amountBox.getValue().trim());
-        ServerboundShopActionPayload.send(tag);
+        tag.putLong("expect", this.currentBid);
+        cn.autoforged.module_shop.client.AuctionClient.sendOnce("bid", tag);
         onClose();
     }
 

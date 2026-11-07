@@ -14,7 +14,18 @@ import net.minecraft.world.entity.player.Inventory;
  * 上方 3×9 = 27 个格子可一次放入最多 27 种物品，右边是操作说明与已放入数量，
  * 点「确认」后弹出统一价格 / 品质 / 数量的窗口，保存即把这 27 种物品一次性加进当前模块。
  */
-public class BatchAddScreen extends AbstractContainerScreen<BatchAddMenu> {
+public class BatchAddScreen extends AbstractContainerScreen<BatchAddMenu> implements SkiaContainerBackground.Painter {
+
+    @Override
+    public boolean usesSkiaBackground() {
+        return this.skia;
+    }
+
+    @Override
+    public void paintSkiaBackground(GuiGraphics g, int mouseX, int mouseY) {
+        skBg(g, this.leftPos, this.topPos, mouseX, mouseY);
+    }
+
     private static final int PANEL_W = 300;
     private static final int PANEL_H = 212;
     private static final int INFO_X = 180;
@@ -52,8 +63,7 @@ public class BatchAddScreen extends AbstractContainerScreen<BatchAddMenu> {
         int x = this.leftPos;
         int y = this.topPos;
         if (this.skia) {
-            skBg(g, x, y, mouseX, mouseY);
-            return;
+            return;   // Skija 底板在 paintSkiaBackground 里画（见 SkiaContainerBackground）
         }
         Bricks.panel(g, x, y, this.imageWidth, this.imageHeight);
         // 幽灵槽区域加一层淡底，和背包区分

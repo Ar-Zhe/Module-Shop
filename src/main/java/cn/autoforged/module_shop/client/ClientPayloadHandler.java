@@ -19,6 +19,16 @@ public final class ClientPayloadHandler {
     public static void handleSync(CompoundTag data, Player player) {
         Minecraft minecraft = Minecraft.getInstance();
         String kind = data.getString("kind");
+        // 拍卖行的独立数据包（列表 / 增量 / 详情 / 我的拍卖 / 管理配置 / 提交结果）：只更新缓存，界面每帧读取。
+        if (kind.startsWith("auction_")
+                && AuctionClient.handle(kind, data, player.level().registryAccess())) {
+            return;
+        }
+        // 玩家商店大厅数据 / 上架结果（注意 stall_browse 仍走下面原有的摊位浏览分支）
+        if (("stall_market".equals(kind) || "stall_result".equals(kind))
+                && StallClient.handle(kind, data, player.level().registryAccess())) {
+            return;
+        }
         if ("redeem_list".equals(kind)) {
             cn.autoforged.module_shop.client.screen.RedeemListScreen.applyList(data);
             return;

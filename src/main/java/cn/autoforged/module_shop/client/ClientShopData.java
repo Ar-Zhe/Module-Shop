@@ -528,6 +528,12 @@ public final class ClientShopData {
         }
         dailyBuyback = newBuyback;
 
+        // 拍卖列表已改为单独下发（auction_list / auction_delta），普通快照只带版本号。
+        if (tag.contains("auctionVersion")) {
+            AuctionClient.serverVersion = tag.getLong("auctionVersion");
+        }
+        StallClient.fromSnapshot(tag);
+        if (tag.contains("auctions", Tag.TAG_LIST)) {
         List<AuctionView> newAuctions = new ArrayList<>();
         ListTag auctionTag = tag.getList("auctions", Tag.TAG_COMPOUND);
         for (int i = 0; i < auctionTag.size(); i++) {
@@ -550,6 +556,7 @@ public final class ClientShopData {
             newAuctions.add(view);
         }
         auctions = newAuctions;
+        }
 
         List<StallEntry> newStall = new ArrayList<>();
         ListTag stallTag = tag.getList("stall", Tag.TAG_COMPOUND);
@@ -860,6 +867,38 @@ public final class ClientShopData {
         public boolean own;
         /** 我是不是当前最高出价者。 */
         public boolean topMe;
+        // ---- 拍卖行升级新增（服务端下发，客户端只做展示）----
+        /** 一口价（0 = 不支持）。 */
+        public long buyout;
+        public boolean allowBid = true;
+        /** 本场加价幅度。 */
+        public long increment = 1L;
+        /** 服务端算好的最低下次出价（客户端不自己算，避免与服务端配置不一致）。 */
+        public long minNext;
+        /** 竞拍人数 / 出价次数。 */
+        public int bidders;
+        public int bidCount;
+        /** 我参与过出价。 */
+        public boolean iBid;
+        public int extensions;
+        /** 上架时间（本地时钟换算，只用于「最新上架」排序）。 */
+        public long createdAt;
+        /** 搜索用的小写文本（名称 / id / 模组名 / 卖家），惰性计算。 */
+        public String searchText;
+        /** 分类缓存。 */
+        public cn.autoforged.module_shop.shop.auction.AuctionCategory category;
+
+        public long remainingNow() {
+            return receivedAt > 0L ? Math.max(0L, remaining - (System.currentTimeMillis() - receivedAt)) : remaining;
+        }
+
+        /** 用于「价格」排序 / 展示的当前价：有出价用当前价，只能一口价时用一口价，否则用起拍价。 */
+        public long effectivePrice() {
+            if (currentBid > 0L) {
+                return currentBid;
+            }
+            return !allowBid && buyout > 0L ? buyout : startPrice;
+        }
     }
 
     public static final class StallPlayer {

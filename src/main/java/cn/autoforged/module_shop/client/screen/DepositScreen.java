@@ -14,7 +14,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
 
 /** “放入物品”界面。放好物品后点确认，服务端会弹出数值编辑界面。 */
-public class DepositScreen extends AbstractContainerScreen<DepositMenu> {
+public class DepositScreen extends AbstractContainerScreen<DepositMenu> implements SkiaContainerBackground.Painter {
     /** AtomLib 可用时用 Skija 画底板、槽位框、标题与确认按钮；槽位里的物品仍由原版绘制。 */
     private boolean skia;
     private final Motion.Clock clock = new Motion.Clock();
@@ -65,6 +65,23 @@ public class DepositScreen extends AbstractContainerScreen<DepositMenu> {
         int x = this.leftPos;
         int y = this.topPos;
         if (this.skia) {
+            return;   // Skija 底板在 paintSkiaBackground 里画（见 SkiaContainerBackground）
+        }
+        Bricks.panel(g, x, y, this.imageWidth, this.imageHeight);
+        Bricks.slot(g, x + 80, y + 20);
+        g.blit(Bricks.PLAYER_SLOTS, x + 7, y + 83, 0, 0, 162, 76, 162, 76);
+    }
+
+    @Override
+    public boolean usesSkiaBackground() {
+        return this.skia;
+    }
+
+    @Override
+    public void paintSkiaBackground(GuiGraphics g, int mouseX, int mouseY) {
+        int x = this.leftPos;
+        int y = this.topPos;
+        {
             float dt = this.clock.tick();
             SkiaFrame.draw(g, c -> {
                 SkiaDialog.bare(c, x, y, this.imageWidth, this.imageHeight);
@@ -76,11 +93,7 @@ public class DepositScreen extends AbstractContainerScreen<DepositMenu> {
                 SkiaDialog.playerSlots(c, x + 8, y + 84);
                 this.confirmButton.render(c, mouseX, mouseY, dt);
             });
-            return;
         }
-        Bricks.panel(g, x, y, this.imageWidth, this.imageHeight);
-        Bricks.slot(g, x + 80, y + 20);
-        g.blit(Bricks.PLAYER_SLOTS, x + 7, y + 83, 0, 0, 162, 76, 162, 76);
     }
 
     @Override

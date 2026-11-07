@@ -30,6 +30,18 @@ public final class ShopSavedData extends SavedData {
     /** 最近购买记录上限：只用于展示，超出后丢最旧的，避免存档无限膨胀。 */
     public static final int MALL_RECENT_MAX = 200;
     public final List<AuctionEntry> auctions = new ArrayList<>();
+    /** 已结束的拍卖记录（成交 / 流拍 / 撤销 / 损坏），最新在最后；条数上限见 Config.auctionHistoryLimit。 */
+    public final List<AuctionEntry> auctionHistory = new ArrayList<>();
+    /** 拍卖资金 / 结算异常日志（审计、结算异常时追加），供管理员查看。最多 {@link #AUCTION_ANOMALY_MAX} 条。 */
+    public final List<String> auctionAnomalies = new ArrayList<>();
+    public static final int AUCTION_ANOMALY_MAX = 300;
+    /**
+     * 读档时整条解析失败的拍卖（原始 NBT 原样保留并写回），避免一条坏数据让整个存档读不出来，
+     * 也避免把它悄悄丢掉。管理员可以用 /shop auction audit 看到数量。
+     */
+    public final List<CompoundTag> auctionCorrupt = new ArrayList<>();
+    /** 拍卖列表版本号（不存档）：任何拍卖变化 +1，客户端据此判断要不要重新拉列表。 */
+    public transient long auctionVersion = 1L;
     /** 玩家求购（悬赏）单：悬赏在发布时就已托管，撤销 / 到期原样退回。 */
     public final List<DemandEntry> demands = new ArrayList<>();
     /** 管理员配置的可兑换货币（1 个物品 = N 星币，双向兑换）。 */
@@ -211,6 +223,21 @@ public final class ShopSavedData extends SavedData {
         }
         tag.put("mallRecent", recentList);
         tag.put("auctions", saveAuctions(registries));
+        ListTag historyList = new ListTag();
+        for (AuctionEntry entry : auctionHistory) {
+            historyList.add(entry.save(registries));
+        }
+        tag.put("auctionHistory", historyList);
+        ListTag anomalyList = new ListTag();
+        for (String line : auctionAnomalies) {
+            anomalyList.add(StringTag.valueOf(line));
+        }
+        tag.put("auctionAnomalies", anomalyList);
+        ListTag corruptList = new ListTag();
+        for (CompoundTag raw : auctionCorrupt) {
+            corruptList.add(raw.copy());
+        }
+        tag.put("auctionCorrupt", corruptList);
         ListTag demandList = new ListTag();
         for (DemandEntry entry : demands) {
             demandList.add(entry.save(registries));
@@ -315,10 +342,37 @@ public final class ShopSavedData extends SavedData {
         for (int i = 0; i < apiRequestList.size(); i++) {
             data.apiRequests.add(apiRequestList.getString(i));
         }
+        long legacyDuration;
+        try {
+            legacyDuration = cn.autoforged.module_shop.Config.INSTANCE.auctionDurationSeconds.get() * 1000L;
+        } catch (RuntimeException notLoaded) {
+            legacyDuration = 7_200_000L;
+        }
         ListTag auctionList = tag.getList("auctions", Tag.TAG_COMPOUND);
         for (int i = 0; i < auctionList.size(); i++) {
-            data.auctions.add(AuctionEntry.load(auctionList.getCompound(i), registries));
+            loadAuctionSafely(data, auctionList.getCompound(i), registries, legacyDuration, false);
         }
+        ListTag historyList = tag.getList("auctionHistory", Tag.TAG_COMPOUND);
+        for (int i = 0; i < historyList.size(); i++) {
+            loadAuctionSafely(data, historyList.getCompound(i), registries, legacyDuration, true);
+        }
+        ListTag anomalyList = tag.getList("auctionAnomalies", Tag.TAG_STRING);
+        for (int i = 0; i < anomalyList.size(); i++) {
+            data.auctionAnomalies.add(anomalyList.getString(i));
+        }
+        ListTag corruptList = tag.getList("auctionCorrupt", Tag.TAG_COMPOUND);
+        for (int i = 0; i < corruptList.size(); i++) {
+            data.auctionCorrupt.add(corruptList.getCompound(i).copy());
+        }
+        // 防御：存档里记录的自增 id 落后于实际最大 id（手改存档 / 旧版本 bug）时往前推，避免 id 撞车。
+        long maxId = 0L;
+        for (AuctionEntry e : data.auctions) {
+            maxId = Math.max(maxId, e.id);
+        }
+        for (AuctionEntry e : data.auctionHistory) {
+            maxId = Math.max(maxId, e.id);
+        }
+        data.pendingAuctionMaxId = maxId;
         ListTag exchangeList = tag.getList("exchangePool", Tag.TAG_COMPOUND);
         for (int i = 0; i < exchangeList.size(); i++) {
             ExchangeEntry entry = ExchangeEntry.load(exchangeList.getCompound(i), registries);
@@ -376,6 +430,9 @@ public final class ShopSavedData extends SavedData {
             data.listingCounter = 1L;
         }
         data.nextAuctionId = tag.getLong("nextAuctionId");
+        if (data.nextAuctionId <= data.pendingAuctionMaxId) {
+            data.nextAuctionId = data.pendingAuctionMaxId + 1L;
+        }
         if (data.nextAuctionId <= 0) {
             data.nextAuctionId = 1L;
         }
@@ -399,6 +456,37 @@ public final class ShopSavedData extends SavedData {
             list.add(offer.save(registries));
         }
         return list;
+    }
+
+    /** 读档时的拍卖最大 id（只在 load 里用来修正 nextAuctionId）。 */
+    private transient long pendingAuctionMaxId;
+
+    /** 一条拍卖解析失败时只隔离这一条：原始数据进 auctionCorrupt，存档其余部分照常读取。 */
+    private static void loadAuctionSafely(ShopSavedData data, CompoundTag raw, HolderLookup.Provider registries,
+            long legacyDuration, boolean history) {
+        try {
+            AuctionEntry entry = AuctionEntry.load(raw, registries, legacyDuration);
+            if (history || !entry.active()) {
+                data.auctionHistory.add(entry);
+            } else {
+                data.auctions.add(entry);
+            }
+        } catch (RuntimeException error) {
+            org.slf4j.LoggerFactory.getLogger("module_shop").error("拍卖数据损坏，已隔离保存（id={}）",
+                    raw.getLong("id"), error);
+            data.auctionCorrupt.add(raw.copy());
+        }
+    }
+
+    /** 追加一条拍卖异常日志（带时间戳，超出上限丢最旧）。 */
+    public void auctionAnomaly(String message) {
+        String line = java.time.LocalDateTime.now().withNano(0) + " " + message;
+        auctionAnomalies.add(line);
+        while (auctionAnomalies.size() > AUCTION_ANOMALY_MAX) {
+            auctionAnomalies.remove(0);
+        }
+        org.slf4j.LoggerFactory.getLogger("module_shop/auction").warn(message);
+        setDirty();
     }
 
     private ListTag saveAuctions(HolderLookup.Provider registries) {

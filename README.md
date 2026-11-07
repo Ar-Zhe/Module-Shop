@@ -22,6 +22,9 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 >
 > **1.0.4**：外壳与 22 个次级界面也改用 AtomLib 绘制，加入动效；新增**界面皮肤**（日间 / 夜间 / 樱糖 / 薄荷 / 雾蓝 / 奶茶 / 夜樱，
 > 带渐变与柔光，右上角切换），主面板与弹窗改为半透明。
+>
+> **1.0.5**：拍卖行全面升级（大厅搜索 / 分类 / 排序、详情页、一口价、防截拍、资金托管与审计、管理界面）；
+> 玩家商店升级（商店大厅、摊位详情、从背包上架、补货）；修复出货箱倒计时结束后不出货。
 
 ---
 
@@ -32,8 +35,8 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | **每日商店** | 卡牌翻牌查看商品；3 列 × 2 行；每件商品独立限购；普通档每日最多 3 个；可用星币**付费刷新**（默认第 1 次 200、第 2 次 500，每日 2 次，价格与次数可配） |
 | **每日收购** | 每日随机最多 6 项收购需求；按物品显示收购价与剩余可收数量；**当日清单全部卖满额外奖励 1000 星币**（可配） |
 | **购物城** | 管理员上架的**常驻货架**（不会每日重抽）：两行六列一页 12 件，显示价格与库存，**品质只用 1px 颜色细边框表示**；支持**搜索**（物品名 / 模组名）、**排序**（价格 / 库存 升降序）、**按模组分类**（下拉，按首字母排序）、**只收藏**（本地收藏，★）与**最近购买**记录；库存实时扣减、售罄变灰；管理员可单件上架，也可**一次导入整个模组的全部物品**（统一价格 / 库存 / 品质） |
-| **拍卖行** | 上架拍卖、**出价即从余额扣款**、**被超价自动全额退回**（余额装不下时自动转金额邮件）、到期自动结算（买家收物品邮件、卖家收货款、按比例手续费）、无人出价原物退回 |
-| **玩家摊位** | 上架 / 改价 / 下架 / 浏览购买，支持库存与售出统计；可配置上架手续费 |
+| **拍卖行** | 独立上架界面（直接从背包选物品，数量 / 起拍价 / 加价幅度 / 一口价 / 时长 / 是否允许竞价）、**搜索（名称 / 物品ID / 模组 / 附魔 / 卖家）+ 9 种分类 + 7 种排序 + 分页**、详情页（完整属性、竞价记录）、**一口价**、**防截拍自动延时**、无人出价可撤销、**我的拍卖**（出售中 / 我的竞拍 / 已成交 / 已流拍 / 已撤销 + 重新上架）；出价资金托管，被超价同一时刻全额退回；结算幂等、重启续结算；上架费 / 成交费 / 黑名单（含容器内物品）/ 绑定与特殊 NBT 限制；管理员界面与 `/shop auction` 审计命令。详见 [docs/拍卖行.md](docs/拍卖行.md) |
+| **玩家商店（摊位）** | 我的商店（从背包上架 / 改价 / 补货 / 下架 / 交易记录）、**商店大厅**（全服商品搜索 / 分类 / 排序 / 分页）、查看摊位（摊位详情：物品格子、数量调整、总价、购买）；按商品 id 交易、价格核对、请求去重。详见 [docs/玩家商店.md](docs/玩家商店.md) |
 | **玩家交易** | 双方放入物品与星币 → 双方同意 → 倒计时 → 双方确认后原子交换；闲置 10 分钟自动结束并按"背包 → 邮箱 → 掉落"退回 |
 | **钱包** | 余额查询、玩家间转账（同 IP 拦截、冷却、余额上限饱和处理，不溢出不变负） |
 | **邮箱** | 物品邮件与金额邮件；一键领取 / 清理已读；背包满自动转邮箱；**同渠道邮件自动合并**、附件用可滚动的物品格子展示；默认上限 100 封（满时自动清理最早的已读邮件） |
@@ -74,7 +77,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 
 ## 安装
 
-1. 服务端：把 `module_shop-1.0.4.jar` 放进 `mods/`，重启（服务端**不需要** AtomLib）。
+1. 服务端：把 `module_shop-1.0.5.jar` 放进 `mods/`，重启（服务端**不需要** AtomLib）。
 2. 客户端：**玩家也必须安装同一个 jar**（商店界面是客户端代码），另外安装前置
    [AtomLib 0.1.0-beta](https://github.com/NoWordz/AtomLib/releases/tag/v0.1.0-beta-beta3)（`atomlib-1.21.1-neoforge-0.1.0-beta.jar`）。
    AtomLib 只支持 Windows x64 / ARM64；macOS / Linux 客户端会自动使用旧版界面。
@@ -89,8 +92,8 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 
 ```bash
 ./gradlew build          # Windows: gradlew.bat build
-# 产物：build/libs/module_shop-1.0.4.jar      主模组
-#       build/libs/module_shop-1.0.4-api.jar  公共 API + UI 套件（给附属编译用）
+# 产物：build/libs/module_shop-1.0.5.jar      主模组
+#       build/libs/module_shop-1.0.5-api.jar  公共 API + UI 套件（给附属编译用）
 # 首次构建会自动下载 AtomLib 发布包到 .atomlib/ 并做 SHA-256 校验（版本与校验值见 gradle.properties）
 
 # 需要一个带 KubeJS 桥接（脚本全局 ModuleShop）的 jar：
@@ -131,6 +134,8 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 /shop admin money set <目标> <金额>  把某玩家余额**直接设为**该值（写 0 = 清零，离线也可）
 /shop admin send                   打开发放界面（物品 + 星币，邮箱领取）
 /shop admin history <玩家> [页码]   查看交易流水
+/shop auction list | history [页] | anomalies | audit       拍卖行：进行中 / 历史 / 异常 / 资金审计
+/shop auction cancel <id> | end <id>                        强制撤销（全额退款）/ 强制结束（按当前状态结算）
 /shop wallet balance | pay <玩家> <金额> | give <玩家> <金额>
 ```
 
@@ -151,6 +156,11 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
                 buybackRefreshCosts = ["200", "500"]
 [mailbox]       maxMailboxSize = 100       transactionHistorySize = 50
 [trade]         tradeRequestExpireSeconds = 60   tradeSessionTimeoutSeconds = 600
+[auction]       auctionEnabled = true      maxAuctionsGlobal = 500   maxConcurrentAuctions = 6
+                auctionDurationOptions = ["30","60","180","360","720","1440","2880"]
+                auctionListingFeeFixed = 0  auctionListingFeePercent = 0.0  auctionFeePercent = 5.0
+                antiSnipe = true  antiSnipeSeconds = 60  antiSnipeExtensionSeconds = 30  antiSnipeMaxExtensions = 10
+                auctionBlacklist = [...]   auctionAllowBound = false  auctionAllowCustomData = true
 ```
 > 付费刷新：`dailyRefreshCosts` 是**每日商店**的价格表，`buybackRefreshCosts` 是**每日收购**的价格表，
 > 两者各自独立，**列表长度 = 每天可刷新次数**（例如 `["300"]` = 每天只能刷 1 次、每次 300 星币）。
@@ -163,6 +173,8 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | --- | --- |
 | [使用教程.md](docs/使用教程.md) | 服主上手：安装、模块、权限、常用流程 |
 | [模组介绍.md](docs/模组介绍.md) | 面向玩家的功能说明 |
+| [拍卖行.md](docs/拍卖行.md) | 拍卖行：玩法、配置、资金托管与安全设计、管理命令、测试清单 |
+| [玩家商店.md](docs/玩家商店.md) | 玩家商店：三个入口、摊位详情、交易安全、测试清单 |
 | [公共API-使用文档.md](docs/公共API-使用文档.md) | 开发者接入：接口、返回码、事件、KubeJS、HTTP、附属页面（第 10 节） |
 | [atomlib-migration.md](docs/atomlib-migration.md) | AtomLib 界面迁移方案、进度与游戏内 QA 清单 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |

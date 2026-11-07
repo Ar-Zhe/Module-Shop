@@ -3012,6 +3012,8 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     // =========================================================== 拍卖
 
     private void drawAuction(GuiGraphics g, int cx, int cy, int cw, int ch, int mx, int my) {
+        // 拍卖列表单独下发：打开拍卖页时拉取（有节流，版本未变不重复请求）
+        cn.autoforged.module_shop.client.AuctionClient.ensureList();
         List<ClientShopData.AuctionView> auctions = ClientShopData.auctions;
         int pageSize = 5;
         int pages = Math.max(1, (auctions.size() + pageSize - 1) / pageSize);
@@ -6122,7 +6124,8 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             case "bid_gui" -> {
                 ClientShopData.AuctionView view = findAuction(extra == null ? 0L : extra.getLong("id"));
                 if (view != null) {
-                    Nav.open(new AuctionBidScreen(view));
+                    // Skija 可用时打开新详情页（出价 / 一口价 / 竞价记录），否则仍用旧出价界面
+                    cn.autoforged.module_shop.client.screen.auction.AuctionUi.openDetail(view.id);
                 }
             }
             // 需求：删除邮件；未领取/未查看时必须先二次确认，防止误删资产。
@@ -6146,6 +6149,8 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             case "trade_select" -> Nav.open(new TradeSelectScreen(false));
             case "trade_gui" -> openInput("trade_request", "gui.module_shop.input.trade_target", null, "target");
             case "stall_edit_gui" -> openInput("stall_apply_price", "gui.module_shop.input.stall_price", extra, "price");
+            // 我的商店 → 补货：输入补货数量（默认 = 背包里同样物品的数量），服务端只收完全相同的物品
+            case "stall_restock_gui" -> openInput("stall_restock", "gui.module_shop.input.stall_restock", extra, "quantity");
             // 需求 6/7：管理界面可编辑价值(price)、品质(rarity)、数量(quantity)，并带出当前值。
             case "admin_edit_gui" -> openAdminEdit(extra);
             // 右键删除条目（每日商店 / 收购 / 购物城 / 出货箱规则都走这里）。
