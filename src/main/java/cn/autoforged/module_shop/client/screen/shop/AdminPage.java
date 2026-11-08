@@ -45,6 +45,7 @@ public final class AdminPage implements ShopPage {
             .getString());
     private final Button grantBtn = small(() -> Component.translatable("gui.module_shop.admin_grant_open").getString());
     private final Button historyBtn = small(() -> Component.translatable("gui.module_shop.admin_history").getString());
+    private final Button cfgBtn = small(() -> Component.translatable("gui.module_shop.cfg.button").getString());
     private final Button prevBtn = small(() -> Component.translatable("gui.module_shop.page_prev").getString());
     private final Button nextBtn = small(() -> Component.translatable("gui.module_shop.page_next").getString());
     /** 底部第一行的模块设置按钮（每帧按当前模块重新配置）。 */
@@ -108,7 +109,13 @@ public final class AdminPage implements ShopPage {
         float historyX = cx + cw - 4.0F - topBtnW;
         historyBtn.onClick(() -> host.action("admin_history_gui", null)).bounds(historyX, cy + 2.0F, topBtnW, 14.0F);
         historyBtn.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
-        float grantX = historyX - topBtnW - 4.0F;
+        float cfgX = historyX - topBtnW - 4.0F;
+        cfgBtn.onClick(() -> {
+            var mc = net.minecraft.client.Minecraft.getInstance();
+            mc.setScreen(new cn.autoforged.module_shop.client.screen.ConfigManagerScreen());
+        }).bounds(cfgX, cy + 2.0F, topBtnW, 14.0F);
+        cfgBtn.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
+        float grantX = cfgX - topBtnW - 4.0F;
         grantBtn.onClick(() -> host.action("admin_grant_open", null)).bounds(grantX, cy + 2.0F, topBtnW, 14.0F);
         grantBtn.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
         float currentX = cx + 4.0F + ddW + 8.0F;

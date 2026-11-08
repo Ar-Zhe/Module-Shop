@@ -1382,6 +1382,12 @@ public final class ShopManager {
             case "admin_layout_commit" -> adminLayoutCommit(player);
             // 左上角主标题改名（空 = 恢复默认「模块商店」）—— 现在**唯一**的改名入口
             case "admin_shop_title_set" -> adminShopTitleSet(player, tag);
+            // ---- 商店模板（导出 / 导入 / 保存为默认 / 手动初始化）----
+            case "cfg_export" -> cfgExport(player, tag);
+            case "cfg_save_default" -> cfgSaveDefault(player, tag);
+            case "cfg_import_preview" -> cfgImportPreview(player, tag);
+            case "cfg_import_apply" -> cfgImportApply(player, tag);
+            case "cfg_init_from_default" -> cfgInitFromDefault(player);
             // 编辑布局里右键余额 → 改货币名称（空 = 恢复配置默认）
             case "admin_currency_set" -> adminCurrencySet(player, tag);
             // 商店设置 → 摊位：自动下架时间（永久 / 游戏时间 / 现实时间）
@@ -6408,6 +6414,130 @@ public final class ShopManager {
      *
      * <p>只改显示名：空字符串 = 恢复 lang 默认（模块商店）。最多 {@link SidebarLayout#MAX_TITLE} 个字。
      */
+    // =========================================================== 商店模板（导出 / 导入 / 默认）
+    /** 只有管理员能碰模板（客户端按钮只是显示开关，服务端必须再校验一次）。 */
+    private static boolean requireAdmin(ServerPlayer player) {
+        return player != null && player.hasPermissions(2);
+    }
+
+    /** 导出当前世界模板：服务端生成 JSON，交给**客户端**写进 config/moduleshop/exports/。 */
+    private static void cfgExport(ServerPlayer player, CompoundTag tag) {
+        if (!requireAdmin(player)) {
+            return;
+        }
+        ShopSavedData data = data(player.server);
+        String name = tag.getString("name");
+        cn.autoforged.module_shop.config.ShopTemplate template =
+                cn.autoforged.module_shop.shop.TemplateService.extract(data, name);
+        CompoundTag out = new CompoundTag();
+        out.putString("kind", "cfg_export");
+        out.putString("json", template.toJson().toString());
+        out.putString("name", template.name);
+        cn.autoforged.module_shop.network.payload.ClientboundShopSyncPayload.send(player, out);
+    }
+
+    /** 把当前世界模板保存为默认模板（客户端 config/moduleshop/shop_config.json）。 */
+    private static void cfgSaveDefault(ServerPlayer player, CompoundTag tag) {
+        if (!requireAdmin(player)) {
+            return;
+        }
+        ShopSavedData data = data(player.server);
+        String name = tag.getString("name");
+        cn.autoforged.module_shop.config.ShopTemplate template =
+                cn.autoforged.module_shop.shop.TemplateService.extract(data, name);
+        CompoundTag out = new CompoundTag();
+        out.putString("kind", "cfg_save_default");
+        out.putString("json", template.toJson().toString());
+        out.putString("name", template.name);
+        cn.autoforged.module_shop.network.payload.ClientboundShopSyncPayload.send(player, out);
+    }
+
+    /** 预览导入：客户端把文件 JSON 发上来，服务端校验后回一条统计（不改世界）。 */
+    private static void cfgImportPreview(ServerPlayer player, CompoundTag tag) {
+        if (!requireAdmin(player)) {
+            return;
+        }
+        String json = tag.getString("json");
+        if (json == null || json.isBlank() || json.length() > 8 * 1024 * 1024) {
+            notifyPlayer(player, Component.translatable("msg.module_shop.cfg_bad_file")
+                    .withStyle(ChatFormatting.RED));
+            return;
+        }
+        cn.autoforged.module_shop.config.ShopTemplate template =
+                cn.autoforged.module_shop.config.ShopTemplate.fromJson(json);
+        if (template == null) {
+            notifyPlayer(player, Component.translatable("msg.module_shop.cfg_bad_json")
+                    .withStyle(ChatFormatting.RED));
+            return;
+        }
+        ShopSavedData data = data(player.server);
+        cn.autoforged.module_shop.shop.TemplateService.Preview preview =
+                cn.autoforged.module_shop.shop.TemplateService.preview(template, data);
+        CompoundTag out = new CompoundTag();
+        out.putString("kind", "cfg_preview");
+        out.putString("json", json);
+        out.putString("name", preview.name());
+        out.putInt("total", preview.total());
+        out.putInt("valid", preview.valid());
+        out.putInt("invalid", preview.invalid());
+        out.putInt("conflicts", preview.conflicts());
+        cn.autoforged.module_shop.network.payload.ClientboundShopSyncPayload.send(player, out);
+    }
+
+    /** 应用导入（replace / merge），成功后广播快照。 */
+    private static void cfgImportApply(ServerPlayer player, CompoundTag tag) {
+        if (!requireAdmin(player)) {
+            return;
+        }
+        String json = tag.getString("json");
+        cn.autoforged.module_shop.config.ShopTemplate template =
+                cn.autoforged.module_shop.config.ShopTemplate.fromJson(json);
+        if (template == null) {
+            notifyPlayer(player, Component.translatable("msg.module_shop.cfg_bad_json")
+                    .withStyle(ChatFormatting.RED));
+            return;
+        }
+        cn.autoforged.module_shop.shop.TemplateService.Mode mode = "merge".equals(tag.getString("mode"))
+                ? cn.autoforged.module_shop.shop.TemplateService.Mode.MERGE
+                : cn.autoforged.module_shop.shop.TemplateService.Mode.REPLACE;
+        ShopSavedData data = data(player.server);
+        cn.autoforged.module_shop.shop.TemplateService.ApplyResult result =
+                cn.autoforged.module_shop.shop.TemplateService.apply(template, data, mode);
+        data.setDirty();
+        broadcastSnapshots(player.server);
+        notifyPlayer(player, Component.translatable("msg.module_shop.cfg_applied",
+                        result.applied(), result.invalid(), result.duplicates())
+                .withStyle(result.invalid() > 0 ? ChatFormatting.YELLOW : ChatFormatting.GREEN));
+        org.slf4j.LoggerFactory.getLogger("module_shop").info(
+                "管理员 {} 导入商店模板（{}）：{}", player.getGameProfile().getName(), mode, result.summary());
+    }
+
+    /** 手动用默认模板初始化（已初始化过的世界也允许，等于"用模板重置商店"）。 */
+    private static void cfgInitFromDefault(ServerPlayer player) {
+        if (!requireAdmin(player)) {
+            return;
+        }
+        ShopSavedData data = data(player.server);
+        java.nio.file.Path dir = net.neoforged.fml.loading.FMLPaths.CONFIGDIR.get();
+        cn.autoforged.module_shop.config.ShopTemplateStore.ReadResult read =
+                cn.autoforged.module_shop.config.ShopTemplateStore.read(
+                        cn.autoforged.module_shop.config.ShopTemplateStore.defaultFile(dir));
+        if (!read.ok()) {
+            notifyPlayer(player, Component.translatable("msg.module_shop.cfg_no_default")
+                    .withStyle(ChatFormatting.RED));
+            return;
+        }
+        cn.autoforged.module_shop.shop.TemplateService.ApplyResult result =
+                cn.autoforged.module_shop.shop.TemplateService.apply(read.template(), data,
+                        cn.autoforged.module_shop.shop.TemplateService.Mode.REPLACE);
+        data.templateInitDone = true;
+        data.setDirty();
+        broadcastSnapshots(player.server);
+        notifyPlayer(player, Component.translatable("msg.module_shop.cfg_applied",
+                        result.applied(), result.invalid(), result.duplicates())
+                .withStyle(ChatFormatting.GREEN));
+    }
+
     private static void adminShopTitleSet(ServerPlayer player, CompoundTag tag) {
         if (!player.hasPermissions(2)) {
             return;

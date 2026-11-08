@@ -53,6 +53,12 @@ public final class ShopSavedData extends SavedData {
      */
     public final java.util.LinkedHashSet<String> apiRequests = new java.util.LinkedHashSet<>();
     /** 商店**自定义货币名称**（空 = 用 config 里的 currencyName）。管理员在编辑布局里右键余额修改。 */
+
+    /** 新世界模板初始化是否已执行过（true = 之后永不再自动初始化）。 */
+    public boolean templateInitDone;
+
+    /** 是否已经写过模组自带的默认商品（用于区分新世界与老存档）。 */
+    public boolean seedDefaultsApplied;
     public String shopCurrency = "";
 
     /** 幂等键保留上限（防无限增长）。 */
@@ -209,6 +215,8 @@ public final class ShopSavedData extends SavedData {
         }
         tag.put("accounts", accountsTag);
 
+        tag.putBoolean("templateInitDone", templateInitDone);
+        tag.putBoolean("seedDefaultsApplied", seedDefaultsApplied);
         tag.put("shopPool", saveOffers(shopPool, registries));
         tag.put("buybackPool", saveOffers(buybackPool, registries));
         // 购物城：常驻货架 + 最近购买记录
@@ -304,6 +312,8 @@ public final class ShopSavedData extends SavedData {
     public static ShopSavedData load(CompoundTag tag, HolderLookup.Provider registries) {
         ShopSavedData data = new ShopSavedData();
 
+        data.templateInitDone = tag.getBoolean("templateInitDone");
+        data.seedDefaultsApplied = tag.getBoolean("seedDefaultsApplied");
         CompoundTag accountsTag = tag.getCompound("accounts");
         for (String key : accountsTag.getAllKeys()) {
             try {
@@ -519,6 +529,60 @@ public final class ShopSavedData extends SavedData {
     }
 
     // ============================ 默认商品池 ============================
+
+    /**
+     * 池子是否仍是模组自带的默认商品（用于判断"这是新世界还是已配置过的世界"）。
+     *
+     * <p>比对的是物品 id 集合；只要玩家增删过任何一件商品就不算默认，自动初始化就不会覆盖它。
+     */
+    public boolean isSeedDefaultPools() {
+        // 直接和"刚从默认种子生成的一份数据"逐项比对：以后默认池改了这里也不用改。
+        ShopSavedData fresh = new ShopSavedData();
+        fresh.seedDefaultsIfEmpty();
+        if (shopSlotCount != fresh.shopSlotCount || buybackSlotCount != fresh.buybackSlotCount) {
+            return false;
+        }
+        if (!java.util.Arrays.equals(shopWeights, fresh.shopWeights)
+                || !java.util.Arrays.equals(buybackWeights, fresh.buybackWeights)) {
+            return false;
+        }
+        if (!java.util.Arrays.equals(shopGuarantee, fresh.shopGuarantee)
+                || !java.util.Arrays.equals(buybackGuarantee, fresh.buybackGuarantee)) {
+            return false;
+        }
+        return sameIds(shopPool, fresh.shopPool) && sameIds(buybackPool, fresh.buybackPool);
+    }
+
+    /** 两个商品池的物品 id 多重集合是否完全一致。 */
+    private static boolean sameIds(java.util.List<ConfiguredOffer> a, java.util.List<ConfiguredOffer> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+        for (ConfiguredOffer offer : a) {
+            try {
+                String id = net.minecraft.core.registries.BuiltInRegistries.ITEM
+                        .getKey(offer.stack.getItem()).toString();
+                counts.merge(id, 1, Integer::sum);
+            } catch (RuntimeException error) {
+                return false;
+            }
+        }
+        for (ConfiguredOffer offer : b) {
+            try {
+                String id = net.minecraft.core.registries.BuiltInRegistries.ITEM
+                        .getKey(offer.stack.getItem()).toString();
+                Integer left = counts.get(id);
+                if (left == null || left <= 0) {
+                    return false;
+                }
+                counts.put(id, left - 1);
+            } catch (RuntimeException error) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     private void seedDefaultsIfEmpty() {
         if (shopPool.isEmpty() && buybackPool.isEmpty()) {
