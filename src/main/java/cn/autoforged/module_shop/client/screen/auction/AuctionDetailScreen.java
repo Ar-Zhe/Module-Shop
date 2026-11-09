@@ -170,7 +170,8 @@ public final class AuctionDetailScreen extends SkiaDialog {
         long remain = active ? Math.max(0L, v.remaining - (System.currentTimeMillis() - d.receivedAt)) : 0L;
 
         // ---------------- 左栏：物品 ----------------
-        float leftW = Math.max(130.0F, innerW * 0.40F);
+        // 弹窗最少 260px 宽时右栏仍要留出 150px，否则价格 / 按钮会互相压住或越出面板
+        float leftW = Math.max(96.0F, Math.min(innerW * 0.40F, innerW - 150.0F));
         card(c, innerX, innerY, leftW, 44.0F);
         Draw.fill(c, innerX + 6, innerY + 6, 32, 32, 2, IOStyle.SLOT_INNER);
         Draw.stroke(c, innerX + 6, innerY + 6, 32, 32, 2, 1, IOStyle.SLOT_BORDER);
@@ -250,19 +251,32 @@ public final class AuctionDetailScreen extends SkiaDialog {
         float ay = innerY + 98.0F;
         boolean canAct = active && remain > 0L && !v.own;
         boolean enabled = AuctionClient.settings.enabled;
-        float bw = 30.0F;
-        float gap = 4.0F;
+        float gap = Math.min(4.0F, Math.max(0.0F, rw * 0.02F));
         if (canAct && v.allowBid) {
-            float fieldW = rw - bw * 2 - 64.0F - gap * 3;
-            button(c, "minus", "-" + v.increment, rx, ay, bw, 18, Button.Kind.NORMAL, true, () -> adjust(d, -1));
-            amount.bounds(rx + bw + gap, ay, fieldW, 18).visible(true);
-            button(c, "plus", "+" + v.increment, rx + bw + gap + fieldW + gap, ay, bw, 18, Button.Kind.NORMAL, true,
-                    () -> adjust(d, 1));
+            String minusLabel = "-" + v.increment;
+            String plusLabel = "+" + v.increment;
+            String bidLabel = AuctionUi.tr(pending ? "gui.module_shop.auction.submitting" : "gui.module_shop.auction.bid_btn");
+            float stepNeed = Math.max(42.0F, Math.max(Text.width(minusLabel, AtomUi.REGULAR, Text.BODY),
+                    Text.width(plusLabel, AtomUi.REGULAR, Text.BODY)) + 10.0F);
+            float bidNeed = Math.max(36.0F, Text.width(bidLabel, AtomUi.REGULAR, Text.BODY) + 10.0F);
+            float available = Math.max(0.0F, rw - gap * 3.0F);
+            // 顺序为输入框、减、加、出价；空间不足时一起收缩，富余空间只补给输入框
+            float[] widths = PageKit.distribute(available, new float[]{56.0F, stepNeed, stepNeed, bidNeed},
+                    new float[]{28.0F, 24.0F, 24.0F, Math.min(36.0F, bidNeed)});
+            float used = widths[0] + widths[1] + widths[2] + widths[3];
+            float fieldW = widths[0] + Math.max(0.0F, available - used);
+            float minusW = widths[1];
+            float plusW = widths[2];
+            float bidW = widths[3];
+            button(c, "minus", minusLabel, rx, ay, minusW, 18, Button.Kind.NORMAL, true, () -> adjust(d, -1));
+            amount.bounds(rx + minusW + gap, ay, fieldW, 18).visible(true);
+            float plusX = rx + minusW + gap + fieldW + gap;
+            button(c, "plus", plusLabel, plusX, ay, plusW, 18, Button.Kind.NORMAL, true, () -> adjust(d, 1));
             long typed = AuctionUi.parse(amount.value());
             boolean okAmount = typed >= v.minNext && typed <= d.balance && !v.topMe
                     && (v.buyout <= 0L || typed < v.buyout);
-            button(c, "bid", AuctionUi.tr(pending ? "gui.module_shop.auction.submitting" : "gui.module_shop.auction.bid_btn"),
-                    rx + rw - 64.0F, ay, 64.0F, 18, Button.Kind.ACCENT, okAmount && !pending && enabled, () -> bid(d));
+            button(c, "bid", bidLabel, plusX + plusW + gap, ay, bidW, 18, Button.Kind.ACCENT,
+                    okAmount && !pending && enabled, () -> bid(d));
             String hint;
             int hintColor = IOStyle.TEXT_3;
             if (v.topMe) {

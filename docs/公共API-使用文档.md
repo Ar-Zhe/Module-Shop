@@ -10,7 +10,7 @@
 // 你的模组 build.gradle：只编译期依赖，运行期由服务端提供
 // 推荐只对「公共 API jar」编译（构建主体时自动产出 build/libs/module_shop-<版本>-api.jar，
 // 只含 cn.autoforged.module_shop.api.**）：这样你的代码在编译期就碰不到内部实现。
-compileOnly files('libs/module_shop-1.0.5-api.jar')
+compileOnly files('libs/module_shop-1.0.5.1-api.jar')
 
 // neoforge.mods.toml：声明依赖，保证加载顺序
 [[dependencies.yourmod]]

@@ -79,6 +79,11 @@ public final class Button extends UiComponent {
         return this;
     }
 
+    /** 当前标签文字（布局计算用来量实际宽度）。 */
+    public String labelText() {
+        return label == null ? "" : label.get();
+    }
+
     public Button onClick(Runnable onClick) {
         this.onClick = onClick;
         return this;

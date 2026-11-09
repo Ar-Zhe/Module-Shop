@@ -54,9 +54,15 @@ public final class Text {
     /**
      * 单行绘制：在 [x, x+maxWidth] 内按 align 对齐，并以 centerY 垂直居中。
      * 返回实际绘制宽度。
+     *
+     * <p>版面算错时（负宽度、负高度）字不会被挤成竖条，而且**永远不会越出 x+maxWidth 右边界**：
+     * 布局本身按宽度截断，这里再兜一层兜底，防止某个界面把宽度算成负数时文字跑到面板外面。
      */
     public static float drawLine(Canvas canvas, String text, FontId font, float size, int color,
                                  float x, float centerY, float maxWidth, Align align) {
+        if (maxWidth <= 0.0F) {
+            return 0.0F; // 没有可用的横向空间：不画，也不越界
+        }
         TextLayout layout = line(text, font, size, color, maxWidth);
         float w = layout.size().width();
         float drawX = switch (align) {
@@ -64,6 +70,13 @@ public final class Text {
             case CENTER -> x + (maxWidth - w) / 2.0F;
             case RIGHT -> x + maxWidth - w;
         };
+        float limit = x + maxWidth - w;
+        if (drawX > limit) {
+            drawX = limit;
+        }
+        if (drawX < x) {
+            drawX = x;
+        }
         draw(canvas, layout, drawX, centerY - layout.size().height() / 2.0F);
         return w;
     }

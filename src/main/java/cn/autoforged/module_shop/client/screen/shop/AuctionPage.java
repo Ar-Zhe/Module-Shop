@@ -40,6 +40,11 @@ public final class AuctionPage implements ShopPage {
     private boolean sortOpen;
     private float[] hoverT = new float[0];
 
+    /** 搜索框提示文字（量宽度用；与 init 里的占位文字一致）。 */
+    private static String searchHint() {
+        return Component.translatable("gui.module_shop.auction.search_hint").getString();
+    }
+
     private final Button catBtn = new Button(Button.Kind.NORMAL, () -> Component.translatable(
             "gui.module_shop.auction.cat_prefix",
             Component.translatable(AuctionClient.category.langKey())).getString(), null).radius(2.0F).fontSize(Text.SMALL);
@@ -96,11 +101,34 @@ public final class AuctionPage implements ShopPage {
         float y = f.y();
         float w = f.w();
         // ---- 顶栏 ----
-        float mineW = 58.0F;
-        float adminW = admin ? 36.0F : 0.0F;
-        float catW = 82.0F;
-        float sortW = 96.0F;
-        float searchW = Math.max(60.0F, w - catW - sortW - mineW - adminW - GAP * (admin ? 4 : 3));
+        // 内容区宽度是固定的（面板 400 − 侧栏 104 − 16 = 280），放不下就不能硬塞：
+        // 按钮至少留出能看懂的宽度，剩下的余量按各标签实际文字宽度分配，总宽绝不越过内容区。
+        String catText = catBtn.labelText();
+        String sortText = sortBtn.labelText();
+        String mineText = mineBtn.labelText();
+        String adminText = adminBtn.labelText();
+        float wantSearch = Math.max(56.0F, Text.width(searchHint(), AtomUi.REGULAR, Text.SMALL) + 12.0F);
+        float[] need = {
+                wantSearch,
+                Math.min(66.0F, Text.width(catText, AtomUi.REGULAR, Text.SMALL) + 8.0F),
+                Math.min(74.0F, Text.width(sortText, AtomUi.REGULAR, Text.SMALL) + 8.0F),
+                Text.width(mineText, AtomUi.REGULAR, Text.SMALL) + 8.0F,
+                admin ? Text.width(adminText, AtomUi.REGULAR, Text.SMALL) + 8.0F : 0.0F,
+        };
+        // 最小可读宽度：至少要能显示完整标签（再窄就只剩省略号），搜索框最小 40
+        float[] floors = {40.0F, need[1], need[2], need[3], need[4]};
+        float available = Math.max(0.0F, w - GAP * (admin ? 4 : 3));
+        float[] wts = PageKit.distribute(available, need, floors);
+        float used = 0.0F;
+        for (float width : wts) {
+            used += width;
+        }
+        // 搜索框是顶栏唯一的弹性控件；其余按钮保持适合自身标签的宽度
+        float searchW = wts[0] + Math.max(0.0F, available - used);
+        float catW = wts[1];
+        float sortW = wts[2];
+        float mineW = wts[3];
+        float adminW = wts[4];
         search.bounds(x, y, searchW, CTRL_H).visible(true);
         search.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
         float bx = x + searchW + GAP;
@@ -163,32 +191,47 @@ public final class AuctionPage implements ShopPage {
         // ---- 底栏 ----
         float barMid = f.barTop() + PageFrame.BAR_H / 2.0F;
         float right = x + w - 4.0F;
-        float createW = 70.0F;
+        // 右侧按钮按标签实际宽度分配（不再写死 70/40，中文标签在窄内容区会被压出可见省略号）
+        float[] footNeed = {
+                Text.width(Component.translatable("gui.module_shop.auction_create").getString(),
+                        AtomUi.REGULAR, Text.BODY) + 10.0F,
+                pages > 1 ? Text.width(prevBtn.labelText(), AtomUi.REGULAR, Text.SMALL) + 10.0F : 0.0F,
+                pages > 1 ? Text.width(nextBtn.labelText(), AtomUi.REGULAR, Text.SMALL) + 10.0F : 0.0F,
+        };
+        float[] footFloors = {Math.min(footNeed[0], 52.0F), footNeed[1], footNeed[2]};
+        float footerGap = 6.0F;
+        // 底栏左侧还要留给状态文字（页码 / 总数 / 在售数量），按它的实际宽度预留，不够就压缩按钮
+        String statusPreview = Component.translatable("gui.module_shop.auction.status_bar", AuctionClient.page + 1,
+                pages, shown.size(), AuctionClient.settings.myActive, AuctionClient.settings.maxPerPlayer).getString();
+        if (!AuctionClient.settings.enabled) {
+            statusPreview = Component.translatable("gui.module_shop.auction.closed").getString() + "  ·  " + statusPreview;
+        }
+        float statusW = Math.min(w * 0.45F, Text.width(statusPreview, AtomUi.REGULAR, Text.SMALL) + 10.0F);
+        float[] foot = PageKit.distribute(Math.max(0.0F, w - 8.0F - statusW - footerGap * 2),
+                footNeed, footFloors);
+        float createW = foot[0];
+        float prevW = foot[1];
+        float nextW = foot[2];
         create.onClick(() -> AuctionUi.openCreate(null));
         create.enabled(AuctionClient.settings.enabled)
                 .bounds(right - createW, barMid - 8.0F, createW, 16.0F);
         create.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
-        right -= createW + 6.0F;
+        right -= createW + footerGap;
         prevBtn.visible(pages > 1);
         nextBtn.visible(pages > 1);
         if (pages > 1) {
-            right -= 40.0F;
-            nextBtn.enabled(AuctionClient.page < pages - 1).bounds(right, barMid - 6.0F, 40.0F, 12.0F);
+            right -= nextW;
+            nextBtn.enabled(AuctionClient.page < pages - 1).bounds(right, barMid - 6.0F, nextW, 12.0F);
             nextBtn.onClick(() -> AuctionClient.page++);
             nextBtn.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
-            right -= 44.0F;
-            prevBtn.enabled(AuctionClient.page > 0).bounds(right, barMid - 6.0F, 40.0F, 12.0F);
+            right -= prevW + 4.0F;
+            prevBtn.enabled(AuctionClient.page > 0).bounds(right, barMid - 6.0F, prevW, 12.0F);
             prevBtn.onClick(() -> AuctionClient.page = Math.max(0, AuctionClient.page - 1));
             prevBtn.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
         }
-        String status = Component.translatable("gui.module_shop.auction.status_bar", AuctionClient.page + 1, pages,
-                shown.size(), AuctionClient.settings.myActive, AuctionClient.settings.maxPerPlayer).getString();
-        if (!AuctionClient.settings.enabled) {
-            status = Component.translatable("gui.module_shop.auction.closed").getString() + "  ·  " + status;
-        }
-        Text.drawLine(canvas, status, AtomUi.REGULAR, Text.SMALL,
+        Text.drawLine(canvas, statusPreview, AtomUi.REGULAR, Text.SMALL,
                 AuctionClient.settings.enabled ? IOStyle.TEXT_2 : IOStyle.RED,
-                x + 4.0F, barMid, right - 8.0F - (x + 4.0F), Text.Align.LEFT);
+                x + 4.0F, barMid, Math.max(1.0F, right - 8.0F - (x + 4.0F)), Text.Align.LEFT);
 
         // ---- 下拉（最后画，盖在列表上）----
         if (catOpen) {
@@ -293,9 +336,10 @@ public final class AuctionPage implements ShopPage {
     }
 
     private void openMenu(Canvas canvas, float x, float y, float w, int rows) {
-        menuX = x;
+        menuW = Math.min(w, listW);
+        // 排序下拉靠近右边缘，改为向左收拢，不能画出内容区
+        menuX = Math.max(listX, Math.min(x, listX + listW - menuW));
         menuY = y;
-        menuW = w;
         menuH = rows * MENU_ROW + 4.0F;
         Draw.fill(canvas, menuX, menuY, menuW, menuH, 2.0F, IOStyle.CARD);
         Draw.stroke(canvas, menuX, menuY, menuW, menuH, 2.0F, 1.0F, IOStyle.BORDER);
