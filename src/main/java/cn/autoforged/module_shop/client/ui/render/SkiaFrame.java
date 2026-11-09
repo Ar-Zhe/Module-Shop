@@ -1,5 +1,6 @@
 package cn.autoforged.module_shop.client.ui.render;
 
+import cn.autoforged.module_shop.client.ui.AtomUi;
 import com.atom.lib.client.render.MinecraftRenderBridge;
 import com.mojang.blaze3d.systems.RenderSystem;
 import io.github.humbleui.skija.Canvas;
@@ -29,6 +30,28 @@ public final class SkiaFrame {
 
     public static void draw(GuiGraphics graphics, Runnable preUi, Consumer<Canvas> painter) {
         RenderSystem.assertOnRenderThread();
+        if (!AtomUi.available()) {
+            // 本帧之前 AtomLib 已被禁用（见下方 LinkageError 处理）：什么都不画，等界面关闭后走旧版。
+            return;
+        }
+        try {
+            drawUnchecked(graphics, preUi, painter);
+        } catch (LinkageError error) {
+            // 前置库更新后接口不兼容：只禁用 AtomLib、关掉当前界面，不让游戏崩溃。
+            // 玩家重新打开时 AtomUi.available() 为 false，界面会使用旧版绘制。
+            AtomUi.disable(error);
+            Minecraft mc = Minecraft.getInstance();
+            mc.execute(() -> {
+                mc.setScreen(null);
+                if (mc.player != null) {
+                    mc.player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+                            "msg.module_shop.atomlib_incompatible"), false);
+                }
+            });
+        }
+    }
+
+    private static void drawUnchecked(GuiGraphics graphics, Runnable preUi, Consumer<Canvas> painter) {
         graphics.flush();
         MinecraftRenderBridge bridge = MinecraftRenderBridge.get();
         if (preUi != null) {

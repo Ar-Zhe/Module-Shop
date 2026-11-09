@@ -26,7 +26,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 > **1.0.5**：拍卖行全面升级（大厅搜索 / 分类 / 排序、详情页、一口价、防截拍、资金托管与审计、管理界面）；
 > 玩家商店升级（商店大厅、摊位详情、从背包上架、补货）；修复出货箱倒计时结束后不出货。
 >
-> **1.0.5.1**：修复拍卖行在窄窗口下部分 UI 块超出面板。
+> **1.0.6**：商店配置导出 / 导入 / 跨世界共享；兼容 AtomLib 0.4.0（运行中遇到前置库不兼容会自动退回旧版界面）；修复拍卖行在窄窗口下部分 UI 块超出面板。
 
 ---
 
@@ -79,7 +79,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 
 ## 安装
 
-1. 服务端：把 `module_shop-1.0.5.1.jar` 放进 `mods/`，重启（服务端**不需要** AtomLib）。
+1. 服务端：把 `module_shop-1.0.6.jar` 放进 `mods/`，重启（服务端**不需要** AtomLib）。
 2. 客户端：**玩家也必须安装同一个 jar**（商店界面是客户端代码），另外安装前置
    [AtomLib 0.1.0-beta](https://github.com/NoWordz/AtomLib/releases/tag/v0.1.0-beta-beta3)（`atomlib-1.21.1-neoforge-0.1.0-beta.jar`）。
    AtomLib 只支持 Windows x64 / ARM64；macOS / Linux 客户端会自动使用旧版界面。
@@ -94,8 +94,8 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 
 ```bash
 ./gradlew build          # Windows: gradlew.bat build
-# 产物：build/libs/module_shop-1.0.5.1.jar      主模组
-#       build/libs/module_shop-1.0.5.1-api.jar  公共 API + UI 套件（给附属编译用）
+# 产物：build/libs/module_shop-1.0.6.jar      主模组
+#       build/libs/module_shop-1.0.6-api.jar  公共 API + UI 套件（给附属编译用）
 # 首次构建会自动下载 AtomLib 发布包到 .atomlib/ 并做 SHA-256 校验（版本与校验值见 gradle.properties）
 
 # 需要一个带 KubeJS 桥接（脚本全局 ModuleShop）的 jar：
