@@ -25,6 +25,8 @@ public final class Config {
     public final ModConfigSpec.LongValue maxBalance;
     public final ModConfigSpec.IntValue transferCooldownTicks;
     public final ModConfigSpec.BooleanValue allowPlayerTransfer;
+    /** 新世界是否用客户端 / 服务器默认模板初始化商店。 */
+    public final ModConfigSpec.BooleanValue templateInitEnabled;
 
     // ---- 每日商店 ----
     public final ModConfigSpec.IntValue dailyShopSlots;
@@ -174,6 +176,10 @@ public final class Config {
         maxBalance = builder.comment("余额上限（0 = 不限）").defineInRange("maxBalance", 9999999999L, 0L, Long.MAX_VALUE);
         transferCooldownTicks = builder.comment("玩家间转账冷却（tick）").defineInRange("transferCooldownTicks", 20, 0, 100000);
         allowPlayerTransfer = builder.comment("是否允许玩家间转账").define("allowPlayerTransfer", true);
+        builder.pop();
+
+        builder.push("shop_template");
+        templateInitEnabled = builder.comment("新世界首次启动时，是否用 config/moduleshop/shop_config.json 初始化商店（只在新世界且商品仍是默认时生效）").define("templateInitEnabled", true);
         builder.pop();
 
         builder.push("daily_shop");
