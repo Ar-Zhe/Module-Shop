@@ -7,6 +7,8 @@ import cn.autoforged.module_shop.client.screen.IOStyle;
 import cn.autoforged.module_shop.client.ui.AtomUi;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.ListTable;
+import cn.autoforged.module_shop.client.ui.v2.V2;
 import cn.autoforged.module_shop.client.ui.widget.Button;
 import cn.autoforged.module_shop.client.ui.widget.Motion;
 import cn.autoforged.module_shop.data.ConfiguredOffer;
@@ -35,6 +37,9 @@ import net.minecraft.world.item.ItemStack;
  */
 public final class AdminPage implements ShopPage {
     private static final int PAGE_SIZE = 5;
+    /** UI v2：条目表（整池滚动，替代 5 条一页）。 */
+    private static final ListTable OFFERS = new ListTable();
+    private String offersMode = "";
     private static final float ROW_H = 22.0F;
     private static final float ROW_CARD = 20.0F;
     private static final float MENU_ROW = 14.0F;
@@ -172,7 +177,14 @@ public final class AdminPage implements ShopPage {
             Text.drawLine(canvas, line, AtomUi.REGULAR, Text.SMALL, IOStyle.ORANGE,
                     cx + 4.0F, rowB + 7.0F, cw - 10.0F, Text.Align.LEFT);
         } else {
-            renderPager(canvas, f, pages, rowB);
+            if (pool.isEmpty()) {
+                renderPager(canvas, f, pages, rowB);
+            } else {
+                prevBtn.visible(false);
+                nextBtn.visible(false);
+                V2.text(canvas, Component.translatable("gui.module_shop.v2.admin.count", pool.size()).getString(), V2.FS_S,
+                        IOStyle.TEXT_2, cx + 4.0F, rowB + 7.0F, cw - 10.0F, Text.Align.LEFT);
+            }
         }
 
         // ---- 「选择模块编辑」下拉：最后画，盖在列表之上 ----
@@ -236,61 +248,59 @@ public final class AdminPage implements ShopPage {
     }
 
     private void renderOffers(Canvas canvas, PageFrame f, String mode, boolean mall, boolean ship, boolean shop) {
-        int page = f.host().adminPage();
-        for (int i = 0; i < PAGE_SIZE; i++) {
-            int index = page * PAGE_SIZE + i;
-            if (index >= pool.size()) {
-                rowHoverT[i] = 0.0F;
-                continue;
-            }
+        if (!mode.equals(offersMode)) {
+            offersMode = mode;
+            OFFERS.scrollToTop();
+        }
+        float top = listY;
+        float bottom = f.barTop() - 20.0F;
+        float x = f.x();
+        float w = f.w();
+        float[][] cols = V2.columns(x, w, 10, 6, 14, 0, 60, 70, 90, 36, 80);
+        String[] heads = {"", Component.translatable("gui.module_shop.v2.col.item").getString(),
+                ship ? "" : Component.translatable("gui.module_shop.v2.col.rarity").getString(),
+                Component.translatable("gui.module_shop.v2.col.price").getString(),
+                Component.translatable(mall ? "gui.module_shop.v2.col.stock" : ship ? "gui.module_shop.v2.col.daily_cap"
+                        : "gui.module_shop.v2.col.amount").getString(), "#", ""};
+        Text.Align[] al = {Text.Align.LEFT, Text.Align.LEFT, Text.Align.LEFT, Text.Align.RIGHT, Text.Align.RIGHT, Text.Align.RIGHT,
+                Text.Align.RIGHT};
+        OFFERS.layout(x, top, w, bottom - top, cols, heads, al, null);
+        OFFERS.render(canvas, menuOpen ? null : f.host().items(), menuOpen ? -1 : f.mouseX(), menuOpen ? -1 : f.mouseY(), f.dtMs(),
+                pool.size(), (cv, index, ry, hover) -> {
             ConfiguredOffer offer = pool.get(index);
-            float y = listY + i * ROW_H;
-            boolean hover = !menuOpen && f.mouseX() >= listX && f.mouseX() < listX + listW
-                    && f.mouseY() >= y && f.mouseY() < y + ROW_CARD;
-            rowHoverT[i] = Motion.approach(rowHoverT[i], hover ? 1.0F : 0.0F, f.dtMs(), Motion.HOVER_MS);
-            // 出货箱的规则行：格式错误的那条整行标红，并显示它的原文
+            float cy = ry + V2.ROW / 2.0F;
             String error = ship && index < ClientShopData.adminShippingErrors.size()
                     ? ClientShopData.adminShippingErrors.get(index) : "";
+            float right = cols[6][0] + cols[6][1];
             if (ship && !error.isEmpty()) {
-                String raw = index < ClientShopData.adminShippingRaw.size()
-                        ? ClientShopData.adminShippingRaw.get(index) : "";
-                Draw.fill(canvas, listX, y, listW, ROW_CARD, 2.0F, Draw.alpha(IOStyle.RED_TINT, 1.0F));
-                Draw.stroke(canvas, listX, y, listW, ROW_CARD, 2.0F, 1.0F, IOStyle.RED);
-                Text.drawLine(canvas, raw, AtomUi.REGULAR, Text.BODY, IOStyle.RED, listX + 6.0F, y + 6.0F,
-                        listW - 40.0F, Text.Align.LEFT);
-                Text.drawLine(canvas, Component.translatable("gui.module_shop.shipping.row_broken").getString(),
-                        AtomUi.REGULAR, Text.SMALL, IOStyle.RED, listX + 6.0F, y + 15.0F, listW - 12.0F,
-                        Text.Align.LEFT);
-                continue;
+                String raw = index < ClientShopData.adminShippingRaw.size() ? ClientShopData.adminShippingRaw.get(index) : "";
+                Draw.fill(cv, x, ry, w, V2.ROW, 0, Draw.alpha(IOStyle.RED, 0.12F));
+                Draw.fill(cv, x, ry, 1.5F, V2.ROW, 0, IOStyle.RED);
+                V2.text(cv, raw, V2.FS_S, IOStyle.RED, cols[1][0], cy, cols[1][1], Text.Align.LEFT);
+                V2.text(cv, Component.translatable("gui.module_shop.shipping.row_broken").getString(), V2.FS_XS, IOStyle.RED,
+                        cols[2][0], cy, cols[4][0] + cols[4][1] - cols[2][0], Text.Align.LEFT);
+                OFFERS.button(cv, index, "remove", Component.translatable("gui.module_shop.v2.remove").getString(), V2.Btn.DANGER,
+                        right, ry, hover);
+                return;
             }
-            PageKit.hoverCard(canvas, listX, y, listW, ROW_CARD, rowHoverT[i]);
-            Draw.fill(canvas, listX + 3.0F, y + 4.0F, 3.0F, ROW_CARD - 8.0F, 1.0F, 0xFF000000 | offer.rarity.color());
-            Draw.fill(canvas, listX + 10.0F, y + 1.0F, 18.0F, 18.0F, 2.0F, IOStyle.SLOT_INNER);
-            Draw.stroke(canvas, listX + 10.0F, y + 1.0F, 18.0F, 18.0F, 2.0F, 1.0F, IOStyle.SLOT_BORDER);
+            Draw.fill(cv, cols[0][0] - 5, ry + 3, 1.5F, V2.ROW - 6, 0.75F, 0xFF000000 | offer.rarity.color());
             if (!menuOpen) {
-                f.host().items().add(offer.stack, listX + 11.0F, y + 2.0F);
+                f.host().items().add(offer.stack, cols[0][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, true);
             }
-            // 列：名称 | 品质 | 价格 | 数量（按内容区宽度等比分布，任何宽度都不压字）
-            float colName = listX + 34.0F;
-            float colRarity = listX + listW * 0.40F;
-            float colPrice = listX + listW * 0.56F;
-            float colAmount = listX + listW * 0.76F;
-            Text.drawLine(canvas, PageKit.plainName(offer.stack), AtomUi.REGULAR, Text.BODY, IOStyle.TEXT,
-                    colName, y + ROW_CARD / 2.0F, colRarity - 6.0F - colName, Text.Align.LEFT);
+            V2.text(cv, PageKit.plainName(offer.stack), V2.FS, IOStyle.TEXT, cols[1][0], cy, cols[1][1], Text.Align.LEFT);
             if (!ship) {
-                // 出货箱的条目是兑换规则，没有品质可言，这一列留空
-                Text.drawLine(canvas, Component.translatable(offer.rarity.translationKey()).getString(),
-                        AtomUi.REGULAR, Text.SMALL, 0xFF000000 | offer.rarity.color(),
-                        colRarity, y + ROW_CARD / 2.0F, colPrice - 6.0F - colRarity, Text.Align.LEFT);
+                V2.bold(cv, Component.translatable(offer.rarity.translationKey()).getString(), V2.FS_S,
+                        0xFF000000 | offer.rarity.color(), cols[2][0], cy, cols[2][1], Text.Align.LEFT);
             }
-            Text.drawLine(canvas, ClientShopData.money(offer.price), AtomUi.BOLD, Text.SMALL, IOStyle.ORANGE,
-                    colPrice, y + ROW_CARD / 2.0F, colAmount - 6.0F - colPrice, Text.Align.LEFT);
-            Text.drawLine(canvas, amountText(offer, mall, ship, shop), AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_2,
-                    colAmount, y + ROW_CARD / 2.0F, listX + listW - 6.0F - colAmount, Text.Align.LEFT);
-            if (hover && f.mouseX() >= listX + 10.0F && f.mouseX() < listX + 28.0F) {
-                f.host().items().setHovered(offer.stack);
-            }
-        }
+            V2.bold(cv, ClientShopData.money(offer.price), V2.FS, IOStyle.ORANGE, cols[3][0], cy, cols[3][1], Text.Align.RIGHT);
+            String amount = mall && offer.amount < 0 ? "∞" : amountText(offer, mall, ship, shop);
+            V2.text(cv, amount.isEmpty() ? "—" : amount, V2.FS_S, IOStyle.TEXT_2, cols[4][0], cy, cols[4][1], Text.Align.RIGHT);
+            V2.text(cv, String.valueOf(index + 1), V2.FS_XS, IOStyle.TEXT_3, cols[5][0], cy, cols[5][1], Text.Align.RIGHT);
+            float bx = OFFERS.button(cv, index, "remove", Component.translatable("gui.module_shop.v2.remove").getString(), V2.Btn.DANGER,
+                    right, ry, hover);
+            OFFERS.button(cv, index, "edit", Component.translatable("gui.module_shop.v2.edit").getString(), V2.Btn.NORMAL, bx, ry,
+                    hover);
+        });
     }
 
     /**
@@ -493,28 +503,28 @@ public final class AdminPage implements ShopPage {
             }
             return false;
         }
-        // 条目行：左键编辑、右键删除（格式错误的出货箱规则：左右键都删除）
-        int page = host.adminPage();
-        for (int i = 0; i < PAGE_SIZE; i++) {
-            int index = page * PAGE_SIZE + i;
-            if (index >= pool.size()) {
-                break;
+        // 条目表：左键编辑（「删除」按钮 / 右键 = 删除；格式错误的出货箱规则：左右键都删除）
+        if (!pool.isEmpty()) {
+            if (button == 0 && OFFERS.pressBar(mx, my)) {
+                return true;
             }
-            float y = listY + i * ROW_H;
-            if (mx < listX || mx >= listX + listW || my < y || my >= y + ROW_CARD) {
-                continue;
+            ListTable.Hit hit = OFFERS.click(mx, my);
+            if (hit == null || hit.row() < 0 || hit.row() >= pool.size()) {
+                return hit != null;
             }
             if (button != 0 && button != 1) {
                 return false;
             }
+            int index = hit.row();
             boolean broken = "shipping".equals(mode) && index < ClientShopData.adminShippingErrors.size()
                     && !ClientShopData.adminShippingErrors.get(index).isEmpty();
+            boolean remove = button == 1 || "remove".equals(hit.button());
             CompoundTag extra = new CompoundTag();
             extra.putString("mode", mode);
             extra.putInt("index", index);
             ClickSound.play();
             String action = broken ? (button == 0 ? "admin_remove" : "admin_remove_broken")
-                    : (button == 0 ? "admin_edit_gui" : "admin_remove");
+                    : (remove ? "admin_remove" : "admin_edit_gui");
             host.action(action, extra);
             return true;
         }
@@ -535,8 +545,10 @@ public final class AdminPage implements ShopPage {
         if (menuOpen || "signin".equals(f.host().adminMode())) {
             return true;
         }
-        // 条目列表：滚轮翻页（与底栏翻页按钮同一动作）
-        f.host().action(scrollY > 0 ? "admin_prev" : "admin_next", null);
+        // 条目表：平滑滚动（其余模块没有列表）
+        if (!pool.isEmpty()) {
+            return OFFERS.wheel(mx, my, scrollY, net.minecraft.client.gui.screens.Screen.hasShiftDown());
+        }
         return true;
     }
 

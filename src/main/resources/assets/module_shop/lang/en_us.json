@@ -1406,5 +1406,18 @@
   "gui.module_shop.v2.demand.need": "Need %s",
   "gui.module_shop.v2.demand.have": "Have %s",
   "gui.module_shop.v2.demand.short": "%s short",
-  "gui.module_shop.v2.demand.hint": "Click a row to see each item · items must match exactly (components too)"
+  "gui.module_shop.v2.demand.hint": "Click a row to see each item · items must match exactly (components too)",
+  "gui.module_shop.v2.trade.online": "%s online",
+  "gui.module_shop.v2.trade.requests": "Requests (%s)",
+  "gui.module_shop.v2.trade.incoming": "Incoming",
+  "gui.module_shop.v2.trade.ago": "%ss ago",
+  "gui.module_shop.v2.trade.accept": "Accept",
+  "gui.module_shop.v2.trade.decline": "Decline",
+  "gui.module_shop.v2.trade.st_online": "Online",
+  "gui.module_shop.v2.trade.start": "Trade",
+  "gui.module_shop.v2.trade.transfer": "Transfer",
+  "gui.module_shop.v2.trade.hint": "The trade window opens once they accept",
+  "gui.module_shop.v2.trade.transfer_hint": "Click Transfer and enter an amount; it arrives instantly",
+  "gui.module_shop.v2.admin.count": "%s entries · Edit to change · right-click or Remove to delete",
+  "gui.module_shop.v2.col.amount": "Amount"
 }

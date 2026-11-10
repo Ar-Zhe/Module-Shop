@@ -1406,5 +1406,18 @@
   "gui.module_shop.v2.demand.need": "需要 %s",
   "gui.module_shop.v2.demand.have": "背包有 %s",
   "gui.module_shop.v2.demand.short": "缺 %s",
-  "gui.module_shop.v2.demand.hint": "点一行展开每种物品的需要 / 背包数量 · 物品要同物品同组件才算"
+  "gui.module_shop.v2.demand.hint": "点一行展开每种物品的需要 / 背包数量 · 物品要同物品同组件才算",
+  "gui.module_shop.v2.trade.online": "在线 %s 人",
+  "gui.module_shop.v2.trade.requests": "交易请求 (%s)",
+  "gui.module_shop.v2.trade.incoming": "收到请求",
+  "gui.module_shop.v2.trade.ago": "%s 秒前",
+  "gui.module_shop.v2.trade.accept": "接受",
+  "gui.module_shop.v2.trade.decline": "拒绝",
+  "gui.module_shop.v2.trade.st_online": "在线",
+  "gui.module_shop.v2.trade.start": "发起交易",
+  "gui.module_shop.v2.trade.transfer": "转账",
+  "gui.module_shop.v2.trade.hint": "发起交易后对方接受才会打开交易面板",
+  "gui.module_shop.v2.trade.transfer_hint": "点「转账」输入金额，确认后立即到账",
+  "gui.module_shop.v2.admin.count": "共 %s 条 · 左键「编辑」改价 / 改数量 · 右键或「删除」移除",
+  "gui.module_shop.v2.col.amount": "数量"
 }
