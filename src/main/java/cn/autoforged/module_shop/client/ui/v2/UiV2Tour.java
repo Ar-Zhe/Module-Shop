@@ -31,6 +31,7 @@ public final class UiV2Tour {
     private static int step;
     private static int wait;
     private static boolean primed;
+    private static boolean seeded;
     private static boolean finished;
     private static String pendingShot;
 
@@ -58,6 +59,10 @@ public final class UiV2Tour {
             mc.player.connection.sendCommand("shop");
             wait = 60;
             return;
+        }
+        if (!seeded && Boolean.getBoolean("moduleshop.tourfake")) {
+            seeded = true;
+            seedFakeData();
         }
         if (pendingShot != null) {
             capture(mc, pendingShot);
@@ -124,6 +129,32 @@ public final class UiV2Tour {
                 mc.setScreen(new ShopScreen("mall"));
             });
         }
+    }
+
+    /** 测试世界里购物城是空的：在客户端塞一批演示商品（只用于截图，购买会被服务端拒绝）。 */
+    private static void seedFakeData() {
+        if (!cn.autoforged.module_shop.client.ClientShopData.mall.isEmpty()) {
+            return;
+        }
+        int i = 0;
+        for (net.minecraft.world.item.Item item : net.minecraft.core.registries.BuiltInRegistries.ITEM) {
+            if (item == net.minecraft.world.item.Items.AIR || (i++ % 9) != 4) {
+                continue;
+            }
+            var v = new cn.autoforged.module_shop.client.ClientShopData.MallView();
+            int h = Math.abs(net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(item).hashCode());
+            v.shelf = cn.autoforged.module_shop.client.ClientShopData.mall.size();
+            v.stack = new net.minecraft.world.item.ItemStack(item);
+            v.rarity = cn.autoforged.module_shop.data.Rarity.values()[h % 4];
+            v.price = 1 + h % (v.rarity.ordinal() == 0 ? 9000 : 400);
+            v.stock = h % 13 == 0 ? 0 : h % 4 == 0 ? -1 : 1 + h % 300;
+            v.sort = v.shelf;
+            cn.autoforged.module_shop.client.ClientShopData.mall.add(v);
+            if (cn.autoforged.module_shop.client.ClientShopData.mall.size() >= 120) {
+                break;
+            }
+        }
+        LOG.append("seeded mall=").append(cn.autoforged.module_shop.client.ClientShopData.mall.size()).append("\n");
     }
 
     private static void add(String name, Runnable r) {

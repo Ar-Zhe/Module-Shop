@@ -74,7 +74,7 @@ neoForge {
             def msprops = (project.findProperty('msprops') ?: '').toString()
             if (msprops) {
                 programArguments.addAll('--quickPlaySingleplayer', '新的世界')
-                msprops.split(',').each { p -> if (p) systemProperty(p, 'true') }
+                msprops.split(',').each { p -> if (p) { def kv = p.split('=', 2); systemProperty(kv[0], kv.length > 1 ? kv[1].replace('+', ',') : 'true') } }
             }
         }
 
