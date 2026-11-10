@@ -21,6 +21,23 @@ import net.minecraft.client.gui.GuiGraphics;
  * 之后调用方可以继续用 {@link GuiGraphics} 在 Skija 之上叠加原版内容（物品、tooltip、隐藏输入框）。
  */
 public final class SkiaFrame {
+    /** 当前（或最近一次）Skija 帧里 1 个画布单位 = 多少物理像素。旧界面 = GUI 缩放；UI v2 = 自有缩放。 */
+    private static float unitScale = 0.0F;
+
+    /**
+     * 画布单位 → 原版 GUI 坐标的换算系数（UI v2 自有缩放时不为 1）。
+     * 隐藏输入框（{@code SkiaTextField}）据此把原版 EditBox 放到和画面一致的位置。
+     */
+    public static float unitsToGui() {
+        float gui = (float) Minecraft.getInstance().getWindow().getGuiScale();
+        return unitScale <= 0.0F || gui <= 0.0F ? 1.0F : unitScale / gui;
+    }
+
+    /** 1 个画布单位 = 多少物理像素（还没画过任何帧时等于 GUI 缩放）。 */
+    public static float unitScale() {
+        return unitScale <= 0.0F ? (float) Minecraft.getInstance().getWindow().getGuiScale() : unitScale;
+    }
+
     private SkiaFrame() {
     }
 
@@ -51,13 +68,35 @@ public final class SkiaFrame {
         }
     }
 
+    /**
+     * 用自定义缩放绘制：画布 1 单位 = {@code scale} 个物理像素（不跟随 Minecraft 的 GUI 缩放）。
+     * UI v2 的界面用它按窗口实际大小决定自己的缩放；调用方负责把鼠标坐标换算到同一单位。
+     */
+    public static void drawScaled(GuiGraphics graphics, float scale, Consumer<Canvas> painter) {
+        RenderSystem.assertOnRenderThread();
+        if (!AtomUi.available()) {
+            return;
+        }
+        try {
+            drawUnchecked(graphics, null, painter, scale);
+        } catch (LinkageError error) {
+            AtomUi.disable(error);
+            Minecraft mc = Minecraft.getInstance();
+            mc.execute(() -> mc.setScreen(null));
+        }
+    }
+
     private static void drawUnchecked(GuiGraphics graphics, Runnable preUi, Consumer<Canvas> painter) {
+        drawUnchecked(graphics, preUi, painter, (float) Minecraft.getInstance().getWindow().getGuiScale());
+    }
+
+    private static void drawUnchecked(GuiGraphics graphics, Runnable preUi, Consumer<Canvas> painter, float scale) {
         graphics.flush();
         MinecraftRenderBridge bridge = MinecraftRenderBridge.get();
         if (preUi != null) {
             bridge.vanillaPass(preUi);
         }
-        float scale = (float) Minecraft.getInstance().getWindow().getGuiScale();
+        unitScale = scale;
         bridge.drawFrame((canvas, frame) -> {
             int base = canvas.getSaveCount();
             canvas.save();

@@ -209,10 +209,12 @@ public final class SkiaTextField extends UiComponent {
 
     /** 把隐藏 EditBox 的位置与本组件对齐（输入法候选窗据此定位）。 */
     private void syncEditBox() {
-        box.setX(Math.round(x + PAD_X));
-        box.setY(Math.round(y + (height - 8.0F) / 2.0F));
-        box.setWidth(Math.max(1, Math.round(width - PAD_X * 2.0F)));
-        box.setHeight(Math.max(1, Math.round(height)));
+        // 画布单位可能不等于 GUI 坐标（UI v2 自有缩放）：换算后再放原版 EditBox，保证点击与画面一致
+        float k = cn.autoforged.module_shop.client.ui.render.SkiaFrame.unitsToGui();
+        box.setX(Math.round((x + PAD_X) * k));
+        box.setY(Math.round((y + (height - 8.0F) / 2.0F) * k));
+        box.setWidth(Math.max(1, Math.round((width - PAD_X * 2.0F) * k)));
+        box.setHeight(Math.max(1, Math.round(height * k)));
         box.setVisible(visible && enabled);
         box.setEditable(enabled);
     }

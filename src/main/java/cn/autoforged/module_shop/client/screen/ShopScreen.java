@@ -55,7 +55,7 @@ import org.lwjgl.glfw.GLFW;
 /** 单界面、标签页切换的商店主界面。没有真实槽位，所有操作通过操作包发给服务端。 */
 public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     /** JEI 桥接用：本帧鼠标悬停的物品（换页签/离开图标即清空）。 */
-    private net.minecraft.world.item.ItemStack jeiHover = net.minecraft.world.item.ItemStack.EMPTY;
+    net.minecraft.world.item.ItemStack jeiHover = net.minecraft.world.item.ItemStack.EMPTY;
 
     // ================= AtomLib 迁移：已迁移的页面 =================
     // 迁移期新旧并存：页签 id 在这里注册了页面、且 AtomLib 可用时，内容区由页面用 Skija 绘制；
@@ -76,7 +76,13 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             new PlayerPickerPage(false),
             new PlayerPickerPage(true));
     /** 上一帧显示的页面：切换页签时让旧页面取消未完成的操作（输入框失焦等）。 */
-    private ShopPage lastPage;
+    ShopPage lastPage;
+    /** UI v2 外壳（AtomLib 可用且不在编辑布局时接管绘制与输入，见 ShellV2）。 */
+    private final ShellV2 shellV2 = new ShellV2(this);
+
+    private boolean v2Active() {
+        return AtomUi.available() && !this.layoutEdit;
+    }
 
     private static Map<String, ShopPage> registerPages(ShopPage... list) {
         Map<String, ShopPage> map = new HashMap<>();
@@ -99,15 +105,15 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         return java.util.Collections.unmodifiableMap(map);
     }
     /** 页面物品层：Skija 画完内容区后统一用原版绘制物品。 */
-    private final ItemOverlay pageItems = new ItemOverlay();
+    final ItemOverlay pageItems = new ItemOverlay();
     private final Motion.Clock pageClock = new Motion.Clock();
     /** 换页过渡时长与开始时间（0 = 没有在过渡）。 */
     private static final float PAGE_SWITCH_MS = 200.0F;
-    private long pageSwitchNanos;
+    long pageSwitchNanos;
     private float pageDtMs;
 
     /** 当前页签对应的已迁移页面；没迁移、编辑布局中或 AtomLib 不可用时返回 null（走旧绘制）。 */
-    private ShopPage activePage() {
+    ShopPage activePage() {
         if (this.layoutEdit || !AtomUi.available()) {
             return null;
         }
@@ -136,7 +142,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     }
 
     /** 页面上报的文字提示（本帧），在 render 最后统一画出。 */
-    private Component pendingTextTip;
+    Component pendingTextTip;
 
     @Override
     public void textTooltip(Component text) {
@@ -265,7 +271,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
      * 附属条目是否是「弹出式」：只注册了界面，或注册了页面但 AtomLib 不可用 / 页面创建失败（走回退界面）。
      * 弹出式条目点了是开界面，不能当作「当前页签」。
      */
-    private boolean isPopupExtension(String id) {
+    boolean isPopupExtension(String id) {
         cn.autoforged.module_shop.api.client.ShopModules.Entry entry = extensionOf(id);
         return entry != null && !(entry.hasPage() && AtomUi.available() && this.pages.containsKey(id)
                 && !cn.autoforged.module_shop.client.screen.shop.AddonPageAdapter.failed(id));
@@ -377,7 +383,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     private final java.util.Map<Integer, Boolean> flipFrom = new java.util.HashMap<>();
     /** 一次翻牌的时长（tick）：10 tick = 0.5s，接近真实纸牌翻转的节奏。 */
     private static final float FLIP_TICKS = 10.0F;
-    private String currentTab;
+    String currentTab;
     private int tickCounter;
     private int auctionPage;
     private int adminPage;
@@ -389,7 +395,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     private int scrollFadeBottom = Integer.MIN_VALUE;
     // ---- 侧栏拖拽（管理员编辑模式）----
     /** 是否处于布局编辑模式（从「商店设置」页的「编辑布局」进入）。 */
-    private boolean layoutEdit;
+    boolean layoutEdit;
     /** 签到页：管理员「编辑日程」态（点日历上的日期 = 新建 / 修改那天的日程）。 */
     private boolean signInEdit;
     /** 签到页本帧要画的悬浮提示：单个 Tooltip 与日程多行 Tooltip（都留到最后统一画，避免被后画的格子盖住）。 */
@@ -644,7 +650,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         return false;
     }
 
-    private List<String> visibleTabs() {
+    List<String> visibleTabs() {
         List<String> all = allModuleIds();
         List<String> ordered = new ArrayList<>();
         for (String id : ClientShopData.sidebarOrder) {
@@ -701,7 +707,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
      * <p>「右键重命名模块」这个功能已经去掉了：模块名和商店主标题不再混在一起，
      * 只保留左上角「模块商店」主标题可以改（编辑布局 → 右键主标题）。
      */
-    private static Component tabLabel(String id) {
+    static Component tabLabel(String id) {
         return tabOriginal(id);
     }
 
@@ -801,6 +807,18 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
                 && (!visibleTabs().contains(currentTab) || isPopupExtension(currentTab))) {
             List<String> tabs = builtInVisibleTabs();
             currentTab = tabs.isEmpty() ? TAB_IDS[0] : tabs.get(0);
+        }
+        if (v2Active()) {
+            // UI v2：外壳与页面全部由 ShellV2 绘制（自有缩放）；旧输入框不显示
+            if (this.mallSearchBox != null) {
+                this.mallSearchBox.setVisible(false);
+            }
+            if (this.tradeSearchBox != null) {
+                this.tradeSearchBox.setVisible(false);
+            }
+            super.render(g, mouseX, mouseY, partialTick);
+            this.shellV2.render(g, mouseX, mouseY);
+            return;
         }
         // 主题取色：日间 / 暗色切换过渡中时，每帧推进调色板插值。
         IOStyle.tickTheme();
@@ -1128,7 +1146,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     // ================= 编辑布局（Skija 版）=================
     // 几何约定与旧版 drawSidebar / drawLayoutOverlay / drawModuleManager / handleLayoutClick 完全一致，只换绘制。
 
-    private static NotificationType badgeOf(String id) {
+    static NotificationType badgeOf(String id) {
         return switch (id) {
             case "daily" -> NotificationType.SHOP;
             case "buyback" -> NotificationType.BUYBACK;
@@ -2485,6 +2503,10 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
 
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+        if (v2Active()) {
+            return this.shellV2.mouseDragged(mouseX, mouseY, button, dragX, dragY)
+                    || super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+        }
         ShopPage page = activePage();
         if (page != null && page.mouseDragged(pageFrame(mouseX, mouseY), mouseX, mouseY, button, dragX, dragY)) {
             return true;
@@ -2527,6 +2549,9 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
 
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (v2Active()) {
+            return this.shellV2.mouseReleased(mouseX, mouseY, button) || super.mouseReleased(mouseX, mouseY, button);
+        }
         ShopPage page = activePage();
         if (page != null && page.mouseReleased(pageFrame(mouseX, mouseY), mouseX, mouseY, button)) {
             return true;
@@ -2626,7 +2651,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     }
 
     /** 切换页签（普通点击与快捷键共用）。 */
-    private void selectTab(String tab) {
+    void selectTab(String tab) {
         if (tab == null || tab.isEmpty()) {
             return;
         }
@@ -5541,6 +5566,10 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     /** 鼠标滚轮：右侧内容区各自吃自己的滚轮；左侧模块列表（超过 6 个时）任何模式下都能滚。 */
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (v2Active()) {
+            return this.shellV2.mouseScrolled(mouseX, mouseY, scrollY)
+                    || super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+        }
         int dir = scrollY > 0 ? -1 : 1;
         // 交易 / 转账页：滚轮翻在线玩家列表。
         if (scrollY != 0.0D && !this.layoutEdit && activePage() == null
@@ -5699,6 +5728,9 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (v2Active()) {
+            return this.shellV2.mouseClicked(mouseX, mouseY, button) || super.mouseClicked(mouseX, mouseY, button);
+        }
         // 皮肤菜单展开时：这次点击只归它处理 —— 点皮肤就切换（菜单不收起），点别处只负责收起
         if (this.skinMenuOpen) {
             if (button == 0) {
@@ -5786,6 +5818,9 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (v2Active() && keyCode == GLFW.GLFW_KEY_ESCAPE && this.shellV2.escape()) {
+            return true;
+        }
         if (this.skinMenuOpen && keyCode == GLFW.GLFW_KEY_ESCAPE) {
             this.skinMenuOpen = false;
             return true;
@@ -5817,7 +5852,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
-    private void onAction(String action, CompoundTag extra) {
+    void onAction(String action, CompoundTag extra) {
         try {
             onActionInner(action, extra);
         } catch (Throwable error) {
