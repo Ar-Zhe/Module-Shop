@@ -254,11 +254,18 @@ public final class V2 {
             }
         }
         float rest = w - pad * 2 - fixed - gap * (spec.length - 1);
+        // 窗口窄时：固定列按比例收窄（最多到 60%），保证弹性列（名称）至少 90 单位宽
+        float shrink = 1.0F;
+        float minFlex = 90.0F * flex;
+        if (flex > 0 && rest < minFlex && fixed > 0) {
+            shrink = Math.max(0.6F, (w - pad * 2 - gap * (spec.length - 1) - minFlex) / fixed);
+            rest = w - pad * 2 - fixed * shrink - gap * (spec.length - 1);
+        }
         float flexW = flex == 0 ? 0 : Math.max(30, rest / flex);
         float[][] out = new float[spec.length][2];
         float ox = x + pad;
         for (int i = 0; i < spec.length; i++) {
-            float cw = spec[i] <= 0 ? flexW : spec[i];
+            float cw = spec[i] <= 0 ? flexW : spec[i] * shrink;
             out[i][0] = ox;
             out[i][1] = cw;
             ox += cw + gap;
