@@ -25,9 +25,10 @@ public class ServerboundShopActionPayloadMixin {
     private static boolean isAdminAction(String action) {
         if (action == null || action.isEmpty()) return false;
         String a = action.toLowerCase();
-        return a.contains("admin") || a.contains("refresh") || a.contains("restock")
+        // 只拦截明确的管理员操作；不拦截通用的 refresh / regen_daily / gen_redpacket 等玩家或功能操作
+        return a.contains("admin")
             || a.contains("signinsettings") || a.contains("demandsettings") || a.contains("shippinglimits")
-            || a.contains("gen") || a.contains("grant") || a.contains("layout")
+            || a.contains("gen_item") || a.contains("grant") || a.contains("layout")
             || a.contains("addmodule") || a.contains("removemodule") || a.contains("applylayout")
             || a.contains("editsettings") || a.contains("clearstall") || a.contains("mallimport");
     }
