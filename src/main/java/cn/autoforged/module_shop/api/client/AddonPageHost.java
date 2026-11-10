@@ -24,4 +24,15 @@ public interface AddonPageHost {
 
     /** 当前货币名（管理员可改名，已处理默认名的翻译）。 */
     String currencyName();
+
+    /**
+     * 本帧的物品层（UI v2）：在页面里 {@code items().add(stack, x, y, size, decorations)} 登记要画的物品图标，
+     * 商店会在 Skija 内容之后统一用原版渲染画出来，并处理悬停提示与 JEI 快捷键。返回 null 表示当前环境不支持
+     * （旧版主模组）。
+     *
+     * @since API 1.3
+     */
+    default cn.autoforged.module_shop.client.ui.render.ItemOverlay items() {
+        return null;
+    }
 }

@@ -1,7 +1,7 @@
-# Module Shop 公共 API · 开发者使用文档（API 1.2.0）
+# Module Shop 公共 API · 开发者使用文档（API 1.3.0）
 
 > 适用：`module_shop` **1.0.0** 起（MC 1.21.1 / NeoForge 21.1.248）；附属页面需 1.0.3+，皮肤接口（API 1.2）需 1.0.4+
-> API 版本：`1.2.0`（`ApiVersion.API_VERSION`，与模组版本独立；1.1.0 新增客户端扩展点 `ShopModules`，见第 10 节；
+> API 版本：`1.3.0`（1.3.0 新增 UI v2 列表视觉层 `client.ui.v2.V2` / `ListTable` 与附属物品层 `AddonPageHost.items()`，需 module_shop 1.1.0+；`ApiVersion.API_VERSION`，与模组版本独立；1.1.0 新增客户端扩展点 `ShopModules`，见第 10 节；
 > 1.2.0 新增 `ShopTheme` 的皮肤支持：渐变端点、柔光、弹窗底板，见第 10 节「皮肤」）
 
 ## 1. 接入方式
@@ -283,3 +283,14 @@ Text.drawLine(canvas, title, ShopTheme.bold(), Text.TITLE, 0xFFFFFFFF, x, y + 13
 > 想保留品牌色（例如红包的红色信封）的元素可以继续用固定颜色，皮肤只负责它周围的环境。
 
 完整示例：[module-shop: Red envelope（拼手气红包）](https://github.com/ChatMiaoPT-Meow/Module-Shop-RedPacket)。
+
+
+## UI v2（API 1.3，module_shop 1.1.0+）
+
+商店主界面在 1.1.0 改为统一的高密度列表视图，并改用**自有缩放**：附属页面拿到的 `AddonFrame` 坐标单位约为「窗口宽 / 800」，比旧版大得多，请按 `frame.w()/h()` 排版，不要写死尺寸。
+
+- `client.ui.v2.V2`：尺寸常量（`ROW` 行高、`HEAD` 表头、`BAR` 工具条、`FOOT` 底栏、`FS*` 字号）与小部件（`button`、`tag`、`segmented`、`check`、`filterItem`、`bar`、`foot`、`empty`、`tableHead`、`columns`、`iconButton`），颜色随皮肤。
+- `client.ui.v2.ListTable`：统一表格（排序表头、平滑滚动、悬停、行内按钮 `button(...)`、点击 `click(...)` 返回 `Hit(row, buttonId)`）。实例放在静态字段里，界面重建后滚动位置保留。
+- `AddonPageHost.items()`：物品层，`items().add(stack, x, y, size, decorations)` 登记物品图标，商店统一画并处理悬停提示 / JEI。旧版主模组返回 null。
+
+推荐版式：顶部 `V2.BAR` 高的工具条（标题 `FS_T` + 分段 / 搜索 + 右侧按钮），中间 `ListTable`，底部 `V2.foot(...)` 一行说明。
