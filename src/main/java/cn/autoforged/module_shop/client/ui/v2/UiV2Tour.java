@@ -94,7 +94,7 @@ public final class UiV2Tour {
             }
             pendingShot = String.format("v2-p%d-%s", pass, name);
             step++;
-            wait = Boolean.getBoolean("moduleshop.uiproto") ? 70 : 24;
+            wait = Boolean.getBoolean("moduleshop.uiproto") ? 70 : (name.startsWith("module_shop_") ? 80 : 24);
             return;
         }
         mc.setScreen(null);
@@ -119,7 +119,20 @@ public final class UiV2Tour {
             }
             add(tab, () -> mc.setScreen(new ShopScreen(tab)));
         }
+        // 附属页面（ShopModules 注册的内容区页面）
+        for (var entry : cn.autoforged.module_shop.api.client.ShopModules.entries()) {
+            String id = entry.id();
+            if (!only.isEmpty() && !List.of(only.split(",")).contains(id)) {
+                continue;
+            }
+            add(id, () -> mc.setScreen(new ShopScreen(id)));
+        }
         if (only.isEmpty()) {
+            add("dlg-bill", () -> mc.setScreen(new cn.autoforged.module_shop.client.screen.BillScreen()));
+            add("dlg-confirm", () -> mc.setScreen(new cn.autoforged.module_shop.client.screen.ShopConfirmScreen(
+                    net.minecraft.network.chat.Component.literal("确认购买"),
+                    net.minecraft.network.chat.Component.literal("购买 钻石 ×8，共 960 星币？"), ok -> {
+                    })));
             add("light", () -> {
                 IOStyle.applySkin("light");
                 mc.setScreen(new ShopScreen("mall"));

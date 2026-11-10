@@ -82,6 +82,26 @@ public abstract class SkiaDialog extends Screen {
         super(title);
     }
 
+    /**
+     * UI v2：二级界面的画布单位 → GUI 坐标系数（≤ 1）。GUI 缩放比界面缩放大时（如 1080p「自动」= 4），
+     * 弹窗按界面缩放绘制，和商店主界面一样大；其余情况为 1，与旧版完全一致。
+     */
+    private float k = 1.0F;
+    private int realW;
+    private int realH;
+
+    private float dlgScale() {
+        if (!AtomUi.available()) {
+            return 1.0F;
+        }
+        float gs = (float) net.minecraft.client.Minecraft.getInstance().getWindow().getGuiScale();
+        return gs <= 0 ? 1.0F : Math.min(1.0F, ShellV2.uiScale() / gs);
+    }
+
+    private double u(double gui) {
+        return gui / this.k;
+    }
+
     /** 当前是否走 Skija 绘制（init 时决定）。 */
     protected final boolean skia() {
         return this.skia;
@@ -121,6 +141,13 @@ public abstract class SkiaDialog extends Screen {
     protected final boolean skiaInit() {
         this.comps.clear();
         this.skia = AtomUi.available();
+        this.realW = this.width;
+        this.realH = this.height;
+        this.k = this.skia ? dlgScale() : 1.0F;
+        if (this.k < 1.0F) {
+            this.width = Math.round(this.realW / this.k);
+            this.height = Math.round(this.realH / this.k);
+        }
         if (this.openNanos == 0L) {
             this.openNanos = System.nanoTime();
         }
@@ -140,7 +167,21 @@ public abstract class SkiaDialog extends Screen {
         if (!this.skia) {
             return false;
         }
+        int vw = this.width;
+        int vh = this.height;
+        this.width = this.realW > 0 ? this.realW : vw;
+        this.height = this.realH > 0 ? this.realH : vh;
         this.renderBackground(g, mx, my, partialTick);
+        this.width = vw;
+        this.height = vh;
+        final int guiMx = mx;
+        final int guiMy = my;
+        mx = (int) Math.round(u(mx));
+        my = (int) Math.round(u(my));
+        final int fmx = mx;
+        final int fmy = my;
+        final float kk = this.k;
+        final float unit = kk * (float) net.minecraft.client.Minecraft.getInstance().getWindow().getGuiScale();
         long now = System.nanoTime();
         this.dtMs = this.lastNanos == 0L ? 16.0F : Math.min(100.0F, (now - this.lastNanos) / 1_000_000.0F);
         this.lastNanos = now;
@@ -161,7 +202,7 @@ public abstract class SkiaDialog extends Screen {
         this.hitClips.clear();
         this.frameLists.clear();
         this.listSaves.clear();
-        SkiaFrame.draw(g, canvas -> {
+        java.util.function.Consumer<io.github.humbleui.skija.Canvas> painter = canvas -> {
             int saved = Draw.beginOpacity(canvas, open);
             try {
                 if (scale != 1.0F) {
@@ -171,17 +212,25 @@ public abstract class SkiaDialog extends Screen {
                 }
                 paint(canvas);
                 for (UiComponent comp : this.comps) {
-                    comp.render(canvas, mx, my, this.dtMs);
+                    comp.render(canvas, fmx, fmy, this.dtMs);
                 }
                 paintOver(canvas);
             } finally {
                 canvas.restoreToCount(saved);
             }
-        });
+        };
+        if (kk < 1.0F) {
+            SkiaFrame.drawScaled(g, unit, painter);
+        } else {
+            SkiaFrame.draw(g, painter);
+        }
         this.hits.clear();
         this.hits.addAll(this.frameHits);
         this.lists.clear();
         this.lists.addAll(this.frameLists);
+        g.pose().pushPose();
+        g.pose().scale(kk, kk, 1.0F);
+        this.items.setClipScale(kk);
         if (scale != 1.0F) {
             g.pose().pushPose();
             g.pose().translate(pivotX, pivotY, 0.0F);
@@ -192,13 +241,22 @@ public abstract class SkiaDialog extends Screen {
         } else {
             this.items.flush(g, this.font);
         }
-        if (!this.items.renderTooltip(g, this.font, mx, my) && this.pendingTip != null) {
+        this.items.setClipScale(1.0F);
+        // 提示框也按界面缩放（略放大一点，保证可读）
+        float tk = Math.min(1.0F, kk * 1.15F);
+        g.pose().popPose();
+        g.pose().pushPose();
+        g.pose().scale(tk, tk, 1.0F);
+        int tmx = Math.round(guiMx / tk);
+        int tmy = Math.round(guiMy / tk);
+        if (!this.items.renderTooltip(g, this.font, tmx, tmy) && this.pendingTip != null) {
             List<net.minecraft.util.FormattedCharSequence> lines = new ArrayList<>();
             for (Component line : this.pendingTip) {
                 lines.addAll(this.font.split(line, 220));
             }
-            g.renderTooltip(this.font, lines, mx, my);
+            g.renderTooltip(this.font, lines, tmx, tmy);
         }
+        g.pose().popPose();
         return true;
     }
 
@@ -212,6 +270,8 @@ public abstract class SkiaDialog extends Screen {
 
     /** Skija 模式下的点击分流（子类 mouseClicked 守卫里调用）。 */
     protected final boolean skiaClicked(double mx, double my, int button) {
+        mx = u(mx);
+        my = u(my);
         if (listPress(mx, my, button)) {
             return true;
         }
@@ -259,6 +319,8 @@ public abstract class SkiaDialog extends Screen {
 
     /** Skija 模式下的松开分流。 */
     protected final boolean skiaReleased(double mx, double my, int button) {
+        mx = u(mx);
+        my = u(my);
         boolean handled = false;
         if (this.draggingList != null) {
             this.draggingList.sc.releaseBar();
@@ -285,6 +347,10 @@ public abstract class SkiaDialog extends Screen {
     @Override
     public boolean mouseDragged(double mx, double my, int button, double dx, double dy) {
         if (this.skia) {
+            mx = u(mx);
+            my = u(my);
+            dx = u(dx);
+            dy = u(dy);
             if (this.draggingList != null) {
                 this.draggingList.sc.dragBar(my, this.draggingList.h);
                 return true;
@@ -302,6 +368,8 @@ public abstract class SkiaDialog extends Screen {
     @Override
     public boolean mouseScrolled(double mx, double my, double scrollX, double scrollY) {
         if (this.skia) {
+            mx = u(mx);
+            my = u(my);
             for (UiComponent comp : this.comps) {
                 if (comp.mouseScrolled(mx, my, scrollY)) {
                     return true;
@@ -520,15 +588,24 @@ public abstract class SkiaDialog extends Screen {
 
     // ------------------------------------------------------------------ 绘制小工具
 
-    /** 标准弹窗面板：底色 + 边框 + 标题（粗体居中）+ 标题下分隔线。 */
+    /**
+     * 标准弹窗面板（UI v2 风格）：外投影 + 平铺底色 + 顶部标题条（左对齐粗体 + 分隔线）+ 1px 边框。
+     * 与商店主界面的顶栏 / 表头同一套配色，7 套皮肤自动适配。
+     */
     protected final void panel(Canvas canvas, float x, float y, float w, float h, String title) {
-        Draw.glass(canvas, x, y, w, h, IOStyle.SHEET, IOStyle.SHEET_2, IOStyle.GLASS_DIALOG, IOStyle.BORDER,
-                IOStyle.INNER_LIGHT, IOStyle.GLOW_1, IOStyle.SHADOW_TINT, 10.0F, 3.0F);
+        Draw.outerShadow(canvas, x, y, w, h, 6.0F, 12.0F, 3.0F, IOStyle.SHADOW_TINT);
+        Draw.fill(canvas, x, y, w, h, 6.0F, IOStyle.CONTENT);
         if (title != null) {
-            Text.drawLine(canvas, title, AtomUi.BOLD, Text.TITLE, IOStyle.TEXT, x + PAD, y + HEADER_H / 2.0F,
-                    w - PAD * 2, Text.Align.CENTER);
-            Draw.fill(canvas, x + 1, y + HEADER_H, w - 2, 1.0F, 0.0F, IOStyle.BORDER_DIM);
+            int saved = canvas.save();
+            canvas.clipRRect(io.github.humbleui.types.RRect.makeXYWH(x, y, w, h, 6.0F), true);
+            Draw.fill(canvas, x, y, w, HEADER_H, 0.0F, IOStyle.SIDEBAR);
+            canvas.restoreToCount(saved);
+            Draw.fill(canvas, x + 8.0F, y + HEADER_H / 2.0F - 4.5F, 2.5F, 9.0F, 1.25F, IOStyle.BLUE);
+            Text.drawLine(canvas, title, AtomUi.BOLD, Text.TITLE, IOStyle.TEXT, x + 15.0F, y + HEADER_H / 2.0F,
+                    w - PAD - 15.0F, Text.Align.LEFT);
+            Draw.fill(canvas, x, y + HEADER_H - 0.5F, w, 0.5F, 0.0F, IOStyle.BORDER_DIM);
         }
+        Draw.stroke(canvas, x, y, w, h, 6.0F, 0.75F, IOStyle.BORDER_DIM);
     }
 
     /** 容器槽位底框：(x, y) 为物品左上角（与原版 Slot.x/y 一致），框画在外扩 1px 的 18×18 上。 */

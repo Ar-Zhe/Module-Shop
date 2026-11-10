@@ -75,14 +75,22 @@ final class ShellV2 {
 
     // =========================================================== 几何
 
-    void layout() {
+    /** UI v2 的界面缩放：1 个画布单位 = 多少物理像素（按窗口大小，0.25 步进）。二级界面也用它。 */
+    static float uiScale() {
         var win = Minecraft.getInstance().getWindow();
         float fw = Math.max(1, win.getWidth());
         float fh = Math.max(1, win.getHeight());
         float s = Math.min(fw * 0.94F / 740.0F, fh * 0.92F / 400.0F);
         // 0.25 步进；下限 1.5（窗口很小时降到 1，保证面板放得下），字不会小到看不清
         float min = Math.min(1.5F, Math.max(1.0F, fw / 560.0F));
-        this.ui = Math.max(min, (float) Math.floor(s * 4.0F) / 4.0F);
+        return Math.max(min, (float) Math.floor(s * 4.0F) / 4.0F);
+    }
+
+    void layout() {
+        var win = Minecraft.getInstance().getWindow();
+        float fw = Math.max(1, win.getWidth());
+        float fh = Math.max(1, win.getHeight());
+        this.ui = uiScale();
         this.vw = fw / this.ui;
         this.vh = fh / this.ui;
         this.pw = Math.min(this.vw * 0.96F, 800.0F);
@@ -184,15 +192,22 @@ final class ShellV2 {
             SkiaFrame.drawScaled(g, this.ui, this::drawSkinMenu);
         }
 
-        // 提示：物品原版 tooltip（同时供 JEI 快捷键）优先，其次是文字提示
+        // 提示：物品原版 tooltip（同时供 JEI 快捷键）优先，其次是文字提示。
+        // GUI 缩放大时原版提示框会比界面大一倍：按界面自己的缩放把它缩小（原版定位仍会把它夹在屏幕内）。
         ItemStack hovered = this.screen.pageItems.hovered();
         this.screen.jeiHover = hovered;
+        float tk = Math.min(1.0F, this.ui * 0.85F / (float) gs);
+        int tmx = Math.round(mouseX / tk);
+        int tmy = Math.round(mouseY / tk);
+        g.pose().pushPose();
+        g.pose().scale(tk, tk, 1.0F);
         if (!hovered.isEmpty()) {
-            g.renderTooltip(Minecraft.getInstance().font, hovered, mouseX, mouseY);
+            g.renderTooltip(Minecraft.getInstance().font, hovered, tmx, tmy);
         } else if (this.screen.pendingTextTip != null) {
             g.renderTooltip(Minecraft.getInstance().font,
-                    Minecraft.getInstance().font.split(this.screen.pendingTextTip, 220), mouseX, mouseY);
+                    Minecraft.getInstance().font.split(this.screen.pendingTextTip, 260), tmx, tmy);
         }
+        g.pose().popPose();
         this.screen.pendingTextTip = null;
     }
 
