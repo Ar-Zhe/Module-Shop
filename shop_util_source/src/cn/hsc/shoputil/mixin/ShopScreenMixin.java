@@ -176,9 +176,13 @@ public abstract class ShopScreenMixin {
                 // 本体没有这个方法时不做可见性校验，退回注册表判断
             }
 
-            java.lang.reflect.Method m = self.getClass().getDeclaredMethod("selectTab", String.class);
-            m.setAccessible(true);
-            m.invoke(self, savedTab);
+            // 直接设置 currentTab 字段，不调 selectTab
+            // 原因：selectTab 在 init 阶段调用会触发 ShopPage 的 onShow / markFresh 等生命周期，
+            // 打乱本体 daily / signin / mall 页的数据刷新状态（服务端推新数据时这些页会误以为已最新，跳过刷新）。
+            // 只改字段值，本体 render 时自然会用新值渲染，不干扰服务端数据同步。
+            java.lang.reflect.Field f = self.getClass().getDeclaredField("currentTab");
+            f.setAccessible(true);
+            f.set(self, savedTab);
         } catch (Exception ignored) {}
     }
 }
