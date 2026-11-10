@@ -4,7 +4,7 @@ license="All Rights Reserved"
 
 [[mods]]
 modId="shop_util"
-version="1.1.1"
+version="1.1.2"
 displayName="商店整合附属"
 authors="hsc"
 description="合并购物城定价注入、商店设置同步、商店权限密码门、标签页记忆四个功能。"
