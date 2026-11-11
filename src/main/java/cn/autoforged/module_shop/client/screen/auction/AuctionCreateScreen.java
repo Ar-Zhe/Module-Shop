@@ -274,23 +274,23 @@ public final class AuctionCreateScreen extends SkiaDialog {
         // ---------------- 右：参数 ----------------
         float rx = ix + gridW + 12.0F;
         float rw = iw - gridW - 12.0F;
-        float labelW = 56.0F;
+        float labelW = Math.min(56.0F, Math.max(28.0F, rw * 0.42F));
         float fx = rx + labelW;
-        float fw = rw - labelW;
+        float fw = Math.max(1.0F, rw - labelW);
         float ry = iy;
-        row(c, rx, ry, "gui.module_shop.auction.f_count");
-        count.bounds(fx, ry, 48, 16).visible(true);
+        row(c, rx, ry, "gui.module_shop.auction.f_count", labelW - 2.0F);
+        count.bounds(fx, ry, Math.min(48.0F, fw), 16).visible(true);
         ry += 22;
-        row(c, rx, ry, "gui.module_shop.auction.f_allow_bid");
+        row(c, rx, ry, "gui.module_shop.auction.f_allow_bid", labelW - 2.0F);
         toggle(c, "allowBid", fx, ry + 2, allowBid, () -> allowBid = !allowBid);
         small(c, AuctionUi.tr(allowBid ? "gui.module_shop.auction.allow_bid_on" : "gui.module_shop.auction.allow_bid_off"),
                 fx + 28, ry + 8, fw - 28, IOStyle.TEXT_2);
         ry += 22;
         if (allowBid) {
-            row(c, rx, ry, "gui.module_shop.auction.f_start");
+            row(c, rx, ry, "gui.module_shop.auction.f_start", labelW - 2.0F);
             start.bounds(fx, ry, fw, 16).visible(true);
             ry += 22;
-            row(c, rx, ry, "gui.module_shop.auction.f_increment");
+            row(c, rx, ry, "gui.module_shop.auction.f_increment", labelW - 2.0F);
             increment.bounds(fx, ry, fw, 16).visible(true);
             ry += 22;
         } else {
@@ -298,18 +298,20 @@ public final class AuctionCreateScreen extends SkiaDialog {
             increment.visible(false);
         }
         if (s.allowBuyout) {
-            row(c, rx, ry, allowBid ? "gui.module_shop.auction.f_buyout" : "gui.module_shop.auction.f_price");
+            row(c, rx, ry, allowBid ? "gui.module_shop.auction.f_buyout" : "gui.module_shop.auction.f_price",
+                    labelW - 2.0F);
             buyout.bounds(fx, ry, fw, 16).visible(true);
             ry += 22;
         } else {
             buyout.visible(false);
         }
-        row(c, rx, ry, "gui.module_shop.auction.f_duration");
+        row(c, rx, ry, "gui.module_shop.auction.f_duration", labelW - 2.0F);
         float cx = fx;
         float cy = ry;
         for (int minutes : s.durations) {
             String label = AuctionUi.duration(minutes);
-            float cw = Math.max(30.0F, Text.width(label, AtomUi.REGULAR, Text.BODY) + 10.0F);
+            float cw = Math.min(Math.max(1.0F, fw), Math.max(30.0F,
+                    Text.width(label, AtomUi.REGULAR, Text.BODY) + 10.0F));
             if (cx + cw > rx + rw) {
                 cx = fx;
                 cy += 18;
@@ -332,8 +334,9 @@ public final class AuctionCreateScreen extends SkiaDialog {
         if (problem != null && !selected().isEmpty()) {
             small(c, problem, rx, bottom - 26, rw, IOStyle.RED);
         }
-        float bw = 80.0F;
-        button(c, "cancel", AuctionUi.tr("gui.module_shop.cancel"), rx + rw - bw * 2 - 6, bottom - 18, bw, 18,
+        float buttonGap = Math.min(6.0F, Math.max(0.0F, rw * 0.04F));
+        float bw = Math.min(80.0F, Math.max(1.0F, (rw - buttonGap) / 2.0F));
+        button(c, "cancel", AuctionUi.tr("gui.module_shop.cancel"), rx + rw - bw * 2 - buttonGap, bottom - 18, bw, 18,
                 Button.Kind.NORMAL, true, this::onClose);
         button(c, "submit", AuctionUi.tr(pending ? "gui.module_shop.auction.submitting" : "gui.module_shop.auction.submit"),
                 rx + rw - bw, bottom - 18, bw, 18, Button.Kind.ACCENT, problem == null && !pending, this::submit);
@@ -343,8 +346,9 @@ public final class AuctionCreateScreen extends SkiaDialog {
         return p == Math.floor(p) ? Long.toString((long) p) : String.format("%.2f", p);
     }
 
-    private static void row(Canvas c, float x, float y, String key) {
-        Text.drawLine(c, AuctionUi.tr(key), AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_2, x, y + 8, 54, Text.Align.LEFT);
+    private static void row(Canvas c, float x, float y, String key, float width) {
+        Text.drawLine(c, AuctionUi.tr(key), AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_2, x, y + 8,
+                Math.max(1.0F, width), Text.Align.LEFT);
     }
 
     @Override

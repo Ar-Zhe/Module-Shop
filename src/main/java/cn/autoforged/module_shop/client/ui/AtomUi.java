@@ -70,6 +70,21 @@ public final class AtomUi {
         }
     }
 
+    /**
+     * 运行中发现 AtomLib 不兼容（典型是前置库更新后某个方法 / 类没了，抛 {@link LinkageError}）时调用：
+     * 关掉本模组的 AtomLib 运行时，之后 {@link #available()} 一律返回 false，所有界面改走旧版绘制。
+     * 只禁用一次，重复调用无副作用。
+     */
+    public static synchronized void disable(Throwable cause) {
+        if (attempted && text == null) {
+            return;
+        }
+        attempted = true;
+        failure = cause;
+        LOGGER.error("[module_shop] AtomLib 运行中出错（可能是前置库版本不兼容），本次游戏改用旧版界面", cause);
+        closeQuietly();
+    }
+
     /** 初始化失败的原因（没失败或还没尝试时为 null）。 */
     public static synchronized Throwable failure() {
         return failure;

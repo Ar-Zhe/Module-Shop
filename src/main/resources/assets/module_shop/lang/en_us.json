@@ -13,6 +13,7 @@
   "gui.module_shop.input.shop_title": "New title",
   "gui.module_shop.shop_title_info": "Leave empty to restore the default, max %s characters",
   "gui.module_shop.shop_title_hint": "Right-click to rename \u0022%s\u0022",
+  "msg.module_shop.atomlib_incompatible": "§e[Module Shop] AtomLib is incompatible with this version; switched to the legacy UI. Please reopen the shop.",
   "msg.module_shop.shop_title_renamed": "Shop title changed to \u0022%s\u0022",
   "msg.module_shop.shop_title_reset": "Shop title restored to default",
   "msg.module_shop.shop_title_too_long": "Title too long, max %s characters",

@@ -13,6 +13,7 @@
   "gui.module_shop.input.shop_title": "新标题",
   "gui.module_shop.shop_title_info": "留空 = 恢复默认「模块商店」，最多 %s 个字",
   "gui.module_shop.shop_title_hint": "右键重命名「%s」",
+  "msg.module_shop.atomlib_incompatible": "§e[模块商店] 前置库 AtomLib 与当前版本不兼容，已切换到旧版界面，请重新打开商店。",
   "msg.module_shop.shop_title_renamed": "主标题已改为「%s」",
   "msg.module_shop.shop_title_reset": "主标题已恢复默认",
   "msg.module_shop.shop_title_too_long": "标题太长，最多 %s 个字",
