@@ -70,6 +70,12 @@ neoForge {
             client()
             // Comma-separated list of namespaces to load gametests from. Empty = all namespaces.
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            // 开发期 UI 巡检：-Pmsprops=moduleshop.uitour,moduleshop.tourquit → 自动进「新的世界」并截图（见 UiV2Tour）
+            def msprops = (project.findProperty('msprops') ?: '').toString()
+            if (msprops) {
+                programArguments.addAll('--quickPlaySingleplayer', '新的世界')
+                msprops.split(',').each { p -> if (p) { def kv = p.split('=', 2); systemProperty(kv[0], kv.length > 1 ? kv[1].replace('+', ',') : 'true') } }
+            }
         }
 
         server {
@@ -220,6 +226,11 @@ def apiJar = tasks.register('apiJar', Jar) {
         include 'cn/autoforged/module_shop/client/ui/render/Text*.class'
         include 'cn/autoforged/module_shop/client/ui/render/SkiaFrame*.class'
         include 'cn/autoforged/module_shop/client/ui/widget/**'
+        // API 1.3（UI v2）：统一列表视觉层与物品层，附属页面与内置页面用同一套表格 / 控件
+        include 'cn/autoforged/module_shop/client/ui/v2/V2*.class'
+        include 'cn/autoforged/module_shop/client/ui/v2/ListTable*.class'
+        include 'cn/autoforged/module_shop/client/ui/render/ItemOverlay*.class'
+        include 'cn/autoforged/module_shop/client/ui/render/StyledText*.class'
     }
     exclude 'cn/autoforged/module_shop/api/internal/**'
 }

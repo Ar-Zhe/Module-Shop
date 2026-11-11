@@ -101,6 +101,19 @@ public final class ClientEvents {
     @SubscribeEvent
     public static void onClientTick(net.neoforged.neoforge.client.event.ClientTickEvent.Post event) {
         cn.autoforged.module_shop.client.CurrencyNames.apply(ClientShopData.moneySuffix);
+        if (cn.autoforged.module_shop.client.ui.v2.UiV2Tour.enabled()) {
+            cn.autoforged.module_shop.client.ui.v2.UiV2Tour.tick(net.minecraft.client.Minecraft.getInstance());
+        }
+    }
+
+    /** UI v2 原型入口：客户端命令 /shopui2（原型阶段，正式版会去掉）。 */
+    @SubscribeEvent
+    public static void onRegisterClientCommands(net.neoforged.neoforge.client.event.RegisterClientCommandsEvent event) {
+        event.getDispatcher().register(net.minecraft.commands.Commands.literal("shopui2").executes(ctx -> {
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+            mc.tell(() -> mc.setScreen(new cn.autoforged.module_shop.client.ui.v2.ShopV2ProtoScreen()));
+            return 1;
+        }));
     }
 
     /** 退出世界时清空界面层级与「已关闭界面」记录（返回栈是纯客户端状态，不能跨存档残留）。 */

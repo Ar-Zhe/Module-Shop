@@ -71,7 +71,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu>
     private static final int DD_CAT_ROWS = 9;
 
     /** 一行「可卖物品」。 */
-    private record Entry(ItemStack stack, long price, int dailyMax, String id, String namespace) {
+    public record Entry(ItemStack stack, long price, int dailyMax, String id, String namespace) {
     }
 
     /** 规则原文 → 展开后的可卖物品（缓存，规则没变就不重建）。 */
@@ -132,7 +132,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu>
     }
 
     /** 把规则展开成"具体能卖哪些物品"（标签 / 整模组会展开成物品；单条规则最多 400 件，总计 2000 件）。 */
-    private static List<Entry> allEntries() {
+    public static List<Entry> allEntries() {
         String text = ClientShopData.shipRulesText == null ? "" : ClientShopData.shipRulesText;
         if (!entryCache.isEmpty() && text.equals(entryKey)) {
             return entryCache;
@@ -173,7 +173,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu>
         return list;
     }
 
-    private static String modName(String namespace) {
+    public static String modName(String namespace) {
         try {
             return net.neoforged.fml.ModList.get().getModContainerById(namespace)
                     .map(c -> c.getModInfo().getDisplayName()).orElse(namespace);

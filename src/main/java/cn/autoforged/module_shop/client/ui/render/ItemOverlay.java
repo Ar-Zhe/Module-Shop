@@ -38,6 +38,12 @@ public final class ItemOverlay {
     private double mouseX;
     private double mouseY;
     private boolean hoverEnabled = true;
+    /** 画布单位 → GUI 坐标（UI v2 自有缩放时 ≠ 1），只影响裁剪框。 */
+    private float clipScale = 1.0F;
+
+    public void setClipScale(float clipScale) {
+        this.clipScale = clipScale <= 0 ? 1.0F : clipScale;
+    }
     private ItemStack hovered = ItemStack.EMPTY;
 
     /** 每帧开始时调用：清空上一帧的登记。hoverEnabled=false 时不检测悬停（例如被弹窗遮住）。 */
@@ -140,7 +146,9 @@ public final class ItemOverlay {
                 }
                 active = e.clip;
                 if (active != null) {
-                    graphics.enableScissor(active.x0, active.y0, active.x1, active.y1);
+                    // 裁剪是画布单位；原版 scissor 不受 pose 缩放影响，要按 clipScale 换算成 GUI 坐标
+                    graphics.enableScissor((int) Math.floor(active.x0 * clipScale), (int) Math.floor(active.y0 * clipScale),
+                            (int) Math.ceil(active.x1 * clipScale), (int) Math.ceil(active.y1 * clipScale));
                     scissor = true;
                 }
             }

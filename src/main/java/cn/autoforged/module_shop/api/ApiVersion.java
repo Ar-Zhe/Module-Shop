@@ -24,7 +24,7 @@ package cn.autoforged.module_shop.api;
  */
 public final class ApiVersion {
     /** 当前 API 版本（语义化版本）。 */
-    public static final String API_VERSION = "1.2.0";
+    public static final String API_VERSION = "1.3.0";
     /** 主版本号：外部可用它做依赖检查。 */
     public static final int API_MAJOR = 1;
     /**

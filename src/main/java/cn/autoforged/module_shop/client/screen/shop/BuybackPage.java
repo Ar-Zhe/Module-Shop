@@ -3,239 +3,375 @@ package cn.autoforged.module_shop.client.screen.shop;
 import cn.autoforged.module_shop.client.ClickSound;
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.screen.IOStyle;
-import cn.autoforged.module_shop.client.ui.AtomUi;
+import cn.autoforged.module_shop.client.screen.Nav;
+import cn.autoforged.module_shop.client.screen.ShopConfirmScreen;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
-import cn.autoforged.module_shop.client.ui.widget.Button;
-import cn.autoforged.module_shop.client.ui.widget.Motion;
-import cn.autoforged.module_shop.client.ui.widget.ScrollController;
+import cn.autoforged.module_shop.client.ui.v2.ListTable;
+import cn.autoforged.module_shop.client.ui.v2.V2;
 import cn.autoforged.module_shop.data.DailyBuybackEntry;
 import io.github.humbleui.skija.Canvas;
+import java.util.ArrayList;
 import java.util.List;
+import net.minecraft.client.Minecraft;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 
 /**
- * 每日收购页（Skija 版）。
+ * 每日收购（UI v2 列表视图）。
  *
- * <ul>
- *     <li>一行一个收购项：左侧品质色条 + 物品 + 名称，右侧收购价（金色）与还能收购的数量（卖完变红）；
- *     整行悬停显示物品 tooltip，点击打开数量输入（sell_buyback_gui）；平滑滚动；</li>
- *     <li>底部操作条：全清奖励进度（左）、管理员「全清奖励」开关与「设置」、付费「刷新收购」（悬停显示次数与价格）。</li>
- * </ul>
+ * <p>表格：物品 · 单价 · 背包持有 · 今日已收 / 上限 · 全卖可得 · 卖出。顶部：全部 / 背包里有 / 已收满 筛选、
+ * 全清奖励进度、刷新、<b>全部卖出</b>。
+ *
+ * <p><b>全部卖出</b>是纯客户端编排：按「物品种类」统计背包数量（与服务端扣物品的规则一致），
+ * 确认后逐条发送原有的 {@code sell_buyback}（index + quantity），服务端仍按额度与余额上限截断。
  */
 public final class BuybackPage implements ShopPage {
-    private static final float ROW_H = 26.0F;
-    private static final float CARD_H = 22.0F;
+    private static final ListTable TABLE = new ListTable();
+    /** 0 = 全部，1 = 背包里有，2 = 已收满。 */
+    private static int filter;
 
-    private static float savedScroll;
-
-    private final ScrollController scroll = new ScrollController();
-    private boolean restored;
-    private float[] hoverT = new float[0];
-    private float toggleT = -1.0F;
-
-    private final Button refresh = new Button(Button.Kind.NORMAL,
-            () -> Component.translatable("gui.module_shop.refresh_buyback").getString(), null)
-            .radius(2.0F).fontSize(Text.SMALL);
-    private final Button bonusSet = new Button(Button.Kind.NORMAL,
-            () -> Component.translatable("gui.module_shop.buyback_bonus_set").getString(), null)
-            .radius(2.0F).fontSize(Text.SMALL);
-
-    // 本帧几何
-    private float listX, listY, listW, listH;
-    private float toggleX, toggleY;
+    private List<Integer> shown = new ArrayList<>();
+    private float[][] segRects = new float[0][2];
+    private float segY;
+    private float[] refreshRect;
+    private float[] sellAllRect;
+    private float[] bonusSetRect;
+    private float[] bonusToggleRect;
 
     @Override
     public String id() {
         return "buyback";
     }
 
-    @Override
-    public void render(Canvas canvas, PageFrame f) {
-        List<DailyBuybackEntry> list = ClientShopData.dailyBuyback;
-        listX = f.x();
-        listY = f.y() + 4.0F;
-        listW = f.w();
-        listH = f.listBottom() - listY;
-
-        if (list.isEmpty()) {
-            PageKit.emptyText(canvas, Component.translatable("gui.module_shop.empty").getString(),
-                    f.x(), f.y() + 44.0F, f.w());
-        } else {
-            if (hoverT.length != list.size()) {
-                hoverT = new float[list.size()];
-            }
-            scroll.setContent(list.size() * ROW_H - (ROW_H - CARD_H), listH);
-            if (!restored) {
-                scroll.scrollTo(savedScroll, false);
-                restored = true;
-            }
-            scroll.update();
-            savedScroll = scroll.offset();
-
-            float rowW = listW - 2.0F - (scroll.canScroll() ? 6.0F : 0.0F);
-            boolean inList = f.mouseX() >= listX && f.mouseX() < listX + rowW
-                    && f.mouseY() >= listY && f.mouseY() < listY + listH;
-            int saved = canvas.save();
-            f.host().items().pushClip(listX, listY, listW, listH);
-            try {
-                Draw.clip(canvas, listX - 1.0F, listY, listW + 2.0F, listH);
-                float off = scroll.offset();
-                for (int i = Math.max(0, (int) (off / ROW_H)); i < list.size(); i++) {
-                    float y = listY + i * ROW_H - off;
-                    if (y > listY + listH) {
-                        break;
-                    }
-                    DailyBuybackEntry e = list.get(i);
-                    boolean hover = inList && !scroll.isDragging() && f.mouseY() >= y && f.mouseY() < y + CARD_H;
-                    hoverT[i] = Motion.approach(hoverT[i], hover ? 1.0F : 0.0F, f.dtMs(), Motion.HOVER_MS);
-                    float x = listX + 2.0F;
-                    PageKit.hoverCard(canvas, x, y, rowW, CARD_H, hoverT[i]);
-                    // 品质色条
-                    Draw.fill(canvas, x + 3.0F, y + 4.0F, 2.5F, CARD_H - 8.0F, 1.0F, IOStyle.rarity(e.rarity));
-                    PageKit.slot(canvas, f.host(), e.stack, x + 9.0F, y + 2.0F);
-                    if (hover) {
-                        f.host().items().setHovered(e.stack); // 整行悬停都显示该物品的 tooltip
-                    }
-                    // 右侧：收购价 / 还能收购
-                    String price = Component.translatable("gui.module_shop.buyback_price",
-                            ClientShopData.money(e.price)).getString();
-                    int remaining = e.remaining();
-                    String remain = Component.translatable("gui.module_shop.buyback_remaining", remaining).getString();
-                    float rightW = Math.max(Text.width(price, AtomUi.BOLD, Text.BODY),
-                            Text.width(remain, AtomUi.REGULAR, Text.SMALL));
-                    float rightX = x + rowW - 8.0F - rightW;
-                    Text.drawLine(canvas, price, AtomUi.BOLD, Text.BODY, IOStyle.ORANGE,
-                            rightX, y + 7.5F, rightW, Text.Align.RIGHT);
-                    Text.drawLine(canvas, remain, AtomUi.REGULAR, Text.SMALL,
-                            remaining > 0 ? IOStyle.TEXT_2 : IOStyle.RED, rightX, y + 16.0F, rightW, Text.Align.RIGHT);
-                    // 中间：物品名（超宽省略，不压到右侧）
-                    Text.drawLine(canvas, PageKit.plainName(e.stack), AtomUi.REGULAR, Text.BODY, IOStyle.TEXT,
-                            x + 32.0F, y + CARD_H / 2.0F, Math.max(20.0F, rightX - 8.0F - (x + 32.0F)), Text.Align.LEFT);
-                }
-            } finally {
-                f.host().items().popClip();
-                canvas.restoreToCount(saved);
-            }
-            scroll.drawBar(canvas, listX, listY, listW, listH, f.mouseX(), f.mouseY(), f.dtMs());
-            if (scroll.hasMoreBelow()) {
-                PageKit.fadeBottom(canvas, listX, listY + listH, rowW + 2.0F, IOStyle.CONTENT);
-            }
-        }
-        drawBottomBar(canvas, f);
+    private static String tr(String key, Object... args) {
+        return Component.translatable(key, args).getString();
     }
 
-    private void drawBottomBar(Canvas canvas, PageFrame f) {
-        float barMid = f.barTop() + PageFrame.BAR_H / 2.0F;
-        // 右侧：刷新收购（可刷新时用强调色）
-        boolean canRefresh = ClientShopData.buybackRefreshCost >= 0L;
-        float refreshX = f.x() + f.w() - 4.0F - 58.0F;
-        refresh.kind(canRefresh ? Button.Kind.ACCENT : Button.Kind.NORMAL)
-                .onClick(() -> f.host().action("refresh_daily_buyback", null))
-                .bounds(refreshX, barMid - 7.0F, 58.0F, 14.0F);
-        refresh.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
-        if (refresh.isMouseOver(f.mouseX(), f.mouseY())) {
+    /** 背包里与收购品同种物品的数量（与服务端 takeMatching 一样只比较物品种类，含护甲 / 副手栏）。 */
+    static int countInBag(ItemStack template) {
+        var player = Minecraft.getInstance().player;
+        if (player == null || template.isEmpty()) {
+            return 0;
+        }
+        Item item = template.getItem();
+        int total = 0;
+        var inv = player.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            ItemStack s = inv.getItem(i);
+            if (!s.isEmpty() && s.getItem() == item) {
+                total += s.getCount();
+            }
+        }
+        return total;
+    }
+
+    /** 这一条现在能卖多少（背包数量与今日剩余额度取小）。 */
+    private static int sellable(DailyBuybackEntry e) {
+        return Math.max(0, Math.min(countInBag(e.stack), e.remaining()));
+    }
+
+    // ------------------------------------------------------------------ 绘制
+
+    @Override
+    public void render(Canvas c, PageFrame f) {
+        List<DailyBuybackEntry> list = ClientShopData.dailyBuyback;
+        int haveCount = 0;
+        int fullCount = 0;
+        long sumGain = 0;
+        int sumKinds = 0;
+        shown = new ArrayList<>();
+        for (int i = 0; i < list.size(); i++) {
+            DailyBuybackEntry e = list.get(i);
+            int have = countInBag(e.stack);
+            int sell = sellable(e);
+            if (have > 0) {
+                haveCount++;
+            }
+            if (e.remaining() <= 0) {
+                fullCount++;
+            }
+            if (sell > 0) {
+                sumKinds++;
+                sumGain += sell * e.price;
+            }
+            if (filter == 0 || (filter == 1 && have > 0) || (filter == 2 && e.remaining() <= 0)) {
+                shown.add(i);
+            }
+        }
+        drawToolbar(c, f, list.size(), haveCount, fullCount, sumKinds, sumGain);
+        float top = f.y() + V2.BAR;
+        float bottom = f.y() + f.h() - V2.FOOT;
+        drawTable(c, f, f.x(), top, f.w(), bottom - top);
+        String left = tr("gui.module_shop.v2.showing", TABLE.firstVisible(), TABLE.lastVisible(), shown.size());
+        V2.foot(c, f.x(), bottom, f.w(), left, tr("gui.module_shop.v2.buyback.hint"));
+    }
+
+    private void drawToolbar(Canvas c, PageFrame f, int all, int have, int full, int kinds, long gain) {
+        float x = f.x();
+        float cy = f.y() + V2.BAR / 2;
+        Draw.hairline(c, x, f.y() + V2.BAR - 0.5F, f.w(), IOStyle.BORDER_DIM);
+        float tw = V2.bold(c, tr("tab.module_shop.buyback"), V2.FS_T, IOStyle.TEXT, x + 8, cy, 90, Text.Align.LEFT);
+        String[] seg = {tr("gui.module_shop.v2.mall.all") + "  " + all, tr("gui.module_shop.v2.buyback.have") + "  " + have,
+                tr("gui.module_shop.v2.buyback.full") + "  " + full};
+        segY = cy - V2.CTRL / 2;
+        segRects = V2.segmented(c, seg, filter, x + 8 + tw + 10, segY, null);
+
+        // 右侧从右往左：全部卖出 / 刷新 / 管理员奖励设置 / 说明文字
+        float right = x + f.w() - 8;
+        String sellLabel = tr("gui.module_shop.v2.buyback.sell_all");
+        float sw = V2.buttonWidth(sellLabel);
+        right -= sw;
+        boolean canSell = kinds > 0;
+        float hs = over(f, right, segY, sw, V2.CTRL) ? 1 : 0;
+        V2.button(c, sellLabel, canSell ? V2.Btn.PRIMARY : V2.Btn.DISABLED, right, segY, sw, V2.CTRL, hs);
+        sellAllRect = canSell ? new float[]{right, segY, sw, V2.CTRL} : null;
+
+        String refreshLabel = tr("gui.module_shop.refresh_buyback");
+        float rw = V2.buttonWidth(refreshLabel);
+        right -= rw + 5;
+        boolean canRefresh = ClientShopData.buybackRefreshCost >= 0L && !ClientShopData.dailyBuyback.isEmpty();
+        float hr = over(f, right, segY, rw, V2.CTRL) ? 1 : 0;
+        V2.button(c, refreshLabel, canRefresh ? V2.Btn.NORMAL : V2.Btn.DISABLED, right, segY, rw, V2.CTRL, hr);
+        refreshRect = canRefresh ? new float[]{right, segY, rw, V2.CTRL} : null;
+        if (hr > 0) {
             int left = Math.max(0, ClientShopData.buybackRefreshMax - ClientShopData.buybackRefreshUsed);
             f.host().textTooltip(canRefresh
                     ? Component.translatable("gui.module_shop.refresh_buyback_tooltip",
-                            ClientShopData.money(ClientShopData.buybackRefreshCost), left,
-                            ClientShopData.buybackRefreshMax)
-                    : Component.translatable("gui.module_shop.refresh_buyback_tooltip_none",
-                            ClientShopData.buybackRefreshMax));
+                    ClientShopData.money(ClientShopData.buybackRefreshCost), left, ClientShopData.buybackRefreshMax)
+                    : Component.translatable("gui.module_shop.refresh_buyback_tooltip_none", ClientShopData.buybackRefreshMax));
         }
 
-        // 管理员：全清奖励开关 + 设置
-        float leftLimit = refreshX;
-        bonusSet.visible(ClientShopData.canAdmin);
+        bonusSetRect = null;
+        bonusToggleRect = null;
         if (ClientShopData.canAdmin) {
-            float setX = refreshX - 8.0F - 34.0F;
-            bonusSet.onClick(() -> f.host().action("buyback_bonus_set", null))
-                    .bounds(setX, barMid - 7.0F, 34.0F, 14.0F);
-            bonusSet.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
-            toggleX = setX - 8.0F - 24.0F;
-            toggleY = barMid - 6.0F;
-            drawToggle(canvas, f, toggleX, toggleY, ClientShopData.buybackBonusEnabled);
-            leftLimit = toggleX;
+            String tl = tr(ClientShopData.buybackBonusEnabled ? "gui.module_shop.v2.buyback.bonus_on" : "gui.module_shop.v2.buyback.bonus_off");
+            float tw2 = V2.buttonWidth(tl);
+            right -= tw2 + 5;
+            V2.button(c, tl, V2.Btn.GHOST, right, segY, tw2, V2.CTRL, over(f, right, segY, tw2, V2.CTRL) ? 1 : 0);
+            bonusToggleRect = new float[]{right, segY, tw2, V2.CTRL};
+            String bl = tr("gui.module_shop.buyback_bonus_set");
+            float bw = V2.buttonWidth(bl);
+            right -= bw + 3;
+            V2.button(c, bl, V2.Btn.GHOST, right, segY, bw, V2.CTRL, over(f, right, segY, bw, V2.CTRL) ? 1 : 0);
+            bonusSetRect = new float[]{right, segY, bw, V2.CTRL};
         }
-
-        // 左侧：全清奖励进度
+        // 说明：全清奖励进度 + 背包可卖合计
+        List<String> notes = new ArrayList<>();
         if (ClientShopData.buybackBonusEnabled && ClientShopData.buybackBonus > 0L) {
-            String line = ClientShopData.buybackBonusDone
-                    ? Component.translatable("gui.module_shop.buyback_bonus_done",
-                            ClientShopData.money(ClientShopData.buybackBonus)).getString()
-                    : Component.translatable("gui.module_shop.buyback_bonus_progress",
-                            ClientShopData.money(ClientShopData.buybackBonus), ClientShopData.buybackLeft).getString();
-            Text.drawLine(canvas, line, AtomUi.REGULAR, Text.SMALL,
-                    ClientShopData.buybackBonusDone ? IOStyle.TEXT_2 : IOStyle.ORANGE,
-                    f.x() + 4.0F, barMid, leftLimit - 8.0F - (f.x() + 4.0F), Text.Align.LEFT);
+            notes.add(ClientShopData.buybackBonusDone
+                    ? tr("gui.module_shop.buyback_bonus_done", ClientShopData.money(ClientShopData.buybackBonus))
+                    : tr("gui.module_shop.buyback_bonus_progress", ClientShopData.money(ClientShopData.buybackBonus),
+                    ClientShopData.buybackLeft));
+        }
+        if (kinds > 0) {
+            notes.add(tr("gui.module_shop.v2.buyback.can_sell", kinds, V2.money(gain)));
+        }
+        float segEnd = segRects[segRects.length - 1][0] + segRects[segRects.length - 1][1] + 10;
+        if (!notes.isEmpty() && right - 8 > segEnd) {
+            V2.text(c, String.join("  ·  ", notes), V2.FS_XS, IOStyle.TEXT_2, segEnd, cy, right - 8 - segEnd, Text.Align.RIGHT);
         }
     }
 
-    /** 小开关（24×12）：开 = 绿色、滑块在右；切换时滑块平滑移动。 */
-    private void drawToggle(Canvas canvas, PageFrame f, float x, float y, boolean on) {
-        toggleT = toggleT < 0.0F ? (on ? 1.0F : 0.0F) : Motion.approach(toggleT, on ? 1.0F : 0.0F, f.dtMs(), 50.0F);
-        Draw.fill(canvas, x, y, 24.0F, 12.0F, 6.0F, Draw.lerp(IOStyle.TOGGLE_OFF, IOStyle.GREEN, toggleT));
-        if (toggleT < 0.99F) {
-            Draw.stroke(canvas, x, y, 24.0F, 12.0F, 6.0F, 1.0F, Draw.alpha(IOStyle.TOGGLE_OFF_RING, 1.0F - toggleT));
+    private static boolean over(PageFrame f, float x, float y, float w, float h) {
+        return f.mouseX() >= x && f.mouseX() < x + w && f.mouseY() >= y && f.mouseY() < y + h;
+    }
+
+    private void drawTable(Canvas c, PageFrame f, float x, float y, float w, float h) {
+        float[][] cols = V2.columns(x, w, 10, 6, 14, 0, 58, 64, 112, 72, 40);
+        String[] heads = {"", tr("gui.module_shop.v2.col.buyback_item"), tr("gui.module_shop.v2.col.price"),
+                tr("gui.module_shop.v2.col.have"), tr("gui.module_shop.v2.col.quota"), tr("gui.module_shop.v2.col.gain"), ""};
+        Text.Align[] al = {Text.Align.LEFT, Text.Align.LEFT, Text.Align.RIGHT, Text.Align.RIGHT, Text.Align.RIGHT,
+                Text.Align.RIGHT, Text.Align.RIGHT};
+        TABLE.layout(x, y, w, h, cols, heads, al, null);
+        if (shown.isEmpty()) {
+            V2.tableHead(c, x, y, w, cols, heads, al, -1, false);
+            V2.empty(c, tr(ClientShopData.dailyBuyback.isEmpty() ? "gui.module_shop.empty" : "gui.module_shop.v2.no_match"),
+                    x, y + V2.HEAD, w, h - V2.HEAD);
+            return;
         }
-        float knob = 8.0F;
-        Draw.fill(canvas, x + 2.0F + (24.0F - 4.0F - knob) * toggleT, y + 2.0F, knob, knob, knob / 2.0F, IOStyle.KNOB);
+        List<DailyBuybackEntry> list = ClientShopData.dailyBuyback;
+        TABLE.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), shown.size(), (cv, row, ry, hover) -> {
+            DailyBuybackEntry e = list.get(shown.get(row));
+            float cy = ry + V2.ROW / 2;
+            int have = countInBag(e.stack);
+            int sell = sellable(e);
+            boolean full = e.remaining() <= 0;
+            Draw.fill(cv, cols[0][0] - 5, ry + 3, 1.5F, V2.ROW - 6, 0.75F, IOStyle.rarity(e.rarity));
+            f.host().items().add(e.stack, cols[0][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, true);
+            float nx = cols[1][0];
+            float nw = V2.text(cv, e.stack.getHoverName().getString(), V2.FS, full ? IOStyle.TEXT_3 : IOStyle.TEXT,
+                    nx, cy, cols[1][1] - 60, Text.Align.LEFT);
+            if (full) {
+                V2.tag(cv, tr("gui.module_shop.v2.buyback.full"), IOStyle.TEXT_3, nx + nw + 5, cy);
+            }
+            V2.bold(cv, V2.money(e.price), V2.FS, IOStyle.ORANGE, cols[2][0], cy, cols[2][1], Text.Align.RIGHT);
+            if (have > 0) {
+                V2.bold(cv, V2.money(have), V2.FS, IOStyle.TEXT, cols[3][0], cy, cols[3][1], Text.Align.RIGHT);
+            } else {
+                V2.text(cv, "—", V2.FS, IOStyle.TEXT_3, cols[3][0], cy, cols[3][1], Text.Align.RIGHT);
+            }
+            float barW = 34;
+            float pct = e.limit <= 0 ? 1 : e.sold / (float) e.limit;
+            String quota = e.sold + " / " + e.limit;
+            V2.bar(cv, cols[4][0] + cols[4][1] - barW, cy, barW, pct, IOStyle.BLUE);
+            V2.text(cv, quota, V2.FS_S, IOStyle.TEXT_2, cols[4][0], cy, cols[4][1] - barW - 5, Text.Align.RIGHT);
+            if (sell > 0) {
+                V2.bold(cv, V2.signed(sell * e.price), V2.FS, IOStyle.GREEN, cols[5][0], cy, cols[5][1], Text.Align.RIGHT);
+            } else {
+                V2.text(cv, "—", V2.FS, IOStyle.TEXT_3, cols[5][0], cy, cols[5][1], Text.Align.RIGHT);
+            }
+            float right = cols[6][0] + cols[6][1];
+            if (full) {
+                TABLE.button(cv, row, "none", tr("gui.module_shop.v2.buyback.full"), V2.Btn.DISABLED, right, ry, hover);
+            } else {
+                TABLE.button(cv, row, "sell", tr("gui.module_shop.v2.sell"), have > 0 ? V2.Btn.NORMAL : V2.Btn.GHOST,
+                        right, ry, hover);
+            }
+        });
     }
 
     // ------------------------------------------------------------------ 输入
 
+    private static boolean in(float[] r, double x, double y) {
+        return r != null && x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3];
+    }
+
     @Override
     public boolean mouseClicked(PageFrame f, double mx, double my, int button) {
-        if (button == 0 && scroll.pressBar(mx, my, listX, listY, listW, listH)) {
-            return true;
-        }
-        if (refresh.mouseClicked(mx, my, button) || (bonusSet.isVisible() && bonusSet.mouseClicked(mx, my, button))) {
-            return true;
-        }
-        if (button == 0 && ClientShopData.canAdmin && mx >= toggleX && mx < toggleX + 24.0F
-                && my >= toggleY && my < toggleY + 12.0F) {
-            ClickSound.play();
-            f.host().action("admin_buyback_bonus_toggle", null);
-            return true;
-        }
-        if (button == 0 && mx >= listX && mx < listX + listW - 6.0F && my >= listY && my < listY + listH) {
-            float local = (float) (my - listY + scroll.offset());
-            int index = (int) (local / ROW_H);
-            if (index >= 0 && index < ClientShopData.dailyBuyback.size() && local - index * ROW_H < CARD_H) {
+        if (button == 0) {
+            for (int i = 0; i < segRects.length; i++) {
+                if (mx >= segRects[i][0] && mx < segRects[i][0] + segRects[i][1] && my >= segY && my < segY + V2.CTRL) {
+                    ClickSound.play();
+                    filter = i;
+                    TABLE.scrollToTop();
+                    return true;
+                }
+            }
+            if (in(sellAllRect, mx, my)) {
                 ClickSound.play();
-                CompoundTag tag = new CompoundTag();
-                tag.putInt("index", index);
-                f.host().action("sell_buyback_gui", tag);
+                confirmSellAll(f);
+                return true;
+            }
+            if (in(refreshRect, mx, my)) {
+                ClickSound.play();
+                f.host().action("refresh_daily_buyback", null);
+                return true;
+            }
+            if (in(bonusSetRect, mx, my)) {
+                ClickSound.play();
+                f.host().action("buyback_bonus_set", null);
+                return true;
+            }
+            if (in(bonusToggleRect, mx, my)) {
+                ClickSound.play();
+                f.host().action("admin_buyback_bonus_toggle", null);
+                return true;
+            }
+            if (TABLE.pressBar(mx, my)) {
                 return true;
             }
         }
-        return false;
+        ListTable.Hit hit = TABLE.click(mx, my);
+        if (hit == null || hit.row() < 0 || hit.row() >= shown.size()) {
+            return hit != null;
+        }
+        int index = shown.get(hit.row());
+        DailyBuybackEntry e = ClientShopData.dailyBuyback.get(index);
+        if (e.remaining() <= 0) {
+            return true;
+        }
+        if (button == 0 && Net.shift()) {
+            // Shift + 左键：直接卖出背包里这一种的全部（不弹数量框）
+            int sell = sellable(e);
+            if (sell > 0) {
+                ClickSound.play();
+                sendSell(f, index, sell);
+            }
+            return true;
+        }
+        if (button == 0 && "sell".equals(hit.button())) {
+            ClickSound.play();
+            CompoundTag tag = new CompoundTag();
+            tag.putInt("index", index);
+            f.host().action("sell_buyback_gui", tag);
+            return true;
+        }
+        return hit.button() != null;
+    }
+
+    private static void sendSell(PageFrame f, int index, int quantity) {
+        CompoundTag tag = new CompoundTag();
+        tag.putInt("index", index);
+        tag.putString("quantity", String.valueOf(quantity));
+        f.host().action("sell_buyback", tag);
+    }
+
+    private void confirmSellAll(PageFrame f) {
+        List<DailyBuybackEntry> list = ClientShopData.dailyBuyback;
+        List<int[]> plan = new ArrayList<>();
+        StringBuilder lines = new StringBuilder();
+        long total = 0;
+        for (int i = 0; i < list.size(); i++) {
+            DailyBuybackEntry e = list.get(i);
+            int sell = sellable(e);
+            if (sell <= 0) {
+                continue;
+            }
+            plan.add(new int[]{i, sell});
+            total += sell * e.price;
+            if (plan.size() <= 8) {
+                lines.append("\n").append(e.stack.getHoverName().getString()).append(" ×").append(sell)
+                        .append("  +").append(V2.money(sell * e.price));
+            }
+        }
+        if (plan.isEmpty()) {
+            return;
+        }
+        if (plan.size() > 8) {
+            lines.append("\n").append(tr("gui.module_shop.v2.buyback.more", plan.size() - 8));
+        }
+        Component body = Component.translatable("gui.module_shop.v2.buyback.sell_all_body", plan.size(),
+                V2.money(total), lines.toString());
+        ShopHost host = f.host();
+        Nav.open(new ShopConfirmScreen(Component.translatable("gui.module_shop.v2.buyback.sell_all_title"), body, ok -> {
+            if (ok) {
+                for (int[] p : plan) {
+                    CompoundTag tag = new CompoundTag();
+                    tag.putInt("index", p[0]);
+                    tag.putString("quantity", String.valueOf(p[1]));
+                    host.action("sell_buyback", tag);
+                }
+            }
+        }));
     }
 
     @Override
     public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
-        return scroll.releaseBar() | refresh.mouseReleased(mx, my, button) | bonusSet.mouseReleased(mx, my, button);
+        return TABLE.releaseBar();
     }
 
     @Override
     public boolean mouseDragged(PageFrame f, double mx, double my, int button, double dx, double dy) {
-        return scroll.dragBar(my, listH);
+        return TABLE.dragBar(my);
     }
 
     @Override
     public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
-        if (my < f.listBottom()) {
-            scroll.wheel(scrollY);
-            return true;
-        }
-        return false;
+        return TABLE.wheel(mx, my, scrollY, Net.shift());
     }
 
     @Override
     public void cancelInput() {
-        scroll.releaseBar();
-        refresh.cancelPress();
-        bonusSet.cancelPress();
+        TABLE.releaseBar();
+    }
+
+    /** 小工具：Shift 是否按下。 */
+    static final class Net {
+        static boolean shift() {
+            return net.minecraft.client.gui.screens.Screen.hasShiftDown();
+        }
     }
 }
