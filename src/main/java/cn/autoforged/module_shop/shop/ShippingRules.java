@@ -51,7 +51,10 @@ public final class ShippingRules {
                     ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
                     yield id != null && id.getNamespace().equals(value);
                 }
-                case TAG -> stack.is(TagKey.create(Registries.ITEM, ResourceLocation.tryParse(value)));
+                case TAG -> {
+                    ResourceLocation tagId = ResourceLocation.tryParse(value);
+                    yield tagId != null && stack.is(TagKey.create(Registries.ITEM, tagId));
+                }
             };
         }
     }

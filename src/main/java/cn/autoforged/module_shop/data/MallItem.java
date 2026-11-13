@@ -1,6 +1,6 @@
 package cn.autoforged.module_shop.data;
 
-import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -95,7 +95,7 @@ public final class MallItem {
         this.personalUsed.clear();
     }
 
-    public CompoundTag save(RegistryAccess registries) {
+    public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
         tag.putLong("price", price);
         tag.putString("rarity", rarity.id());
@@ -129,7 +129,7 @@ public final class MallItem {
      * </ul>
      * 客户端只认 {@code stock} 字段，所以界面代码不需要区分两种模式。
      */
-    public CompoundTag saveForView(RegistryAccess registries, java.util.UUID viewer, boolean personal) {
+    public CompoundTag saveForView(HolderLookup.Provider registries, java.util.UUID viewer, boolean personal) {
         // 直接按字段拼，不走 save()：save() 会把 personalUsed（每个买过的玩家一条）整表序列化，
         // 这里又马上删掉 —— 货架上千件、买家上百人时，每次下发快照都要白白构造几十万个 NBT 节点。
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
@@ -141,7 +141,7 @@ public final class MallItem {
         return tag;
     }
 
-    public static MallItem load(CompoundTag tag, RegistryAccess registries) {
+    public static MallItem load(CompoundTag tag, HolderLookup.Provider registries) {
         MallItem item = new MallItem();
         item.stack = ShopNbt.loadStack(tag, registries);
         item.price = tag.getLong("price");

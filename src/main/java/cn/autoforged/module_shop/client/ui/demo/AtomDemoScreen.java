@@ -439,7 +439,7 @@ public final class AtomDemoScreen extends Screen implements JeiHoverSource {
         float x = contentX();
         float y = contentY();
         float w = contentW();
-        String para = "模块商店是面向 NeoForge 1.21.1 的服务端经济系统：每日商店、每日收购、拍卖行、玩家摊位、"
+        String para = "模块商店是面向 Forge 1.20.1 的服务端经济系统：每日商店、每日收购、拍卖行、玩家摊位、"
                 + "交易与转账、邮箱、签到。这一段用来检查中文自动换行、标点处理和行距；超过三行的部分会以省略号结尾，"
                 + "而不是溢出到面板外面。Mixed English text should wrap together with 中文 correctly.";
         TextLayout wrapped = Text.wrapped(para, AtomUi.REGULAR, Text.BODY, IOStyle.TEXT, w, 3);

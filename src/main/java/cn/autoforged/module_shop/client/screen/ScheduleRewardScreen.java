@@ -19,7 +19,7 @@ import net.minecraft.network.chat.Component;
  * <p>
  * 面板高度按常见 GUI 缩放（1920×1080 → 480×258）收紧到 216，标题不会再顶出面板外面。
  */
-public class ScheduleRewardScreen extends Screen {
+public class ScheduleRewardScreen extends SkiaDialog {
     private static final int PANEL_W = 396;
     private static final int PANEL_H = 216;
     /** 时间选择弹窗里的快捷时间（-1 = 不定时）。 */
@@ -97,11 +97,16 @@ public class ScheduleRewardScreen extends Screen {
 
     @Override
     protected void init() {
-        super.init();
+        if (skiaInit()) {
+            return;
+        }
     }
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         this.regions.clear();
         this.pointerX = mouseX;
         this.pointerY = mouseY;
@@ -150,6 +155,101 @@ public class ScheduleRewardScreen extends Screen {
             this.regions.clear();
             drawHourPicker(g, x, y);
         }
+    }
+
+    // ------------------------------------------------------------------ Skija
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 380.0F;
+        float h = 236.0F;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        boolean modal = this.hourPickerOpen;
+        panel(c, x, y, w, h, Component.translatable("gui.module_shop.schedule.reward_title").getString());
+        float cy = y + HEADER_H + 8;
+        small(c, Component.translatable("gui.module_shop.schedule.section_rule").getString(), innerX, cy + 4, innerW,
+                IOStyle.TEXT_3);
+        cy += 10;
+        card(c, innerX, cy, innerW, 84);
+        float labelW = 120;
+        text(c, Component.translatable("gui.module_shop.schedule.hour_short").getString(), innerX + 8, cy + 16, labelW,
+                IOStyle.TEXT_2);
+        cn.autoforged.module_shop.client.ui.widget.Button.Kind n =
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL;
+        button(c, "hour", hourText() + "  ▾", innerX + 8 + labelW, cy + 7, 80, 18, n, !modal,
+                () -> this.hourPickerOpen = true);
+        small(c, Component.translatable("gui.module_shop.schedule.hour_hint").getString(),
+                innerX + 8 + labelW + 88, cy + 16, innerW - labelW - 104, IOStyle.TEXT_3);
+        skToggleRow(c, innerX, cy + 30, labelW, "gui.module_shop.schedule.offline_short", this.offline, modal,
+                () -> this.offline = !this.offline);
+        skToggleRow(c, innerX, cy + 56, labelW, "gui.module_shop.schedule.catchup", this.catchUp, modal,
+                () -> this.catchUp = !this.catchUp);
+        cy += 84 + 10;
+        small(c, Component.translatable("gui.module_shop.schedule.section_reward").getString(), innerX, cy + 4,
+                innerW, IOStyle.TEXT_3);
+        cy += 10;
+        card(c, innerX, cy, innerW, 36);
+        button(c, "items", Component.translatable("gui.module_shop.schedule.reward_btn").getString(), innerX + 8,
+                cy + 8, 104, 20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, !modal,
+                this::openRewardItems);
+        text(c, Component.translatable("gui.module_shop.schedule.reward_money_line",
+                ClientShopData.money(currentMoney())).getString(), innerX + 122, cy + 12, innerW - 130, IOStyle.ORANGE);
+        small(c, currentItems(), innerX + 122, cy + 25, innerW - 130, IOStyle.TEXT_2);
+        float by = y + h - PAD - 20;
+        button(c, "cancel", Component.translatable("gui.module_shop.schedule.cancel").getString(), innerX, by, 88, 20,
+                n, !modal, this::onClose);
+        button(c, "save", Component.translatable("gui.module_shop.schedule.save").getString(), innerX + innerW - 96,
+                by, 96, 20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, !modal, this::save);
+        if (modal) {
+            skHourPicker(c, x, y, w, h);
+        }
+    }
+
+    private void skToggleRow(io.github.humbleui.skija.Canvas c, float x, float y, float labelW, String key,
+                             boolean on, boolean modal, Runnable action) {
+        text(c, Component.translatable(key).getString(), x + 8, y + 10, labelW, IOStyle.TEXT_2);
+        toggle(c, key, x + 8 + labelW, y + 4, on, modal ? null : action);
+        small(c, Component.translatable(on ? "gui.module_shop.schedule.on" : "gui.module_shop.schedule.off")
+                .getString(), x + 8 + labelW + 30, y + 10, 60, on ? IOStyle.GREEN : IOStyle.TEXT_3);
+    }
+
+    private void skHourPicker(io.github.humbleui.skija.Canvas c, float x, float y, float w, float h) {
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x, y, w, h, 0, 0x99000000);
+        hit(x, y, w, h, () -> this.hourPickerOpen = false, null);
+        float pw = 280;
+        float ph = 116;
+        float px = x + (w - pw) / 2;
+        float py = y + (h - ph) / 2;
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, px, py, pw, ph, 6, IOStyle.SHEET);
+        cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, px, py, pw, ph, 6, 1, IOStyle.BLUE);
+        hit(px, py, pw, ph, () -> { }, null);
+        center(c, Component.translatable("gui.module_shop.schedule.pick_hour").getString(), px, py + 12, pw,
+                IOStyle.TEXT);
+        cn.autoforged.module_shop.client.ui.widget.Button.Kind n =
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL;
+        button(c, "hminus", "-1h", px + 24, py + 26, 44, 20, n, true,
+                () -> this.hour = this.hour <= 0 ? 23 : this.hour - 1);
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, px + 76, py + 26, 128, 20, 3, IOStyle.FIELD_BG);
+        cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, px + 76, py + 26, 128, 20, 3, 1, IOStyle.BORDER_DIM);
+        center(c, hourText(), px + 76, py + 36, 128, IOStyle.TEXT);
+        button(c, "hplus", "+1h", px + 212, py + 26, 44, 20, n, true,
+                () -> this.hour = this.hour < 0 || this.hour >= 23 ? 0 : this.hour + 1);
+        for (int i = 0; i < QUICK_HOURS.length; i++) {
+            int hh = QUICK_HOURS[i];
+            float bx = px + 20 + i * 41;
+            chip(c, "q" + hh, hh < 0 ? Component.translatable("gui.module_shop.schedule.none").getString()
+                    : String.format("%02d:00", hh), bx, py + 56, 37, 18, this.hour == hh, IOStyle.BLUE, () -> {
+                        this.hour = hh;
+                        this.hourPickerOpen = false;
+                    });
+        }
+        center(c, Component.translatable("gui.module_shop.schedule.pick_hour_hint").getString(), px, py + 86, pw,
+                IOStyle.TEXT_2);
+        center(c, Component.translatable("gui.module_shop.schedule.esc_hint").getString(), px, py + 100, pw,
+                IOStyle.TEXT_3);
     }
 
     /** 左标签 + 右开关的一行（标签与开关横向分离，永不重叠）。 */
@@ -240,6 +340,9 @@ public class ScheduleRewardScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         for (Region region : this.regions) {
             if (!IOStyle.inside(region.x, region.y, region.w, region.h, mouseX, mouseY)) {
                 continue;

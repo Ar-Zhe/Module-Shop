@@ -12,7 +12,7 @@ import net.minecraft.network.chat.Component;
  * 用模组自己的面板与按钮，因此点「是 / 否」响的是**模组统一点击音**（原版确认框会响原版按钮音）。
  * 关闭后通过 {@link Nav#back()} 回到上一级界面。
  */
-public class ShopConfirmScreen extends Screen {
+public class ShopConfirmScreen extends SkiaDialog {
     /** 结果回调：true = 确定，false = 取消 / ESC。 */
     public interface Callback {
         void accept(boolean confirmed);
@@ -78,6 +78,9 @@ public class ShopConfirmScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         this.buttons.clear();
         this.pointerX = mouseX;
         this.pointerY = mouseY;
@@ -98,6 +101,39 @@ public class ShopConfirmScreen extends Screen {
                 this.noLabel == null ? Component.translatable("gui.module_shop.no") : this.noLabel,
                 this.font, mouseX, mouseY, true, IOStyle.Btn.GRAY);
         this.buttons.add(new int[]{bx + BTN_W + 12, by, BTN_W, BTN_H, 0});
+    }
+
+    // ------------------------------------------------------------------ Skija
+
+    private static final float SK_W = 250.0F;
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        String msg = this.message.getString();
+        float textW = SK_W - PAD * 2;
+        float msgH = Math.max(12.0F, paragraphHeight(msg, textW, cn.autoforged.module_shop.client.ui.render.Text.BODY, 8));
+        float h = HEADER_H + 12 + msgH + 14 + 20 + PAD;
+        float x = Math.round((this.width - SK_W) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        panel(c, x, y, SK_W, h, this.title.getString());
+        paragraph(c, msg, x + PAD, y + HEADER_H + 12, textW, cn.autoforged.module_shop.client.ui.render.Text.BODY,
+                IOStyle.TEXT_2, 8, true);
+        float bw = 80.0F;
+        float gap = 10.0F;
+        float bx = x + (SK_W - bw * 2 - gap) / 2.0F;
+        float by = y + h - PAD - 20;
+        String yes = (this.yesLabel == null ? Component.translatable("gui.module_shop.yes") : this.yesLabel).getString();
+        String no = (this.noLabel == null ? Component.translatable("gui.module_shop.no") : this.noLabel).getString();
+        button(c, "yes", yes, bx, by, bw, 20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, true,
+                () -> finish(true));
+        button(c, "no", no, bx + bw + gap, by, bw, 20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL,
+                true, () -> finish(false));
+    }
+
+    @Override
+    protected boolean onEnter() {
+        finish(true);
+        return true;
     }
 
     /** 0.8 倍小字居中换行绘制正文。 */
@@ -131,6 +167,9 @@ public class ShopConfirmScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         for (int[] rect : this.buttons) {
             if (IOStyle.inside(rect[0], rect[1], rect[2], rect[3], mouseX, mouseY)) {
                 Bricks.click();

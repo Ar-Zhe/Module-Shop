@@ -125,4 +125,66 @@ public final class PageKit {
     public static String money(long amount) {
         return ClientShopData.money(amount);
     }
+
+    // ------------------------------------------------------------------ 自适应排版
+
+    /**
+     * 把 {@code total} 宽度分给一组并排控件，保证总宽不超过 {@code total}（内容区放不下时不再越界）。
+     *
+     * <p>规则：每项先按自己的「理想宽度」申请；
+     * <ul>
+     *     <li>够用 → 各取所需，不主动撑大；剩余空间由调用方分给输入框等弹性控件；</li>
+     *     <li>不够 → 先压到「最小可读宽度」，还不够就按最小宽度等比缩，绝不会出现负宽度或叠在一起。</li>
+     * </ul>
+     * 最小宽度取 {@code min(理想宽度, floor)}，所以文字短的按钮不会被无谓撑大。
+     *
+     * @param total   可用总宽（已扣掉间隙）
+     * @param ideal   每项理想宽度（≤0 表示该项不该占位，结果也是 0）
+     * @param floors  每项的最小可读宽度（与 ideal 等长；缺省按 0 处理）
+     */
+    public static float[] distribute(float total, float[] ideal, float[] floors) {
+        int n = ideal.length;
+        float[] out = new float[n];
+        float usable = Math.max(0.0F, total);
+        float idealSum = 0.0F;
+        float minSum = 0.0F;
+        float[] mins = new float[n];
+        for (int i = 0; i < n; i++) {
+            float want = Math.max(0.0F, ideal[i]);
+            float floor = floors != null && i < floors.length ? Math.max(0.0F, floors[i]) : 0.0F;
+            mins[i] = Math.min(want, floor);
+            idealSum += want;
+            minSum += mins[i];
+        }
+        if (idealSum <= 0.0F) {
+            return out;
+        }
+        if (usable >= idealSum) {
+            // 够用：保持理想宽度；弹性控件由调用方显式吃掉余量，避免普通按钮被拉得过大
+            for (int i = 0; i < n; i++) {
+                out[i] = Math.max(0.0F, ideal[i]);
+            }
+            return out;
+        }
+        if (usable >= minSum) {
+            // 压到最小宽度仍然放得下：在「最小」和「理想」之间插值
+            float t = minSum <= 0.0F ? 0.0F : (usable - minSum) / Math.max(1.0E-6F, idealSum - minSum);
+            for (int i = 0; i < n; i++) {
+                float want = Math.max(0.0F, ideal[i]);
+                out[i] = mins[i] + (want - mins[i]) * t;
+            }
+            return out;
+        }
+        // 连最小宽度都放不下：按最小宽度等比缩，宁可小也不越界
+        float k = minSum <= 0.0F ? 0.0F : usable / minSum;
+        for (int i = 0; i < n; i++) {
+            out[i] = mins[i] * k;
+        }
+        return out;
+    }
+
+    /** {@link #distribute} 的无最小宽度版本。 */
+    public static float[] distribute(float total, float[] ideal) {
+        return distribute(total, ideal, null);
+    }
 }

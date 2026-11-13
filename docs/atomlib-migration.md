@@ -3,23 +3,6 @@
 > 基于 2026-11-04 下载的源码：`Ar-Zhe/Module-Shop`（v1.0.2）、`NoWordz/AtomLib`（main，0.3.0 候选）、`NoWordz/AtomChat-Mod`（main）。
 > v2 变化：参考 AtomChat（与 AtomLib 同源、已发布并经游戏验证的消费者）后，推荐路线从“0.3.0 控件 + Yoga”改为“beta3 设计包 + 移植 AtomChat 的已验证组件”。
 
-
-> **1.20.1（Forge）分支说明**：本分支跟随 1.21.1 的同一路线与进度（`feat/atomlib-ui` 的阶段 0～3.4，加上 `claude/1-21-1-module-store-ui-s7kpts` 的阶段 3.5，12/12 页），
-> 页面与组件代码与 1.21.1 基本一致，只做了下面这些平台差异适配：
->
-> | 项 | 1.21.1（NeoForge） | 1.20.1（Forge） |
-> |---|---|---|
-> | AtomLib 来源 | 自动下载 Maven 输入包 | 提交锁定的 `libs/atomlib-1.20.1-forge-0.1.0-beta.jar`（SHA-256 校验），开发环境用 `fg.deobf`（发布包是 SRG 名） |
-> | Skija 编译期类 | Maven Central | 从 AtomLib 的 Jar-in-Jar 里抽出 `skija-shared` 与 `types` |
-> | Access Transformer | `EditBox highlightPos` | SRG 名 `f_94102_`，并在 `build.gradle` 的 `minecraft {}` 里声明 |
-> | 事件 | NeoForge `RegisterClientCommandsEvent` / `GameShuttingDownEvent` | Forge 同名事件（FORGE 总线） |
-> | 滚轮 | `mouseScrolled(x, y, scrollX, scrollY)` | `mouseScrolled(x, y, delta)`，页面接口不变 |
-> | 输入框光标 | `EditBox.moveCursorTo(pos, extend)` | `setCursorPosition` + 按需 `setHighlightPos` |
-> | 物品比较 | `ItemStack.isSameItemSameComponents` | `ItemStack.isSameItemSameTags` |
->
-> 构建需要 JDK 17 工具链。“游戏内验收通过”的记录来自 1.21.1，1.20.1 尚未在游戏内验收。
-> 后续 1.21.1 每迁移一页，1.20.1 同步移植即可。
-
 ## 1. 现状
 
 ### Module-Shop 客户端 UI
@@ -115,8 +98,8 @@ client/
 | 3.5 | 每日商店 `DailyPage`（卡牌 / 长条两种布局、翻牌动画：横向翻转 + 半程换面 + 压暗 + 扫光，物品图标随牌压缩）、签到 `SignInPage` + 共用月历 `SignInCalendar`（补签、日程色条与悬停详情、里程进度条）、购物城 `MallPage`（Skija 搜索框、排序 / 分类下拉、收藏星标、最近购买、翻页）、管理面板 `AdminPage`（模块下拉、条目列表左键编辑 / 右键删除、出货箱错误规则标红、摊位 / 求购 / 签到子页、模块设置按钮）。过滤 / 排序 / 模组名等仍复用 ShopScreen 的同一份实现；管理面板通过 `ShopHost` 读取当前模块与页码 | 编译通过；**待游戏内验收** |
 | 4 | 外壳（侧边栏/标题栏/资料块）换 Skija（所有页面迁移完之后） | |
 | 5 | （已并入阶段 3） | |
-| 6 | 次级 Screen 迁移（确认框 → `ConfirmDialog`，表单 → `SkiaTextField`） | |
-| 7 | 删除旧 `IOStyle` 绘制代码、`IOSButton`、`IOEditBox` 等 | |
+| 6 ✅ | 次级界面迁移：公共底座 `SkiaDialog`（打开淡入、即时模式按钮 / 选项块 / 开关 / 点击区、`SkiaTextField` 输入框、平滑滚动列表、物品层与提示）。普通弹窗 17 个改为继承 `SkiaDialog`（确认框、输入框、出价、通知设置、摊位列表、摊位商品、账单、交易 / 选人 / 请求、发起求购、整模组导入、日程编辑 / 日程奖励、兑换码输入 / 生成器 / 列表 / 编辑）；容器界面 6 个（放入物品、出货箱、发放、批量添加、日程奖励物品、兑换码奖励）只换绘制，槽位与点击判定沿用旧代码。每个界面在同一个类里保留旧绘制，AtomLib 不可用时自动回退。`SignInScreen` 已无入口（签到是主界面的一页），未迁移，阶段 7 删除 | 编译通过；**待游戏内验收** |
+| 7 | 删除旧 `IOStyle` 绘制代码、`IOSButton`、`IOEditBox`、`SignInScreen`、演示页，以及各界面里的旧绘制分支（需先决定是否保留非 Windows 回退） | |
 
 ## 7. 需要你拍板的问题
 1. 路线：A（beta3 + AtomChat 组件，推荐）还是 B（0.3.0 + Yoga 控件）？

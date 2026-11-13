@@ -7,6 +7,8 @@ import cn.autoforged.module_shop.shop.ShopManager;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.fml.DistExecutor;
 import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
 import org.slf4j.Logger;
@@ -19,10 +21,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 网络层（Forge 1.20.1）。
- *
- * <p>原来是 NeoForge 的 payload 系统（{@code PayloadRegistrar} + {@code StreamCodec}），
- * 移植到 Forge 需要用 {@link SimpleChannel}：每个包自己实现 {@code encode/decode}，
- * 处理函数拿 {@code NetworkEvent.Context} 手动 {@code enqueueWork} 切回主线程。
  *
  * <p>协议版本固定为 {@value #PROTOCOL}：新旧 jar 混用时 {@link SimpleChannel} 会直接断开
  * （"channel version mismatch"），而不是让旧客户端去解码新格式导致协议错误踢人。
@@ -57,10 +55,9 @@ public final class ModNetwork {
                 ClientboundShopSyncPayload::decode,
                 (payload, ctxSupplier) -> {
                     var ctx = ctxSupplier.get();
-                    var sender = ctx.getSender();
+                    ctx.setPacketHandled(true);
                     byte[] raw = CLIENT_ASSEMBLER.accept(payload.syncId(), payload.index(),
                             payload.total(), payload.data());
-                    ctx.setPacketHandled(true);
                     if (raw == null) {
                         return;
                     }
@@ -68,9 +65,9 @@ public final class ModNetwork {
                     if (tag == null) {
                         return;
                     }
-                    // 客户端处理类（Screen 等）只能在主线程触达，避免专用服务器解析到客户端类。
-                    ctx.enqueueWork(() -> cn.autoforged.module_shop.client.ClientPayloadHandler
-                            .handleSync(tag));
+                    // 客户端处理类（Screen 等）只通过 DistExecutor 在客户端主线程触达，避免专用服务器类加载崩溃。
+                    ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT,
+                            () -> () -> cn.autoforged.module_shop.client.ClientPayloadHandler.handleSync(tag)));
                 });
         CHANNEL.registerMessage(id++,
                 ServerboundShopActionPayload.class,
@@ -99,6 +96,16 @@ public final class ModNetwork {
                         ctx.enqueueWork(() -> ShopManager.handleAction(player, tag));
                     }
                 });
+    }
+
+    /** 服务端 -> 客户端发送同步数据包（等价于 {@link ClientboundShopSyncPayload#send}）。 */
+    public static void sendSync(ServerPlayer player, CompoundTag tag) {
+        ClientboundShopSyncPayload.send(player, tag);
+    }
+
+    /** 客户端 -> 服务端发送商店操作包（等价于 {@link ServerboundShopActionPayload#send}）。 */
+    public static void sendAction(CompoundTag tag) {
+        ServerboundShopActionPayload.send(tag);
     }
 
     /** 玩家下线：丢掉他还没收齐的上报分片（否则半截数据会一直挂在静态表里，直到下次他再发包）。 */

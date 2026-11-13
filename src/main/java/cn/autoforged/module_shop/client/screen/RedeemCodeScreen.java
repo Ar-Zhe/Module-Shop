@@ -14,7 +14,7 @@ import net.minecraft.network.chat.Component;
  * 确认后按钮置灰显示「兑换中...」防连点；失败时输入框变红并左右抖动、下方显示红色原因；
  * 成功时显示奖励提示并短暂停留后自动关闭（奖励已进邮箱）。
  */
-public class RedeemCodeScreen extends Screen {
+public class RedeemCodeScreen extends SkiaDialog {
     private static final int PANEL_W = 280;
     private static final int PANEL_H = 136;
     /** 当前打开的弹窗（用于接收服务端回传结果）。 */
@@ -41,8 +41,10 @@ public class RedeemCodeScreen extends Screen {
 
     @Override
     protected void init() {
-        super.init();
         open = this;
+        if (skiaInit()) {
+            return;
+        }
         int x = (this.width - PANEL_W) / 2;
         int y = (this.height - PANEL_H) / 2;
         // 输入框右侧留出粘贴按钮的位置（28px）。
@@ -140,6 +142,9 @@ public class RedeemCodeScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         super.render(g, mouseX, mouseY, partialTick);
         this.regions.clear();
         int x = (this.width - PANEL_W) / 2;
@@ -190,6 +195,90 @@ public class RedeemCodeScreen extends Screen {
         }
     }
 
+    // ------------------------------------------------------------------ Skija
+
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skBox;
+
+    @Override
+    protected void initSkia() {
+        String keep = this.box == null ? codeStash : this.box.getValue();
+        this.skBox = field(48, Component.translatable("gui.module_shop.redeem.hint").getString());
+        this.box = this.skBox.editBox();
+        if (keep != null && !keep.isEmpty()) {
+            this.box.setValue(keep);
+        }
+        this.skBox.onChange(t -> {
+            if (this.error) {
+                this.error = false;
+            }
+        });
+        this.skBox.focus();
+    }
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 270.0F;
+        boolean admin = cn.autoforged.module_shop.client.ClientShopData.canAdmin;
+        float h = HEADER_H + 12 + 20 + 22 + 20 + PAD + (admin ? 22 : 0);
+        float shake = this.shakeTicks > 0 ? (this.shakeTicks % 2 == 0 ? -2.5F : 2.5F) : 0;
+        float x = Math.round((this.width - w) / 2.0F) + shake;
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        panel(c, x, y, w, h, this.title.getString());
+        if (this.error) {
+            cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, x, y, w, h, 0, 1, IOStyle.RED);
+        }
+        float fy = y + HEADER_H + 12;
+        this.skBox.bounds(innerX, fy, innerW - 26, 20);
+        if (this.error) {
+            cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, innerX - 1, fy - 1, innerW - 24, 22, 4, 1.2F,
+                    IOStyle.RED);
+        }
+        // 粘贴按钮
+        float px = innerX + innerW - 22;
+        float hv = hover("paste", px, fy, 22, 20);
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, px, fy, 22, 20, 3,
+                cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.FIELD_BG, IOStyle.BLUE_TINT, hv));
+        cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, px, fy, 22, 20, 3, 1,
+                cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BLUE, hv));
+        int ic = cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.TEXT_2, IOStyle.BLUE, hv);
+        cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, px + 6.5F, fy + 5, 9, 11, 1.5F, 1.1F, ic);
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, px + 9, fy + 4, 4, 2.5F, 1, ic);
+        hit(px, fy, 22, 20, this::pasteFromClipboard, null);
+        if (hv > 0.5F) {
+            tip(Component.translatable("gui.module_shop.redeem.paste"));
+        }
+        // 提示行
+        float hy = fy + 20 + 11;
+        if (!this.hint.isEmpty()) {
+            center(c, this.hint, innerX, hy, innerW,
+                    this.error ? IOStyle.RED : this.success ? IOStyle.GREEN : IOStyle.TEXT_2);
+        }
+        float by = fy + 20 + 22;
+        float bw = (innerW - 8) / 2;
+        button(c, "confirm", Component.translatable(this.pending ? "gui.module_shop.redeem.ok"
+                        : "gui.module_shop.confirm").getString(), innerX, by, bw, 20,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, !this.pending && !this.success,
+                this::confirm);
+        button(c, "cancel", Component.translatable("gui.module_shop.cancel").getString(), innerX + bw + 8, by, bw, 20,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, this::onClose);
+        if (admin) {
+            float ay = by + 26;
+            cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x + 1, ay - 4, w - 2, 0.5F, 0, IOStyle.HAIR);
+            float lw = cn.autoforged.module_shop.client.ui.render.Text.width(
+                    Component.translatable("gui.module_shop.redeem.generator").getString(),
+                    cn.autoforged.module_shop.client.ui.AtomUi.REGULAR, cn.autoforged.module_shop.client.ui.render.Text.SMALL);
+            float ahv = hover("gen", innerX, ay, lw + 14, 14);
+            small(c, Component.translatable("gui.module_shop.redeem.generator").getString() + " ›", innerX, ay + 7,
+                    innerW, cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.TEXT_2, IOStyle.BLUE, ahv));
+            hit(innerX, ay, lw + 14, 14, () -> {
+                codeStash = this.box.getValue();
+                Nav.open(new RedeemGeneratorScreen());
+            }, null);
+        }
+    }
+
     /** 手绘小剪贴板图标（10×11）：外框 + 顶部夹子 + 右下角内页，风格与模组其它图标一致。 */
     private void drawPasteIcon(GuiGraphics g, int x, int y, int color) {
         IOStyle.ring(g, x, y + 1, 9, 10, 2, color);
@@ -218,6 +307,9 @@ public class RedeemCodeScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         for (Region region : this.regions) {
             if (!IOStyle.inside(region.x, region.y, region.w, region.h, mouseX, mouseY)) {
                 continue;

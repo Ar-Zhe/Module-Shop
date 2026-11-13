@@ -5,9 +5,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
-
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
@@ -16,6 +15,8 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.storage.DimensionDataStorage;
+
+import javax.annotation.Nullable;
 
 /** 全局的世界级商店数据。所有跨维度的持久化都集中在这里。 */
 public final class ShopSavedData extends SavedData {
@@ -31,6 +32,18 @@ public final class ShopSavedData extends SavedData {
     /** 最近购买记录上限：只用于展示，超出后丢最旧的，避免存档无限膨胀。 */
     public static final int MALL_RECENT_MAX = 200;
     public final List<AuctionEntry> auctions = new ArrayList<>();
+    /** 已结束的拍卖记录（成交 / 流拍 / 撤销 / 损坏），最新在最后；条数上限见 Config.auctionHistoryLimit。 */
+    public final List<AuctionEntry> auctionHistory = new ArrayList<>();
+    /** 拍卖资金 / 结算异常日志（审计、结算异常时追加），供管理员查看。最多 {@link #AUCTION_ANOMALY_MAX} 条。 */
+    public final List<String> auctionAnomalies = new ArrayList<>();
+    public static final int AUCTION_ANOMALY_MAX = 300;
+    /**
+     * 读档时整条解析失败的拍卖（原始 NBT 原样保留并写回），避免一条坏数据让整个存档读不出来，
+     * 也避免把它悄悄丢掉。管理员可以用 /shop auction audit 看到数量。
+     */
+    public final List<CompoundTag> auctionCorrupt = new ArrayList<>();
+    /** 拍卖列表版本号（不存档）：任何拍卖变化 +1，客户端据此判断要不要重新拉列表。 */
+    public transient long auctionVersion = 1L;
     /** 玩家求购（悬赏）单：悬赏在发布时就已托管，撤销 / 到期原样退回。 */
     public final List<DemandEntry> demands = new ArrayList<>();
     /** 管理员配置的可兑换货币（1 个物品 = N 星币，双向兑换）。 */
@@ -42,6 +55,12 @@ public final class ShopSavedData extends SavedData {
      */
     public final java.util.LinkedHashSet<String> apiRequests = new java.util.LinkedHashSet<>();
     /** 商店**自定义货币名称**（空 = 用 config 里的 currencyName）。管理员在编辑布局里右键余额修改。 */
+
+    /** 新世界模板初始化是否已执行过（true = 之后永不再自动初始化）。 */
+    public boolean templateInitDone;
+
+    /** 是否已经写过模组自带的默认商品（用于区分新世界与老存档）。 */
+    public boolean seedDefaultsApplied;
     public String shopCurrency = "";
 
     /** 幂等键保留上限（防无限增长）。 */
@@ -192,14 +211,18 @@ public final class ShopSavedData extends SavedData {
 
     @Override
     public CompoundTag save(CompoundTag tag) {
-        // 1.20.1 的物品序列化走 NBT，不再需要 RegistryAccess（保留变量以便共用旧的 save 调用）。
-        RegistryAccess registries = null;
+        return save(tag, null);
+    }
+
+    public CompoundTag save(CompoundTag tag, @Nullable HolderLookup.Provider registries) {
         CompoundTag accountsTag = new CompoundTag();
         for (Map.Entry<UUID, PlayerAccount> entry : accounts.entrySet()) {
             accountsTag.put(entry.getKey().toString(), entry.getValue().save(registries));
         }
         tag.put("accounts", accountsTag);
 
+        tag.putBoolean("templateInitDone", templateInitDone);
+        tag.putBoolean("seedDefaultsApplied", seedDefaultsApplied);
         tag.put("shopPool", saveOffers(shopPool, registries));
         tag.put("buybackPool", saveOffers(buybackPool, registries));
         // 购物城：常驻货架 + 最近购买记录
@@ -214,6 +237,21 @@ public final class ShopSavedData extends SavedData {
         }
         tag.put("mallRecent", recentList);
         tag.put("auctions", saveAuctions(registries));
+        ListTag historyList = new ListTag();
+        for (AuctionEntry entry : auctionHistory) {
+            historyList.add(entry.save(registries));
+        }
+        tag.put("auctionHistory", historyList);
+        ListTag anomalyList = new ListTag();
+        for (String line : auctionAnomalies) {
+            anomalyList.add(StringTag.valueOf(line));
+        }
+        tag.put("auctionAnomalies", anomalyList);
+        ListTag corruptList = new ListTag();
+        for (CompoundTag raw : auctionCorrupt) {
+            corruptList.add(raw.copy());
+        }
+        tag.put("auctionCorrupt", corruptList);
         ListTag demandList = new ListTag();
         for (DemandEntry entry : demands) {
             demandList.add(entry.save(registries));
@@ -277,9 +315,15 @@ public final class ShopSavedData extends SavedData {
         return tag;
     }
 
-    public static ShopSavedData load(CompoundTag tag, RegistryAccess registries) {
+    public static ShopSavedData load(CompoundTag tag) {
+        return load(tag, null);
+    }
+
+    public static ShopSavedData load(CompoundTag tag, @Nullable HolderLookup.Provider registries) {
         ShopSavedData data = new ShopSavedData();
 
+        data.templateInitDone = tag.getBoolean("templateInitDone");
+        data.seedDefaultsApplied = tag.getBoolean("seedDefaultsApplied");
         CompoundTag accountsTag = tag.getCompound("accounts");
         for (String key : accountsTag.getAllKeys()) {
             try {
@@ -318,10 +362,37 @@ public final class ShopSavedData extends SavedData {
         for (int i = 0; i < apiRequestList.size(); i++) {
             data.apiRequests.add(apiRequestList.getString(i));
         }
+        long legacyDuration;
+        try {
+            legacyDuration = cn.autoforged.module_shop.Config.INSTANCE.auctionDurationSeconds.get() * 1000L;
+        } catch (RuntimeException notLoaded) {
+            legacyDuration = 7_200_000L;
+        }
         ListTag auctionList = tag.getList("auctions", Tag.TAG_COMPOUND);
         for (int i = 0; i < auctionList.size(); i++) {
-            data.auctions.add(AuctionEntry.load(auctionList.getCompound(i), registries));
+            loadAuctionSafely(data, auctionList.getCompound(i), registries, legacyDuration, false);
         }
+        ListTag historyList = tag.getList("auctionHistory", Tag.TAG_COMPOUND);
+        for (int i = 0; i < historyList.size(); i++) {
+            loadAuctionSafely(data, historyList.getCompound(i), registries, legacyDuration, true);
+        }
+        ListTag anomalyList = tag.getList("auctionAnomalies", Tag.TAG_STRING);
+        for (int i = 0; i < anomalyList.size(); i++) {
+            data.auctionAnomalies.add(anomalyList.getString(i));
+        }
+        ListTag corruptList = tag.getList("auctionCorrupt", Tag.TAG_COMPOUND);
+        for (int i = 0; i < corruptList.size(); i++) {
+            data.auctionCorrupt.add(corruptList.getCompound(i).copy());
+        }
+        // 防御：存档里记录的自增 id 落后于实际最大 id（手改存档 / 旧版本 bug）时往前推，避免 id 撞车。
+        long maxId = 0L;
+        for (AuctionEntry e : data.auctions) {
+            maxId = Math.max(maxId, e.id);
+        }
+        for (AuctionEntry e : data.auctionHistory) {
+            maxId = Math.max(maxId, e.id);
+        }
+        data.pendingAuctionMaxId = maxId;
         ListTag exchangeList = tag.getList("exchangePool", Tag.TAG_COMPOUND);
         for (int i = 0; i < exchangeList.size(); i++) {
             ExchangeEntry entry = ExchangeEntry.load(exchangeList.getCompound(i), registries);
@@ -379,6 +450,9 @@ public final class ShopSavedData extends SavedData {
             data.listingCounter = 1L;
         }
         data.nextAuctionId = tag.getLong("nextAuctionId");
+        if (data.nextAuctionId <= data.pendingAuctionMaxId) {
+            data.nextAuctionId = data.pendingAuctionMaxId + 1L;
+        }
         if (data.nextAuctionId <= 0) {
             data.nextAuctionId = 1L;
         }
@@ -396,7 +470,7 @@ public final class ShopSavedData extends SavedData {
         return data;
     }
 
-    private ListTag saveOffers(List<ConfiguredOffer> offers, RegistryAccess registries) {
+    private ListTag saveOffers(List<ConfiguredOffer> offers, HolderLookup.Provider registries) {
         ListTag list = new ListTag();
         for (ConfiguredOffer offer : offers) {
             list.add(offer.save(registries));
@@ -404,7 +478,38 @@ public final class ShopSavedData extends SavedData {
         return list;
     }
 
-    private ListTag saveAuctions(RegistryAccess registries) {
+    /** 读档时的拍卖最大 id（只在 load 里用来修正 nextAuctionId）。 */
+    private transient long pendingAuctionMaxId;
+
+    /** 一条拍卖解析失败时只隔离这一条：原始数据进 auctionCorrupt，存档其余部分照常读取。 */
+    private static void loadAuctionSafely(ShopSavedData data, CompoundTag raw, HolderLookup.Provider registries,
+            long legacyDuration, boolean history) {
+        try {
+            AuctionEntry entry = AuctionEntry.load(raw, registries, legacyDuration);
+            if (history || !entry.active()) {
+                data.auctionHistory.add(entry);
+            } else {
+                data.auctions.add(entry);
+            }
+        } catch (RuntimeException error) {
+            org.slf4j.LoggerFactory.getLogger("module_shop").error("拍卖数据损坏，已隔离保存（id={}）",
+                    raw.getLong("id"), error);
+            data.auctionCorrupt.add(raw.copy());
+        }
+    }
+
+    /** 追加一条拍卖异常日志（带时间戳，超出上限丢最旧）。 */
+    public void auctionAnomaly(String message) {
+        String line = java.time.LocalDateTime.now().withNano(0) + " " + message;
+        auctionAnomalies.add(line);
+        while (auctionAnomalies.size() > AUCTION_ANOMALY_MAX) {
+            auctionAnomalies.remove(0);
+        }
+        org.slf4j.LoggerFactory.getLogger("module_shop/auction").warn(message);
+        setDirty();
+    }
+
+    private ListTag saveAuctions(HolderLookup.Provider registries) {
         ListTag list = new ListTag();
         for (AuctionEntry entry : auctions) {
             list.add(entry.save(registries));
@@ -426,15 +531,66 @@ public final class ShopSavedData extends SavedData {
         return data;
     }
 
-
-
     public static ShopSavedData get(MinecraftServer server) {
         DimensionDataStorage storage = server.overworld().getDataStorage();
-        // 1.20.1 的 API：computeIfAbsent(loadFunction, createSupplier, name)
-        return storage.computeIfAbsent(tag -> load(tag, null), ShopSavedData::create, FILE_ID);
+        return storage.computeIfAbsent(tag -> load(tag, server.registryAccess()), ShopSavedData::create, FILE_ID);
     }
 
     // ============================ 默认商品池 ============================
+
+    /**
+     * 池子是否仍是模组自带的默认商品（用于判断"这是新世界还是已配置过的世界"）。
+     *
+     * <p>比对的是物品 id 集合；只要玩家增删过任何一件商品就不算默认，自动初始化就不会覆盖它。
+     */
+    public boolean isSeedDefaultPools() {
+        // 直接和"刚从默认种子生成的一份数据"逐项比对：以后默认池改了这里也不用改。
+        ShopSavedData fresh = new ShopSavedData();
+        fresh.seedDefaultsIfEmpty();
+        if (shopSlotCount != fresh.shopSlotCount || buybackSlotCount != fresh.buybackSlotCount) {
+            return false;
+        }
+        if (!java.util.Arrays.equals(shopWeights, fresh.shopWeights)
+                || !java.util.Arrays.equals(buybackWeights, fresh.buybackWeights)) {
+            return false;
+        }
+        if (!java.util.Arrays.equals(shopGuarantee, fresh.shopGuarantee)
+                || !java.util.Arrays.equals(buybackGuarantee, fresh.buybackGuarantee)) {
+            return false;
+        }
+        return sameIds(shopPool, fresh.shopPool) && sameIds(buybackPool, fresh.buybackPool);
+    }
+
+    /** 两个商品池的物品 id 多重集合是否完全一致。 */
+    private static boolean sameIds(java.util.List<ConfiguredOffer> a, java.util.List<ConfiguredOffer> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+        for (ConfiguredOffer offer : a) {
+            try {
+                String id = net.minecraft.core.registries.BuiltInRegistries.ITEM
+                        .getKey(offer.stack.getItem()).toString();
+                counts.merge(id, 1, Integer::sum);
+            } catch (RuntimeException error) {
+                return false;
+            }
+        }
+        for (ConfiguredOffer offer : b) {
+            try {
+                String id = net.minecraft.core.registries.BuiltInRegistries.ITEM
+                        .getKey(offer.stack.getItem()).toString();
+                Integer left = counts.get(id);
+                if (left == null || left <= 0) {
+                    return false;
+                }
+                counts.put(id, left - 1);
+            } catch (RuntimeException error) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     private void seedDefaultsIfEmpty() {
         if (shopPool.isEmpty() && buybackPool.isEmpty()) {

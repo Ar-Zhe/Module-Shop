@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import net.minecraft.ChatFormatting;
-import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.network.chat.Component;
@@ -520,7 +520,7 @@ public final class TradeManager {
      */
     private static void send(TradeSession session, ServerPlayer viewer, boolean forceOpen) {
         boolean selfIsA = isA(session, viewer);
-        RegistryAccess regs = viewer.level().registryAccess();
+        HolderLookup.Provider regs = viewer.level().registryAccess();
         CompoundTag tag = new CompoundTag();
         tag.putString("kind", "trade");
         tag.putBoolean("forceOpen", forceOpen);
@@ -549,7 +549,7 @@ public final class TradeManager {
         ClientboundShopSyncPayload.send(player, tag);
     }
 
-    private static ListTag saveItems(List<ItemStack> items, RegistryAccess regs) {
+    private static ListTag saveItems(List<ItemStack> items, HolderLookup.Provider regs) {
         ListTag list = new ListTag();
         for (ItemStack stack : items) {
             list.add(ShopNbt.saveStack(stack, regs));

@@ -219,5 +219,10 @@ public final class AddonPageAdapter implements ShopPage {
         public String currencyName() {
             return ClientShopData.currencyName();
         }
+
+        @Override
+        public cn.autoforged.module_shop.client.ui.render.ItemOverlay items() {
+            return this.shop.items();
+        }
     }
 }

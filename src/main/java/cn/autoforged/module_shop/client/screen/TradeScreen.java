@@ -13,16 +13,13 @@ import net.minecraft.world.item.ItemStack;
  * 玩家交易界面：左右两栏分别显示自己与对方的物品/金额。
  * 双方都点“同意”后进入现实时间倒计时，倒计时结束后双方再点“确定交换”完成交易。
  */
-public class TradeScreen extends Screen {
+public class TradeScreen extends SkiaDialog {
     private static final int PANEL_W = 360;
     private static final int PANEL_H = 224;
     /** 需求 1：交易界面槽位数量为 6（原为 9）。 */
     private static final int MAX_ITEMS = 6;
     private static final int COL_W = 150;
     private static final int ROW_H = 16;
-    private static final int COLOR_TEXT = IOStyle.TEXT;
-    private static final int COLOR_MUTED = IOStyle.TEXT_2;
-    private static final int COLOR_GOLD = IOStyle.ORANGE;
     private static final int COLOR_GREEN = 0x55FF55;
 
     private ButtonZone[] zones;
@@ -37,7 +34,7 @@ public class TradeScreen extends Screen {
 
     @Override
     protected void init() {
-        super.init();
+        skiaInit();
         int x = left();
         int y = top();
         int by = y + PANEL_H - 42;
@@ -61,11 +58,14 @@ public class TradeScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         super.render(g, mouseX, mouseY, partialTick);
         int x = left();
         int y = top();
         Bricks.panel(g, x, y, PANEL_W, PANEL_H);
-        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 8, COLOR_GOLD);
+        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 8, IOStyle.ORANGE);
 
         int colW = COL_W;
         int selfX = x + 10;
@@ -83,22 +83,22 @@ public class TradeScreen extends Screen {
             // 需求 2：等待对方同意请求期间，对方那侧灰色不可选。
             g.drawCenteredString(this.font,
                     Component.translatable("gui.module_shop.trade.waiting_accept", ClientShopData.tradeOtherName),
-                    x + PANEL_W / 2, centerY, COLOR_GOLD);
+                    x + PANEL_W / 2, centerY, IOStyle.ORANGE);
         } else if (ClientShopData.tradeAgreedBoth) {
             long countdown = ClientShopData.tradeCountdownMs;
             if (countdown > 0) {
                 long seconds = (countdown + 999L) / 1000L;
                 IOStyle.centerAt(g, this.font, Component.literal(String.valueOf(seconds)),
-                        x + PANEL_W / 2, centerY - 6, COLOR_GOLD);
+                        x + PANEL_W / 2, centerY - 6, IOStyle.ORANGE);
                 IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.countdown"),
-                        x + PANEL_W / 2, centerY + 10, COLOR_MUTED);
+                        x + PANEL_W / 2, centerY + 10, IOStyle.TEXT_2);
             } else {
                 IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.ready"),
                         x + PANEL_W / 2, centerY, COLOR_GREEN);
             }
         } else {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.waiting"),
-                    x + PANEL_W / 2, centerY, COLOR_MUTED);
+                    x + PANEL_W / 2, centerY, IOStyle.TEXT_2);
         }
 
         for (ButtonZone zone : this.zones) {
@@ -121,9 +121,9 @@ public class TradeScreen extends Screen {
     private void drawSide(GuiGraphics g, int x, int y, int w, String name, List<ItemStack> items, long money,
             boolean agreed, boolean confirmed, boolean active, boolean self, int mouseX, int mouseY) {
         g.fill(x, y, x + w, y + 132, 0xFF202020);
-        g.drawString(this.font, name, x + 6, y + 6, COLOR_TEXT, false);
+        g.drawString(this.font, name, x + 6, y + 6, IOStyle.TEXT, false);
         String moneyText = ClientShopData.money(money);
-        g.drawString(this.font, moneyText, x + w - 6 - this.font.width(moneyText), y + 6, COLOR_GOLD, false);
+        g.drawString(this.font, moneyText, x + w - 6 - this.font.width(moneyText), y + 6, IOStyle.ORANGE, false);
         int rowY = y + 20;
         for (int i = 0; i < items.size() && i < MAX_ITEMS; i++) {
             ItemStack stack = items.get(i);
@@ -131,7 +131,7 @@ public class TradeScreen extends Screen {
             Bricks.slot(g, x + 6, slotY);
             g.renderItem(stack, x + 6, slotY);
             g.renderItemDecorations(this.font, stack, x + 6, slotY);
-            g.drawString(this.font, stack.getHoverName(), x + 26, slotY + 4, COLOR_TEXT, false);
+            g.drawString(this.font, stack.getHoverName(), x + 26, slotY + 4, IOStyle.TEXT, false);
             if (mouseX >= x + 6 && mouseX < x + 22 && mouseY >= slotY && mouseY < slotY + 16) {
                 g.renderTooltip(this.font, stack, mouseX, mouseY);
             }
@@ -151,13 +151,13 @@ public class TradeScreen extends Screen {
         }
         if (items.isEmpty()) {
             g.drawString(this.font, Component.translatable("gui.module_shop.trade.no_items"),
-                    x + 6, rowY + 4, COLOR_MUTED, true);
+                    x + 6, rowY + 4, IOStyle.TEXT_2, true);
         }
         Component status = agreed
                 ? Component.translatable(confirmed ? "gui.module_shop.trade.confirmed"
                         : "gui.module_shop.trade.agreed")
                 : Component.translatable("gui.module_shop.trade.not_agreed");
-        g.drawString(this.font, status, x + 6, y + 120, agreed ? COLOR_GREEN : COLOR_MUTED, false);
+        g.drawString(this.font, status, x + 6, y + 120, agreed ? COLOR_GREEN : IOStyle.TEXT_2, false);
         // 需求 2：对方尚未同意时整列覆盖灰色，表示不可选区。
         if (!active) {
             g.fill(x, y, x + w, y + 132, 0x99101010);
@@ -186,6 +186,9 @@ public class TradeScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         // 需求 3：点击自己区域的红色删除按钮，把该物品退还背包/邮箱。
         if (button == 0 && ClientShopData.tradeAccepted && !ClientShopData.tradeAgreedBoth) {
             int sx = left() + 10;
@@ -239,7 +242,145 @@ public class TradeScreen extends Screen {
         double[] m = IOStyle.mouseGui();
         boolean realHover = enabled && hover && IOStyle.inside(x, y, w, h, m[0], m[1]);
         IOStyle.smallButton(g, x, y, w, h, label, this.font, realHover, IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER,
-                enabled ? COLOR_TEXT : IOStyle.DISABLED_TEXT, (int) Math.round(m[0]), (int) Math.round(m[1]));
+                enabled ? IOStyle.TEXT : IOStyle.DISABLED_TEXT, (int) Math.round(m[0]), (int) Math.round(m[1]));
+    }
+
+    // ------------------------------------------------------------------ Skija
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 370.0F;
+        float colW = 150.0F;
+        float colH = 146.0F;
+        float h = HEADER_H + 8 + colH + 10 + 20 + 8 + 20 + PAD;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        panel(c, x, y, w, h, this.title.getString());
+        float colY = y + HEADER_H + 8;
+        skSide(c, innerX, colY, colW, colH, ClientShopData.tradeSelfName, ClientShopData.tradeSelfItems,
+                ClientShopData.tradeSelfMoney, ClientShopData.tradeSelfAgreed, ClientShopData.tradeSelfConfirmed, true,
+                true);
+        skSide(c, innerX + innerW - colW, colY, colW, colH, ClientShopData.tradeOtherName,
+                ClientShopData.tradeOtherItems, ClientShopData.tradeOtherMoney, ClientShopData.tradeOtherAgreed,
+                ClientShopData.tradeOtherConfirmed, ClientShopData.tradeAccepted, false);
+        // 中间：状态 / 倒计时
+        float midX = innerX + colW;
+        float midW = innerW - colW * 2;
+        float midY = colY + colH / 2;
+        cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, "⇄", cn.autoforged.module_shop.client.ui.AtomUi.BOLD,
+                14, IOStyle.TEXT_3, midX, midY - 22, midW, cn.autoforged.module_shop.client.ui.render.Text.Align.CENTER);
+        if (!ClientShopData.tradeAccepted) {
+            paragraph(c, Component.translatable("gui.module_shop.trade.waiting_accept", ClientShopData.tradeOtherName)
+                    .getString(), midX + 2, midY - 4, midW - 4, cn.autoforged.module_shop.client.ui.render.Text.SMALL,
+                    IOStyle.ORANGE, 4, true);
+        } else if (ClientShopData.tradeAgreedBoth) {
+            long countdown = ClientShopData.tradeCountdownMs;
+            if (countdown > 0) {
+                long seconds = (countdown + 999L) / 1000L;
+                cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, String.valueOf(seconds),
+                        cn.autoforged.module_shop.client.ui.AtomUi.BOLD, 16, IOStyle.ORANGE, midX, midY, midW,
+                        cn.autoforged.module_shop.client.ui.render.Text.Align.CENTER);
+                paragraph(c, Component.translatable("gui.module_shop.trade.countdown").getString(), midX + 2,
+                        midY + 12, midW - 4, cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_2, 3,
+                        true);
+            } else {
+                paragraph(c, Component.translatable("gui.module_shop.trade.ready").getString(), midX + 2, midY - 4,
+                        midW - 4, cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.GREEN, 3, true);
+            }
+        } else {
+            paragraph(c, Component.translatable("gui.module_shop.trade.waiting").getString(), midX + 2, midY - 4,
+                    midW - 4, cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_2, 4, true);
+        }
+        // 操作按钮
+        float by = colY + colH + 10;
+        float gap = 6.0F;
+        float bw = (innerW - gap * 3) / 4;
+        String[][] actions = {
+                {"trade_add_item", "gui.module_shop.trade.add_item"},
+                {"trade_money_gui", "gui.module_shop.trade.set_money"},
+                {"trade_agree", ClientShopData.tradeSelfAgreed ? "gui.module_shop.trade.agree_off"
+                        : "gui.module_shop.trade.agree"},
+                {"trade_confirm", "gui.module_shop.trade.confirm"}};
+        for (int i = 0; i < actions.length; i++) {
+            String action = actions[i][0];
+            float bx = innerX + i * (bw + gap);
+            cn.autoforged.module_shop.client.ui.widget.Button.Kind kind = "trade_confirm".equals(action)
+                    || ("trade_agree".equals(action) && !ClientShopData.tradeSelfAgreed)
+                    ? cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT
+                    : cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL;
+            boolean enabled = isEnabled(action);
+            button(c, action, Component.translatable(actions[i][1]).getString(), bx, by, bw, 20, kind, enabled,
+                    () -> sendAction(action));
+            if (!enabled && "trade_add_item".equals(action) && ClientShopData.tradeSelfItems.size() >= MAX_ITEMS
+                    && over(bx, by, bw, 20)) {
+                tip(Component.translatable("gui.module_shop.trade.full"));
+            }
+        }
+        button(c, "trade_cancel", Component.translatable("gui.module_shop.trade.cancel").getString(),
+                innerX + innerW - 90, y + h - PAD - 20, 90, 20,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.DANGER, true, () -> sendAction("trade_cancel"));
+    }
+
+    private static void sendAction(String action) {
+        CompoundTag tag = new CompoundTag();
+        tag.putString("action", action);
+        ServerboundShopActionPayload.send(tag);
+    }
+
+    private void skSide(io.github.humbleui.skija.Canvas c, float x, float y, float w, float h, String name,
+                        List<ItemStack> list, long money, boolean agreed, boolean confirmed, boolean active,
+                        boolean self) {
+        card(c, x, y, w, h);
+        text(c, name, x + 6, y + 9, w * 0.55F, IOStyle.TEXT);
+        right(c, ClientShopData.money(money), x, y + 9, w - 6, IOStyle.ORANGE);
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x + 4, y + 18, w - 8, 0.5F, 0, IOStyle.HAIR);
+        float rowY = y + 22;
+        boolean removable = self && ClientShopData.tradeAccepted && !ClientShopData.tradeAgreedBoth;
+        for (int i = 0; i < list.size() && i < MAX_ITEMS; i++) {
+            ItemStack stack = list.get(i);
+            float sy = rowY + i * 18;
+            cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x + 5, sy, 17, 17, 2, IOStyle.FIELD_BG);
+            item(stack, x + 5.5F, sy + 0.5F);
+            text(c, stack.getHoverName().getString(), x + 26, sy + 8.5F, w - 26 - (removable ? 20 : 6), IOStyle.TEXT);
+            if (removable) {
+                final int index = i;
+                float bx = x + w - 16;
+                float byy = sy + 3;
+                float hv = hover("rm" + i, bx, byy, 11, 11);
+                cn.autoforged.module_shop.client.ui.render.Draw.fill(c, bx, byy, 11, 11, 2,
+                        cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.RED_TINT, IOStyle.RED, hv));
+                cn.autoforged.module_shop.client.ui.render.Draw.cross(c, bx + 5.5F, byy + 5.5F, 2.5F, 1.2F,
+                        cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.RED, 0xFFFFFFFF, hv));
+                hit(bx, byy, 11, 11, () -> {
+                    CompoundTag tag = new CompoundTag();
+                    tag.putString("action", "trade_remove_item");
+                    tag.putInt("index", index);
+                    ServerboundShopActionPayload.send(tag);
+                }, null);
+                if (hv > 0.5F) {
+                    tip(Component.translatable("gui.module_shop.trade.remove"));
+                }
+            }
+        }
+        if (list.isEmpty()) {
+            small(c, Component.translatable("gui.module_shop.trade.no_items").getString(), x + 6, rowY + 8, w - 12,
+                    IOStyle.TEXT_3);
+        }
+        String status = (agreed ? Component.translatable(confirmed ? "gui.module_shop.trade.confirmed"
+                : "gui.module_shop.trade.agreed") : Component.translatable("gui.module_shop.trade.not_agreed"))
+                .getString();
+        float dotY = y + h - 9;
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x + 6, dotY - 2.5F, 5, 5, 2.5F,
+                agreed ? IOStyle.GREEN : IOStyle.TEXT_3);
+        small(c, status, x + 15, dotY, w - 20, agreed ? IOStyle.GREEN : IOStyle.TEXT_2);
+        if (!active) {
+            cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x, y, w, h, 3,
+                    cn.autoforged.module_shop.client.ui.render.Draw.alpha(IOStyle.SHEET, 0.72F));
+            center(c, Component.translatable("gui.module_shop.trade.pending").getString(), x, y + h / 2, w,
+                    IOStyle.TEXT_2);
+        }
     }
 
     private static String symbol() {

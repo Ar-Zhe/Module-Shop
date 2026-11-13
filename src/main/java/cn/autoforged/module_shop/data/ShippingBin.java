@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -117,7 +117,7 @@ public final class ShippingBin {
         return true;
     }
 
-    public CompoundTag save(RegistryAccess registries) {
+    public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = new CompoundTag();
         tag.putInt("level", level);
         ListTag list = new ListTag();
@@ -139,7 +139,7 @@ public final class ShippingBin {
         return tag;
     }
 
-    public static ShippingBin load(CompoundTag tag, RegistryAccess registries) {
+    public static ShippingBin load(CompoundTag tag, HolderLookup.Provider registries) {
         ShippingBin bin = new ShippingBin();
         bin.level = Math.max(1, tag.getInt("level"));
         ListTag list = tag.getList("slots", Tag.TAG_COMPOUND);

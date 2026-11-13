@@ -1,25 +1,13 @@
 package cn.autoforged.module_shop.client;
 
-
-import net.minecraftforge.fml.common.Mod;
 import cn.autoforged.module_shop.ModuleShopMod;
-import cn.autoforged.module_shop.client.screen.BatchAddScreen;
-import cn.autoforged.module_shop.client.screen.DepositScreen;
-import cn.autoforged.module_shop.client.screen.GrantScreen;
-import cn.autoforged.module_shop.client.screen.RedeemRewardEditorScreen;
-import cn.autoforged.module_shop.client.screen.ScheduleRewardItemsScreen;
-import cn.autoforged.module_shop.client.screen.ShippingBinScreen;
-import cn.autoforged.module_shop.menu.ModMenus;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.KeyMapping;
 import net.minecraftforge.api.distmarker.Dist;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod.EventBusSubscriber;
-import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
-import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
-import net.minecraft.client.gui.screens.MenuScreens;
 import net.minecraftforge.client.settings.KeyConflictContext;
-import net.minecraftforge.common.util.LazyOptional;
+import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
 import org.lwjgl.glfw.GLFW;
 
 @Mod.EventBusSubscriber(modid = ModuleShopMod.MODID, value = Dist.CLIENT)
@@ -27,9 +15,13 @@ public final class ClientEvents {
     public static final String CATEGORY = "key.categories." + ModuleShopMod.MODID;
     public static KeyMapping OPEN_SHOP;
 
+    private ClientEvents() {
+    }
+
     /** 按键的创建器（真正注册在 {@link ClientModEvents} 的 MOD 总线事件里）。 */
     static KeyMapping createOpenShopKey() {
-        return new KeyMapping("key." + ModuleShopMod.MODID + ".open_shop",
+        return new KeyMapping(
+                "key." + ModuleShopMod.MODID + ".open_shop",
                 KeyConflictContext.IN_GAME,
                 InputConstants.Type.KEYSYM,
                 GLFW.GLFW_KEY_K,
@@ -95,20 +87,36 @@ public final class ClientEvents {
     }
 
     /**
-     * 每 tick 兜一次：语言表在切语言 / 资源重载时会被整个换掉（Neo 会重新 inject），
+     * 每 tick 兜一次：语言表在切语言 / 资源重载时会被整个换掉，
      * 换掉之后我们那层包装就没了。这里每帧检查一次，被换掉时立刻重新包上（代价只是两次类型判断）。
      */
     @SubscribeEvent
-    public static void onClientTick(net.minecraftforge.event.TickEvent.ClientTickEvent event) {
-        if (event.phase != net.minecraftforge.event.TickEvent.Phase.END) {
+    public static void onClientTick(TickEvent.ClientTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) {
             return;
         }
         cn.autoforged.module_shop.client.CurrencyNames.apply(ClientShopData.moneySuffix);
+        if (cn.autoforged.module_shop.client.ui.v2.UiV2Tour.enabled()) {
+            cn.autoforged.module_shop.client.ui.v2.UiV2Tour.tick(net.minecraft.client.Minecraft.getInstance());
+        }
+    }
+
+    /** UI v2 原型入口：客户端命令 /shopui2（原型阶段，正式版会去掉）。 */
+    @SubscribeEvent
+    public static void onRegisterClientCommands(net.minecraftforge.client.event.RegisterClientCommandsEvent event) {
+        event.getDispatcher().register(net.minecraft.commands.Commands.literal("shopui2").executes(ctx -> {
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+            mc.tell(() -> mc.setScreen(new cn.autoforged.module_shop.client.ui.v2.ShopV2ProtoScreen()));
+            return 1;
+        }));
     }
 
     /** 退出世界时清空界面层级与「已关闭界面」记录（返回栈是纯客户端状态，不能跨存档残留）。 */
     @SubscribeEvent
     public static void onClientLogout(net.minecraftforge.client.event.ClientPlayerNetworkEvent.LoggingOut event) {
         cn.autoforged.module_shop.client.screen.Nav.clear();
+        // 拍卖缓存（列表 / 版本号 / 详情）也不能带到下一个服务器或存档
+        cn.autoforged.module_shop.client.AuctionClient.reset();
+        cn.autoforged.module_shop.client.StallClient.reset();
     }
 }

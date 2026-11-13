@@ -13,7 +13,7 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.network.chat.Component;
 
 /** 通用数值/文本输入界面：管理员配置、拍卖出价、转账、修改价格都走这里。 */
-public class ShopInputScreen extends Screen {
+public class ShopInputScreen extends SkiaDialog {
     /** 品质字段不用输入框，改成四个品质按钮（点一下就选中，按钮上方显示「当前品质：X」）。 */
     private static final String RARITY_FIELD = "rarity";
     private final CompoundTag request;
@@ -176,7 +176,18 @@ public class ShopInputScreen extends Screen {
 
     @Override
     protected void init() {
-        super.init();
+        List<String> kept = new ArrayList<>();
+        for (EditBox box : this.boxes) {
+            kept.add(box.getValue());
+        }
+        if (skiaInit()) {
+            for (int i = 0; i < this.boxes.size() && i < kept.size(); i++) {
+                if (!kept.get(i).isEmpty()) {
+                    this.boxes.get(i).setValue(kept.get(i));
+                }
+            }
+            return;
+        }
         // init() 在窗口 resize 时会再次执行：先把已输入的值记下来、清空 boxes 再重建，
         // 否则 boxes 会累积成 2N 条，setInitialFocus/confirm 读到的是上一轮已经不在界面上的旧输入框
         // （玩家看到的输入框里敲的数字不会进入发送包）。
@@ -324,11 +335,17 @@ public class ShopInputScreen extends Screen {
     @Override
     public void renderBackground(GuiGraphics g) {
         super.renderBackground(g);
+        if (skia()) {
+            return;
+        }
         Bricks.panel(g, this.left, this.top, this.panelW, this.panelH);
     }
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         this.renderBackground(g);
         super.render(g, mouseX, mouseY, partialTick);
         // 标题/提示过长时截断，避免顶出面板（货币名可能很长，例如别的模组的“银币锭”）。
@@ -371,7 +388,7 @@ public class ShopInputScreen extends Screen {
                     Rarity rarity = Rarity.values()[rect[4]];
                     boolean selected = rarity.id().equals(this.rarityValue);
                     if (selected) {
-                        IOStyle.ring(g, rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2, 0, rarity.color());
+                        IOStyle.ring(g, rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2, 0, IOStyle.rarity(rarity));
                     } else {
                         IOStyle.ring(g, rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2, 0, IOStyle.BORDER_DIM);
                     }
@@ -418,6 +435,170 @@ public class ShopInputScreen extends Screen {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.input.time_bad"),
                     this.left + this.panelW / 2, this.top + this.panelH - 46, IOStyle.RED);
         }
+    }
+
+    // ------------------------------------------------------------------ Skija
+
+    private static final float SK_W = 250.0F;
+    private static final float SK_ROW = 38.0F;
+    private final java.util.Map<String, cn.autoforged.module_shop.client.ui.widget.SkiaTextField> skFields =
+            new java.util.HashMap<>();
+
+    @Override
+    protected void initSkia() {
+        this.boxes.clear();
+        this.boxFields.clear();
+        this.choiceValues.clear();
+        this.skFields.clear();
+        cn.autoforged.module_shop.client.ui.widget.SkiaTextField first = null;
+        for (String field : this.fieldNames) {
+            if (isRarityField(field)) {
+                continue;
+            }
+            ListTag choices = choicesOf(field);
+            if (!choices.isEmpty()) {
+                String preset = this.request.getString("default_" + field).trim();
+                String current = choices.getString(0);
+                for (int k = 0; k < choices.size(); k++) {
+                    if (choices.getString(k).equals(preset)) {
+                        current = preset;
+                    }
+                }
+                this.choiceValues.put(field, current);
+                continue;
+            }
+            cn.autoforged.module_shop.client.ui.widget.SkiaTextField tf = field(isTimeField(field) ? 5 : 32,
+                    isTimeField(field) ? "HH:mm" : "");
+            EditBox box = tf.editBox();
+            String preset = this.request.getString("default_" + field);
+            if (!preset.isEmpty()) {
+                box.setValue(preset);
+            }
+            if (isTimeField(field)) {
+                box.setFilter(text -> text.isEmpty() || text.matches("[0-9:]{0,5}"));
+                box.setResponder(text -> {
+                    String formatted = autoColon(text);
+                    if (!formatted.equals(text)) {
+                        box.setValue(formatted);
+                    }
+                });
+            }
+            this.boxes.add(box);
+            this.boxFields.add(field);
+            this.skFields.put(field, tf);
+            if (first == null) {
+                first = tf;
+            }
+        }
+        if (first != null) {
+            first.focus();
+        }
+    }
+
+    private boolean hasFooterLine() {
+        return (this.request.getLong("unit_price") > 0L && !this.boxes.isEmpty()) || timeBad();
+    }
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float headerExtra = (this.info.isEmpty() ? 0 : 13) + (showBalance() ? 13 : 0);
+        float h = HEADER_H + 8 + headerExtra + this.fieldNames.size() * SK_ROW + (hasFooterLine() ? 14 : 0) + 4 + 20
+                + PAD;
+        float x = Math.round((this.width - SK_W) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        float innerW = SK_W - PAD * 2;
+        panel(c, x, y, SK_W, h, this.title.getString());
+        float cy = y + HEADER_H + 8;
+        if (!this.info.isEmpty()) {
+            center(c, this.info, innerX, cy + 5, innerW, IOStyle.TEXT_2);
+            cy += 13;
+        }
+        if (showBalance()) {
+            String bal = Component.translatable("gui.module_shop.trade.balance",
+                    cn.autoforged.module_shop.client.ClientShopData.money(this.request.getLong("balance"))).getString();
+            if (overBalance()) {
+                text(c, bal, innerX, cy + 5, innerW * 0.6F, IOStyle.ORANGE);
+                right(c, Component.translatable("gui.module_shop.input.not_enough").getString(), innerX, cy + 5, innerW,
+                        IOStyle.RED);
+            } else {
+                center(c, bal, innerX, cy + 5, innerW, IOStyle.ORANGE);
+            }
+            cy += 13;
+        }
+        for (String field : this.fieldNames) {
+            String label = Component.translatable("gui.module_shop.field." + field).getString();
+            float labelW = small(c, label, innerX, cy + 5, innerW, IOStyle.TEXT_2);
+            float ctrlY = cy + 12;
+            if (isRarityField(field)) {
+                Rarity current = Rarity.byId(this.rarityValue);
+                small(c, Component.translatable("gui.module_shop.quality_current",
+                                Component.translatable(current.translationKey())).getString(),
+                        innerX + labelW + 8, cy + 5, innerW - labelW - 8, IOStyle.rarity(current));
+                Rarity[] all = Rarity.values();
+                float gap = 4.0F;
+                float bw = (innerW - gap * (all.length - 1)) / all.length;
+                for (int k = 0; k < all.length; k++) {
+                    Rarity r = all[k];
+                    chip(c, "rarity:" + r.id(), Component.translatable(r.translationKey()).getString(),
+                            // Rarity.color() 是不带透明度的 RGB，直接用会整块透明（选中项“消失”）；改用主题色
+                            innerX + k * (bw + gap), ctrlY, bw, 18, r.id().equals(this.rarityValue),
+                            IOStyle.rarity(r),
+                            () -> this.rarityValue = r.id());
+                }
+            } else if (this.choiceValues.containsKey(field)) {
+                ListTag choices = choicesOf(field);
+                String value = this.choiceValues.get(field);
+                int count = Math.min(4, choices.size());
+                float gap = 4.0F;
+                float bw = (innerW - gap * (count - 1)) / Math.max(1, count);
+                for (int k = 0; k < count; k++) {
+                    String v = choices.getString(k);
+                    chip(c, "choice:" + field + ":" + v, choiceLabel(field, v).getString(), innerX + k * (bw + gap),
+                            ctrlY, bw, 18, v.equals(value), IOStyle.BLUE, () -> this.choiceValues.put(field, v));
+                }
+            } else {
+                cn.autoforged.module_shop.client.ui.widget.SkiaTextField tf = this.skFields.get(field);
+                if (tf != null) {
+                    tf.bounds(innerX, ctrlY, innerW, 18);
+                }
+            }
+            cy += SK_ROW;
+        }
+        if (timeBad()) {
+            center(c, Component.translatable("gui.module_shop.input.time_bad").getString(), innerX, cy + 5, innerW,
+                    IOStyle.RED);
+            cy += 14;
+        } else if (hasFooterLine()) {
+            long unit = this.request.getLong("unit_price");
+            long qty = enteredQuantity();
+            long total = qty > Long.MAX_VALUE / unit ? Long.MAX_VALUE : qty * unit;
+            long after = this.request.getLong("balance") - total;
+            String key = this.request.contains("total_key") ? this.request.getString("total_key")
+                    : "gui.module_shop.buy_total";
+            center(c, Component.translatable(key, cn.autoforged.module_shop.client.ClientShopData.money(total),
+                            cn.autoforged.module_shop.client.ClientShopData.money(after)).getString(), innerX, cy + 5,
+                    innerW, overBalance() ? IOStyle.RED : IOStyle.ORANGE);
+            cy += 14;
+        }
+        boolean confirmRight = this.request.getBoolean("confirm_right");
+        float bw = 90.0F;
+        float by = y + h - PAD - 20;
+        float leftX = x + PAD + 8;
+        float rightX = x + SK_W - PAD - 8 - bw;
+        String confirm = Component.translatable("gui.module_shop.confirm").getString();
+        String cancel = Component.translatable("gui.module_shop.cancel").getString();
+        boolean canConfirm = !timeBad();
+        button(c, "confirm", confirm, confirmRight ? rightX : leftX, by, bw, 20,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, canConfirm, this::confirm);
+        button(c, "cancel", cancel, confirmRight ? leftX : rightX, by, bw, 20,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, this::onClose);
+    }
+
+    @Override
+    protected boolean onEnter() {
+        confirm();
+        return true;
     }
 
     /** 按面板宽度截断文本（超出部分用省略号结尾）。 */

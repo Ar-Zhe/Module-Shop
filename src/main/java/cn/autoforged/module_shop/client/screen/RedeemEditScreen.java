@@ -17,7 +17,7 @@ import net.minecraft.network.chat.Component;
  * 「已经领取的玩家不用管」：服务端更新时**保留 usedBy / usedCount**，已领过的人不会重新拿到奖励，
  * 也不会被重置成「没领过」。
  */
-public class RedeemEditScreen extends Screen {
+public class RedeemEditScreen extends SkiaDialog {
     private static final int PANEL_W = 400;
     private static final int PANEL_H = 250;
 
@@ -79,7 +79,9 @@ public class RedeemEditScreen extends Screen {
 
     @Override
     protected void init() {
-        super.init();
+        if (skiaInit()) {
+            return;
+        }
         int x = left();
         int y = top();
         this.perPlayerBox = box(x + 92, y + 82, 56);
@@ -114,6 +116,9 @@ public class RedeemEditScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         this.regions.clear();
         this.pointerX = mouseX;
         this.pointerY = mouseY;
@@ -181,6 +186,116 @@ public class RedeemEditScreen extends Screen {
         }
     }
 
+    // ------------------------------------------------------------------ Skija
+
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skPer;
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skTotal;
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skTitle;
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skNote;
+
+    @Override
+    protected void initSkia() {
+        this.skPer = field(120, "1");
+        this.perPlayerBox = this.skPer.editBox();
+        this.skTotal = field(120, "0");
+        this.totalBox = this.skTotal.editBox();
+        this.skTitle = field(120, "");
+        this.titleBox = this.skTitle.editBox();
+        this.skNote = field(120, "");
+        this.noteBox = this.skNote.editBox();
+        this.perPlayerBox.setValue(Integer.toString(Math.max(0, this.data.getInt("perPlayer"))));
+        this.totalBox.setValue(Integer.toString(Math.max(0, this.data.getInt("total"))));
+        this.titleBox.setValue(this.data.getString("title"));
+        this.noteBox.setValue(this.data.getString("note"));
+        restoreInputStash();
+        this.skTitle.focus();
+        CompoundTag request = new CompoundTag();
+        request.putString("code", this.code);
+        send("admin_redeem_preview", request);
+    }
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 400.0F;
+        float h = 262.0F;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        panel(c, x, y, w, h, this.title.getString());
+        float cx = x + w - PAD - 10;
+        float chv = hover("close", cx - 5, y + 6, 14, 14);
+        cn.autoforged.module_shop.client.ui.render.Draw.cross(c, cx + 2, y + 13, 3.5F, 1.3F,
+                cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.TEXT_2, IOStyle.RED, chv));
+        hit(cx - 5, y + 6, 14, 14, this::onClose, null);
+        float labelW = 72;
+        float fx = innerX + labelW;
+        float cy = y + HEADER_H + 8;
+        text(c, Component.translatable("gui.module_shop.redeem.edit.code", this.code).getString(), innerX, cy + 9,
+                innerW / 2, IOStyle.ORANGE);
+        right(c, Component.translatable("gui.module_shop.redeem.edit.claimed", this.data.getInt("used")).getString(),
+                innerX, cy + 9, innerW, IOStyle.TEXT_2);
+        cy += 24;
+        text(c, Component.translatable("gui.module_shop.field.days").getString(), innerX, cy + 9, labelW,
+                IOStyle.TEXT_2);
+        int[] dayValues = {7, 30, 0};
+        String[] dayLabels = {"7", "30", "∞"};
+        for (int i = 0; i < 3; i++) {
+            final int v = dayValues[i];
+            chip(c, "days" + v, dayLabels[i], fx + i * 60, cy, 56, 18, this.days == v, IOStyle.BLUE,
+                    () -> this.days = v);
+        }
+        cy += 24;
+        text(c, Component.translatable("gui.module_shop.field.perPlayer").getString(), innerX, cy + 9, labelW,
+                IOStyle.TEXT_2);
+        this.skPer.bounds(fx, cy, 60, 18);
+        float tx = fx + 76;
+        float tlw = text(c, Component.translatable("gui.module_shop.field.total").getString(), tx, cy + 9, 80,
+                IOStyle.TEXT_2);
+        this.skTotal.bounds(tx + tlw + 8, cy, 60, 18);
+        cy += 26;
+        small(c, Component.translatable("gui.module_shop.redeem.section_reward").getString(), innerX, cy + 4, innerW,
+                IOStyle.TEXT_3);
+        cy += 10;
+        card(c, innerX, cy, innerW, 36);
+        button(c, "reward", Component.translatable("gui.module_shop.redeem.reward_btn").getString(), innerX + 8,
+                cy + 8, 110, 20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true,
+                this::openRewardEditor);
+        String items = ClientShopData.redeemDraftItems == null || ClientShopData.redeemDraftItems.isEmpty()
+                ? Component.translatable("gui.module_shop.redeem.reward_none").getString()
+                : ClientShopData.redeemDraftItems;
+        float sx = innerX + 126;
+        float sw = innerW - 134;
+        small(c, Component.translatable("gui.module_shop.redeem.reward_items_line", items).getString(), sx, cy + 12,
+                sw, IOStyle.TEXT);
+        Component summary = ClientShopData.redeemDraftPlayers.isEmpty()
+                ? Component.translatable("gui.module_shop.redeem.reward_summary_all",
+                ClientShopData.money(ClientShopData.redeemDraftMoney))
+                : Component.translatable("gui.module_shop.redeem.reward_summary",
+                ClientShopData.money(ClientShopData.redeemDraftMoney), ClientShopData.redeemDraftPlayers.size());
+        small(c, summary.getString(), sx, cy + 24, sw,
+                ClientShopData.redeemDraftMoney > 0L ? IOStyle.ORANGE : IOStyle.TEXT_2);
+        cy += 36 + 8;
+        text(c, Component.translatable("gui.module_shop.field.title").getString(), innerX, cy + 9, labelW,
+                IOStyle.TEXT_2);
+        this.skTitle.bounds(fx, cy, innerW - labelW, 18);
+        cy += 24;
+        text(c, Component.translatable("gui.module_shop.field.note").getString(), innerX, cy + 9, labelW,
+                IOStyle.TEXT_2);
+        this.skNote.bounds(fx, cy, innerW - labelW, 18);
+        float by = y + h - PAD - 20;
+        if (!this.hint.isEmpty()) {
+            small(c, this.hint, innerX, by - 8, innerW, this.error ? IOStyle.RED : IOStyle.GREEN);
+        }
+        button(c, "cancel", Component.translatable("gui.module_shop.schedule.cancel").getString(), innerX, by, 80, 20,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, this::onClose);
+        button(c, "save", Component.translatable("gui.module_shop.redeem.edit.save").getString(),
+                innerX + innerW - 120, by, 120, 20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, true,
+                this::save);
+        small(c, Component.translatable("gui.module_shop.redeem.edit.hint").getString(), innerX + 88, by + 10,
+                innerW - 88 - 128, IOStyle.TEXT_3);
+    }
+
     private void small(GuiGraphics g, int x, int y, Component text) {
         small(g, x, y, text, IOStyle.TEXT_2);
     }
@@ -210,6 +325,9 @@ public class RedeemEditScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         for (Region region : this.regions) {
             if (!IOStyle.inside(region.x, region.y, region.w, region.h, mouseX, mouseY)) {
                 continue;

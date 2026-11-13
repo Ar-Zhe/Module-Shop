@@ -3,18 +3,14 @@ package cn.autoforged.module_shop.client.screen.shop;
 import cn.autoforged.module_shop.client.ClickSound;
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.screen.IOStyle;
-import cn.autoforged.module_shop.client.ui.AtomUi;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
-import cn.autoforged.module_shop.client.ui.widget.Button;
-import cn.autoforged.module_shop.client.ui.widget.Motion;
-import cn.autoforged.module_shop.client.ui.widget.ScrollController;
+import cn.autoforged.module_shop.client.ui.v2.ListTable;
+import cn.autoforged.module_shop.client.ui.v2.V2;
 import cn.autoforged.module_shop.data.DemandEntry;
 import io.github.humbleui.skija.Canvas;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import net.minecraft.client.Minecraft;
 import net.minecraft.nbt.CompoundTag;
@@ -22,273 +18,38 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * 玩家求购页（Skija 版）。
- *
- * <ul>
- *     <li>每条求购：想要的物品、清单概要、悬赏（金色）、发布者与剩余时间；点击展开 / 收起（同一时间只展开一条，带动画）；</li>
- *     <li>展开：两列列出每种物品「需要 / 背包里有」与 √ ×；自己的求购显示「撤销」，别人的显示「交付」（数量全够才能点）；</li>
- *     <li>底部：发起求购（demand_create）、只看我的 / 看全部、提示文字。</li>
- * </ul>
- * 过滤与展开状态保存在本页（跨界面重建保留），交付 / 撤销沿用旧动作 demand_fulfill_go / demand_cancel_go。
+ * 玩家求购（UI v2 列表视图）：发布者 · 求购清单 · 总件数 · 悬赏 · 剩余时间 · 我能否交付 · 交付 / 撤销。
+ * 点一行展开子表（每种物品：需要 / 背包有 / 满足），同一时间只展开一条。动作字符串不变。
  */
 public final class DemandPage implements ShopPage {
-    private static final float HEAD_H = 21.0F;
-    private static final float GAP = 3.0F;
-    private static final float LINE_H = 16.0F;
-
+    private static final ListTable TABLE = new ListTable();
     private static boolean onlyMine;
     private static String expandedId;
-    private static float savedScroll;
 
-    private final ScrollController scroll = new ScrollController();
-    private boolean restored;
-    private final Map<String, Float> openT = new HashMap<>();
-    private final Map<String, Float> hoverT = new HashMap<>();
+    /** 表格的一行：line = -1 为求购本身，否则为展开后的第 line 种物品。 */
+    private record Row(DemandEntry entry, int line) {
+    }
 
-    private final Button create = new Button(Button.Kind.ACCENT,
-            () -> Component.translatable("gui.module_shop.demand.create").getString(), null).radius(3.0F);
-    private final Button filter = new Button(Button.Kind.NORMAL,
-            () -> Component.translatable(onlyMine ? "gui.module_shop.demand.filter_all"
-                    : "gui.module_shop.demand.filter_mine").getString(), null).radius(3.0F);
-    private final Button action = new Button(Button.Kind.ACCENT, "", null).radius(2.0F).fontSize(Text.SMALL);
-
-    private float listX, listY, listW, listH;
-    /** 本帧各条的行头区域：{y, id}。 */
-    private final List<Object[]> heads = new ArrayList<>();
-    private boolean actionShown;
+    private List<Row> rows = new ArrayList<>();
+    private float[][] segRects = new float[0][2];
+    private float segY;
+    private float[] createRect;
 
     @Override
     public String id() {
         return "demand";
     }
 
+    private static String tr(String key, Object... args) {
+        return Component.translatable(key, args).getString();
+    }
+
     private static UUID self() {
-        var player = Minecraft.getInstance().player;
-        return player == null ? null : player.getUUID();
+        var p = Minecraft.getInstance().player;
+        return p == null ? null : p.getUUID();
     }
 
-    private static List<DemandEntry> visible() {
-        UUID me = self();
-        List<DemandEntry> list = new ArrayList<>();
-        for (DemandEntry e : ClientShopData.demands) {
-            if (onlyMine && (me == null || !me.equals(e.requester))) {
-                continue;
-            }
-            list.add(e);
-        }
-        return list;
-    }
-
-    private static float detailHeight(DemandEntry e) {
-        int rows = (Math.max(1, e.wants.size()) + 1) / 2;
-        return 6.0F + rows * LINE_H + 20.0F;
-    }
-
-    // ------------------------------------------------------------------ 绘制
-
-    @Override
-    public void render(Canvas canvas, PageFrame f) {
-        List<DemandEntry> list = visible();
-        listX = f.x();
-        listY = f.y() + 2.0F;
-        listW = f.w();
-        listH = f.listBottom() - listY;
-        heads.clear();
-        actionShown = false;
-
-        if (!ClientShopData.demandEnabled) {
-            PageKit.emptyText(canvas, Component.translatable("gui.module_shop.demand.disabled").getString(),
-                    f.x(), f.y() + 54.0F, f.w());
-        } else if (list.isEmpty()) {
-            PageKit.emptyText(canvas, Component.translatable(onlyMine ? "gui.module_shop.demand.empty_mine"
-                    : "gui.module_shop.demand.empty").getString(), f.x(), f.y() + 54.0F, f.w());
-        } else {
-            float content = 0.0F;
-            for (DemandEntry e : list) {
-                float t = Motion.approach(openT.getOrDefault(e.id, 0.0F),
-                        e.id != null && e.id.equals(expandedId) ? 1.0F : 0.0F, f.dtMs(), Motion.PRESS_MS);
-                openT.put(e.id, t);
-                content += HEAD_H + detailHeight(e) * Motion.easeOutCubic(t) + GAP;
-            }
-            scroll.setContent(content - GAP, listH);
-            if (!restored) {
-                scroll.scrollTo(savedScroll, false);
-                restored = true;
-            }
-            scroll.update();
-            savedScroll = scroll.offset();
-            float rowW = listW - 2.0F - (scroll.canScroll() ? 6.0F : 0.0F);
-            int saved = canvas.save();
-            f.host().items().pushClip(listX, listY, listW, listH);
-            try {
-                Draw.clip(canvas, listX - 1.0F, listY, listW + 2.0F, listH);
-                float y = listY - scroll.offset();
-                UUID me = self();
-                for (DemandEntry e : list) {
-                    float t = Motion.easeOutCubic(openT.getOrDefault(e.id, 0.0F));
-                    float detailH = detailHeight(e) * t;
-                    if (y + HEAD_H + detailH >= listY && y <= listY + listH) {
-                        drawEntry(canvas, f, e, me != null && me.equals(e.requester), listX + 2.0F, y, rowW, t);
-                    }
-                    y += HEAD_H + detailH + GAP;
-                }
-            } finally {
-                f.host().items().popClip();
-                canvas.restoreToCount(saved);
-            }
-            scroll.drawBar(canvas, listX, listY, listW, listH, f.mouseX(), f.mouseY(), f.dtMs());
-            if (scroll.hasMoreBelow()) {
-                PageKit.fadeBottom(canvas, listX, listY + listH, rowW + 2.0F, IOStyle.CONTENT);
-            }
-        }
-
-        // 底部
-        float barMid = f.barTop() + PageFrame.BAR_H / 2.0F;
-        create.onClick(() -> f.host().action("demand_create", null)).bounds(f.x() + 4.0F, barMid - 8.0F, 76.0F, 16.0F);
-        filter.onClick(() -> {
-            onlyMine = !onlyMine;
-            scroll.scrollTo(0.0F, false);
-        }).bounds(f.x() + 86.0F, barMid - 8.0F, 76.0F, 16.0F);
-        create.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
-        filter.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
-        Text.drawLine(canvas, Component.translatable("gui.module_shop.demand.hint").getString(), AtomUi.REGULAR,
-                Text.SMALL, IOStyle.TEXT_2, f.x() + 168.0F, barMid, f.w() - 172.0F, Text.Align.LEFT);
-    }
-
-    private void drawEntry(Canvas canvas, PageFrame f, DemandEntry e, boolean mine, float x, float y, float w,
-                           float t) {
-        boolean hover = !scroll.isDragging() && f.mouseX() >= x && f.mouseX() < x + w
-                && f.mouseY() >= Math.max(y, listY) && f.mouseY() < Math.min(y + HEAD_H, listY + listH);
-        float ht = Motion.approach(hoverT.getOrDefault(e.id, 0.0F), hover ? 1.0F : 0.0F, f.dtMs(), Motion.HOVER_MS);
-        hoverT.put(e.id, ht);
-        heads.add(new Object[]{y, e.id});
-
-        // 整条求购是一张卡片：行头 + 展开区在同一个边框里，展开时卡片整体变高
-        float cardH = HEAD_H - 1.0F + detailHeight(e) * t;
-        int bg = Draw.lerp(Draw.lerp(IOStyle.CARD, IOStyle.ROW_HOVER, ht), IOStyle.BLUE_TINT, t);
-        int border = Draw.lerp(Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER, ht), IOStyle.TAB_SEL_BORDER, t);
-        Draw.fill(canvas, x, y, w, cardH, 3.0F, bg);
-        Draw.stroke(canvas, x, y, w, cardH, 3.0F, 1.0F, border);
-        if (t > 0.01F) {
-            // 左侧强调色指示条（与货币兑换展开行一致）+ 行头与清单之间的分隔线
-            float barH = (cardH - 10.0F) * t;
-            Draw.fill(canvas, x + 1.5F, y + (cardH - barH) / 2.0F, 2.0F, barH, 1.0F, Draw.alpha(IOStyle.BLUE, t));
-            Draw.fill(canvas, x + 8.0F, y + HEAD_H - 1.0F, w - 16.0F, 1.0F, 0.0F, Draw.alpha(IOStyle.HAIR, t));
-        }
-        ItemStack want = e.wants.isEmpty() ? ItemStack.EMPTY : e.wants.get(0).display();
-        if (!want.isEmpty()) {
-            f.host().items().add(want, x + 3.0F, y + 2.0F);
-        }
-        if (hover) {
-            f.host().items().setHovered(want);
-        }
-        String who = e.requesterName == null || e.requesterName.isBlank() ? "?" : e.requesterName;
-        String remain = PageKit.remainText(ClientShopData.demandExpireMode, ClientShopData.demandExpireAmount,
-                e.createdGame, e.createdReal);
-        String rightText = remain == null ? who : who + "  " + remain;
-        float rw = Math.min(w * 0.38F, Text.width(rightText, AtomUi.REGULAR, Text.SMALL));
-        float textR = x + w - 14.0F - rw - 6.0F;
-        Text.drawLine(canvas, e.summary().getString(), AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT,
-                x + 23.0F, y + 6.0F, textR - (x + 23.0F), Text.Align.LEFT);
-        Text.drawLine(canvas, Component.translatable("gui.module_shop.demand.reward", rewardLine(e)).getString(),
-                AtomUi.REGULAR, Text.SMALL, IOStyle.ORANGE, x + 23.0F, y + 14.0F, textR - (x + 23.0F),
-                Text.Align.LEFT);
-        Text.drawLine(canvas, rightText, AtomUi.REGULAR, Text.SMALL, mine ? IOStyle.ORANGE : IOStyle.TEXT_2,
-                x + w - 14.0F - rw, y + HEAD_H / 2.0F, rw, Text.Align.RIGHT);
-        // 展开箭头：▸ 收起 → ▾ 展开（旋转）
-        float ax = x + w - 7.0F;
-        float ay = y + HEAD_H / 2.0F;
-        double ang = Math.toRadians(90.0 * t);
-        float s = 2.5F;
-        float c = (float) Math.cos(ang);
-        float sn = (float) Math.sin(ang);
-        int arrow = Draw.lerp(IOStyle.TEXT_3, IOStyle.TEXT_2, ht);
-        Draw.line(canvas, ax + (-s * 0.5F) * c - (-s) * sn, ay + (-s * 0.5F) * sn + (-s) * c,
-                ax + (s * 0.5F) * c, ay + (s * 0.5F) * sn, 1.2F, arrow);
-        Draw.line(canvas, ax + (s * 0.5F) * c, ay + (s * 0.5F) * sn,
-                ax + (-s * 0.5F) * c - s * sn, ay + (-s * 0.5F) * sn + s * c, 1.2F, arrow);
-
-        if (t > 0.01F) {
-            drawDetail(canvas, f, e, mine, x, y + HEAD_H, w, t);
-        }
-    }
-
-    private void drawDetail(Canvas canvas, PageFrame f, DemandEntry e, boolean mine, float x, float y, float w,
-                            float t) {
-        // 清单画在卡片内部（不再单独一块框），按展开进度裁剪，并随展开淡入
-        float h = detailHeight(e) * t;
-        int saved = canvas.save();
-        f.host().items().pushClip(x + 1.0F, y, w - 2.0F, Math.max(0.0F, h - 1.0F));
-        try {
-            Draw.clip(canvas, x + 1.0F, y, w - 2.0F, Math.max(0.0F, h - 1.0F));
-            Draw.beginOpacity(canvas, Math.min(1.0F, t / 0.7F));
-            float fullH = detailHeight(e);
-            float colW = (w - 8.0F) / 2.0F;
-            boolean allEnough = true;
-            for (int i = 0; i < e.wants.size(); i++) {
-                DemandEntry.WantLine line = e.wants.get(i);
-                ItemStack template = line.stack.copy();
-                template.setCount(1);
-                int have = countInBag(template);
-                boolean enough = have >= line.count;
-                allEnough &= enough;
-                String status = Component.translatable("gui.module_shop.demand.need_have", line.count, have)
-                        .getString() + " " + (enough ? "√" : "×");
-                if (e.wants.size() == 1) {
-                    // 只求购一种物品：行头已经写了物品名与数量，这里只补“需要 / 拥有”，与行头文字左对齐
-                    Text.drawLine(canvas, status, AtomUi.REGULAR, Text.SMALL, enough ? IOStyle.GREEN : IOStyle.RED,
-                            x + 23.0F, y + 4.0F + LINE_H / 2.0F, w - 23.0F - 80.0F, Text.Align.LEFT);
-                    continue;
-                }
-                float cx = x + 6.0F + (i % 2) * colW;
-                float cy = y + 4.0F + (i / 2) * LINE_H;
-                f.host().items().add(template, cx, cy, 16.0F, false);
-                if (f.mouseX() >= cx && f.mouseX() < cx + colW - 4.0F && f.mouseY() >= cy && f.mouseY() < cy + LINE_H
-                        && f.mouseY() < y + h) {
-                    f.host().items().setHovered(line.stack); // 悬停看原版说明（含数量）
-                }
-                String tail = status;
-                float tw = Text.width(tail, AtomUi.REGULAR, Text.SMALL);
-                Text.drawLine(canvas, tail, AtomUi.REGULAR, Text.SMALL, enough ? IOStyle.GREEN : IOStyle.RED,
-                        cx + colW - 6.0F - tw, cy + 8.0F, tw + 1.0F, Text.Align.LEFT);
-                Text.drawLine(canvas, PageKit.plainName(line.stack), AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT,
-                        cx + 19.0F, cy + 8.0F, Math.max(10.0F, colW - 6.0F - tw - 4.0F - 19.0F), Text.Align.LEFT);
-            }
-            // 右下角：自己的 → 撤销；别人的 → 交付（数量不够时禁用）
-            if (e.id != null && e.id.equals(expandedId)) {
-                CompoundTag tag = new CompoundTag();
-                tag.putString("id", e.id);
-                action.label(Component.translatable(mine ? "gui.module_shop.demand.cancel_action"
-                                : "gui.module_shop.demand.fulfill_action").getString())
-                        .kind(mine ? Button.Kind.DANGER : Button.Kind.ACCENT)
-                        .onClick(() -> f.host().action(mine ? "demand_cancel_go" : "demand_fulfill_go", tag))
-                        .bounds(x + w - 8.0F - 60.0F, y + fullH - 18.0F, 60.0F, 14.0F);
-                action.enabled(mine || allEnough);
-                boolean inView = y + fullH - 18.0F >= listY && y + fullH - 4.0F <= listY + listH && t > 0.95F;
-                action.visible(inView);
-                if (inView) {
-                    action.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
-                    actionShown = true;
-                }
-            }
-        } finally {
-            f.host().items().popClip();
-            canvas.restoreToCount(saved);
-        }
-    }
-
-    /** 悬赏内容的一行文字（金币 + 物品）。 */
-    static String rewardLine(DemandEntry e) {
-        String money = e.rewardMoney > 0L ? ClientShopData.money(e.rewardMoney) : null;
-        String item = e.rewardItem != null && !e.rewardItem.isEmpty()
-                ? e.rewardItem.getHoverName().getString() + " x" + e.rewardItem.getCount() : null;
-        if (money != null && item != null) {
-            return money + " + " + item;
-        }
-        return money != null ? money : (item != null ? item : "-");
-    }
-
-    /** 背包里有多少个「同物品同组件」的堆（与服务器清点方式一致）。 */
+    /** 背包里有多少个「同物品同组件」（与服务端清点方式一致）。 */
     private static int countInBag(ItemStack template) {
         var player = Minecraft.getInstance().player;
         if (player == null || template.isEmpty()) {
@@ -305,59 +66,208 @@ public final class DemandPage implements ShopPage {
         return total;
     }
 
-    // ------------------------------------------------------------------ 输入
+    /** 还缺多少件才能交付（0 = 都够）。 */
+    private static int missing(DemandEntry e) {
+        int miss = 0;
+        for (DemandEntry.WantLine w : e.wants) {
+            miss += Math.max(0, w.count - countInBag(w.stack));
+        }
+        return miss;
+    }
+
+    static String rewardLine(DemandEntry e) {
+        String money = e.rewardMoney > 0L ? ClientShopData.money(e.rewardMoney) : null;
+        String item = e.rewardItem != null && !e.rewardItem.isEmpty()
+                ? e.rewardItem.getHoverName().getString() + " x" + e.rewardItem.getCount() : null;
+        if (money != null && item != null) {
+            return money + " + " + item;
+        }
+        return money != null ? money : (item != null ? item : "-");
+    }
+
+    private static boolean over(PageFrame f, float x, float y, float w, float h) {
+        return f.mouseX() >= x && f.mouseX() < x + w && f.mouseY() >= y && f.mouseY() < y + h;
+    }
 
     @Override
-    public boolean mouseClicked(PageFrame f, double mx, double my, int button) {
-        if (button == 0 && scroll.pressBar(mx, my, listX, listY, listW, listH)) {
-            return true;
+    public void render(Canvas c, PageFrame f) {
+        float x = f.x();
+        float cy = f.y() + V2.BAR / 2;
+        float by = cy - V2.CTRL / 2;
+        if (!ClientShopData.demandEnabled) {
+            V2.empty(c, tr("gui.module_shop.demand.disabled"), x, f.y(), f.w(), f.h());
+            return;
         }
-        if (create.mouseClicked(mx, my, button) || filter.mouseClicked(mx, my, button)) {
-            return true;
-        }
-        if (actionShown && action.isVisible() && action.mouseClicked(mx, my, button)) {
-            return true;
-        }
-        // 必须同时判断 x：只判断 y 时，点左侧页签（同一高度）会被误当成点了这一行
-        if (button == 0 && mx >= listX && mx < listX + listW - 6.0F && my >= listY && my < listY + listH) {
-            for (Object[] head : heads) {
-                float hy = (float) head[0];
-                if (my >= hy && my < hy + HEAD_H) {
-                    String id = (String) head[1];
-                    ClickSound.play();
-                    expandedId = id != null && id.equals(expandedId) ? null : id;
-                    return true;
+        UUID me = self();
+        int mineCount = 0;
+        rows = new ArrayList<>();
+        for (DemandEntry e : ClientShopData.demands) {
+            boolean mine = me != null && me.equals(e.requester);
+            if (mine) {
+                mineCount++;
+            }
+            if (onlyMine && !mine) {
+                continue;
+            }
+            rows.add(new Row(e, -1));
+            if (e.id != null && e.id.equals(expandedId)) {
+                for (int i = 0; i < e.wants.size(); i++) {
+                    rows.add(new Row(e, i));
                 }
             }
         }
-        return false;
+        Draw.hairline(c, x, f.y() + V2.BAR - 0.5F, f.w(), IOStyle.BORDER_DIM);
+        float tw = V2.bold(c, tr("tab.module_shop.demand"), V2.FS_T, IOStyle.TEXT, x + 8, cy, 90, Text.Align.LEFT);
+        String[] seg = {tr("gui.module_shop.v2.mall.all") + "  " + ClientShopData.demands.size(),
+                tr("gui.module_shop.v2.demand.mine") + "  " + mineCount};
+        segY = by;
+        segRects = V2.segmented(c, seg, onlyMine ? 1 : 0, x + 8 + tw + 10, by, null);
+        String cl = tr("gui.module_shop.v2.demand.create");
+        float cw = V2.buttonWidth(cl);
+        float cx = x + f.w() - 8 - cw;
+        V2.button(c, cl, V2.Btn.PRIMARY, cx, by, cw, V2.CTRL, over(f, cx, by, cw, V2.CTRL) ? 1 : 0);
+        createRect = new float[]{cx, by, cw, V2.CTRL};
+        float segEnd = segRects[1][0] + segRects[1][1] + 10;
+        V2.text(c, tr("gui.module_shop.v2.demand.rules", mineCount, ClientShopData.demandSlots,
+                        String.format("%.0f", ClientShopData.demandFeePercent), ClientShopData.money(ClientShopData.demandMaxReward)),
+                V2.FS_XS, IOStyle.TEXT_2, segEnd, cy, cx - 8 - segEnd, Text.Align.RIGHT);
+
+        float top = f.y() + V2.BAR;
+        float bottom = f.y() + f.h() - V2.FOOT;
+        float[][] cols = V2.columns(x, f.w(), 10, 6, 14, 0, 76, 44, 104, 60, 66, 50);
+        String[] heads = {"", tr("gui.module_shop.v2.col.wants"), tr("gui.module_shop.v2.col.requester"), tr("gui.module_shop.v2.col.total_count"),
+                tr("gui.module_shop.v2.col.reward"), tr("gui.module_shop.v2.col.remain"), tr("gui.module_shop.v2.col.can_deliver"), ""};
+        Text.Align[] al = {Text.Align.LEFT, Text.Align.LEFT, Text.Align.LEFT, Text.Align.RIGHT, Text.Align.RIGHT, Text.Align.RIGHT,
+                Text.Align.RIGHT, Text.Align.RIGHT};
+        TABLE.layout(x, top, f.w(), bottom - top, cols, heads, al, null);
+        if (rows.isEmpty()) {
+            V2.tableHead(c, x, top, f.w(), cols, heads, al, -1, false);
+            V2.empty(c, tr(onlyMine ? "gui.module_shop.demand.empty_mine" : "gui.module_shop.demand.empty"), x, top + V2.HEAD, f.w(),
+                    bottom - top - V2.HEAD);
+        } else {
+            TABLE.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), rows.size(), (cv, row, ry, hover) -> {
+                Row r = rows.get(row);
+                DemandEntry e = r.entry();
+                float rcy = ry + V2.ROW / 2;
+                boolean mine = me != null && me.equals(e.requester);
+                if (r.line() >= 0) {
+                    drawLine(cv, f, cols, e.wants.get(r.line()), ry, rcy);
+                    return;
+                }
+                if (e.id != null && e.id.equals(expandedId)) {
+                    TABLE.selected(cv, ry);
+                }
+                if (!e.wants.isEmpty()) {
+                    f.host().items().add(e.wants.get(0).display(), cols[0][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, true);
+                }
+                StringBuilder names = new StringBuilder();
+                for (int i = 0; i < e.wants.size() && i < 3; i++) {
+                    if (i > 0) {
+                        names.append("、");
+                    }
+                    names.append(e.wants.get(i).stack.getHoverName().getString()).append(" ×").append(e.wants.get(i).count);
+                }
+                if (e.wants.size() > 3) {
+                    names.append(" ").append(tr("gui.module_shop.v2.demand.more", e.wants.size()));
+                }
+                V2.text(cv, names.toString(), V2.FS, IOStyle.TEXT, cols[1][0], rcy, cols[1][1], Text.Align.LEFT);
+                V2.text(cv, e.requesterName, V2.FS_S, mine ? IOStyle.BLUE : IOStyle.TEXT_2, cols[2][0], rcy, cols[2][1], Text.Align.LEFT);
+                V2.text(cv, String.valueOf(e.totalCount()), V2.FS_S, IOStyle.TEXT, cols[3][0], rcy, cols[3][1], Text.Align.RIGHT);
+                V2.bold(cv, rewardLine(e), V2.FS_S, IOStyle.ORANGE, cols[4][0], rcy, cols[4][1], Text.Align.RIGHT);
+                String remain = PageKit.remainText(ClientShopData.demandExpireMode, ClientShopData.demandExpireAmount, e.createdGame,
+                        e.createdReal);
+                V2.text(cv, remain == null ? tr("gui.module_shop.v2.stall.permanent") : remain, V2.FS_S,
+                        remain == null ? IOStyle.TEXT_3 : IOStyle.ORANGE, cols[5][0], rcy, cols[5][1], Text.Align.RIGHT);
+                if (mine) {
+                    V2.text(cv, tr("gui.module_shop.v2.demand.own"), V2.FS_XS, IOStyle.TEXT_3, cols[6][0], rcy, cols[6][1], Text.Align.RIGHT);
+                } else {
+                    int miss = missing(e);
+                    String s = miss == 0 ? tr("gui.module_shop.v2.demand.ready") : tr("gui.module_shop.v2.demand.missing", miss);
+                    V2.bold(cv, s, V2.FS_S, miss == 0 ? IOStyle.GREEN : IOStyle.TEXT_3, cols[6][0], rcy, cols[6][1], Text.Align.RIGHT);
+                }
+                float right = cols[7][0] + cols[7][1];
+                if (mine) {
+                    TABLE.button(cv, row, "cancel", tr("gui.module_shop.demand.cancel_action"), V2.Btn.DANGER, right, ry, hover);
+                } else {
+                    TABLE.button(cv, row, "fulfill", tr("gui.module_shop.demand.fulfill_action"),
+                            missing(e) == 0 ? V2.Btn.PRIMARY : V2.Btn.DISABLED, right, ry, hover);
+                }
+            });
+        }
+        V2.foot(c, x, bottom, f.w(), tr("gui.module_shop.v2.showing", TABLE.firstVisible(), TABLE.lastVisible(), rows.size()),
+                tr("gui.module_shop.v2.demand.hint"));
+    }
+
+    private void drawLine(Canvas c, PageFrame f, float[][] cols, DemandEntry.WantLine w, float ry, float cy) {
+        Draw.fill(c, cols[0][0] - 6, ry, cols[7][0] + cols[7][1] - cols[0][0] + 12, V2.ROW, 0, Draw.alpha(IOStyle.SLOT_INNER, 0.5F));
+        Draw.fill(c, cols[1][0] - 2, ry + 3, 1, V2.ROW - 6, 0, IOStyle.BORDER);
+        f.host().items().add(w.display(), cols[1][0] + 4, ry + (V2.ROW - V2.ICON) / 2, V2.ICON, false);
+        V2.text(c, w.stack.getHoverName().getString(), V2.FS_S, IOStyle.TEXT_2, cols[1][0] + 20, cy, cols[1][1] - 20, Text.Align.LEFT);
+        int have = countInBag(w.stack);
+        boolean ok = have >= w.count;
+        V2.text(c, tr("gui.module_shop.v2.demand.need", w.count), V2.FS_S, IOStyle.TEXT_2, cols[3][0], cy, cols[3][1], Text.Align.RIGHT);
+        V2.text(c, tr("gui.module_shop.v2.demand.have", have), V2.FS_S, ok ? IOStyle.GREEN : IOStyle.TEXT_3, cols[4][0], cy, cols[4][1],
+                Text.Align.RIGHT);
+        V2.bold(c, ok ? "✓" : tr("gui.module_shop.v2.demand.short", w.count - have), V2.FS_S, ok ? IOStyle.GREEN : IOStyle.RED,
+                cols[6][0], cy, cols[6][1], Text.Align.RIGHT);
+    }
+
+    @Override
+    public boolean mouseClicked(PageFrame f, double mx, double my, int button) {
+        if (button != 0) {
+            return false;
+        }
+        for (int i = 0; i < segRects.length; i++) {
+            if (mx >= segRects[i][0] && mx < segRects[i][0] + segRects[i][1] && my >= segY && my < segY + V2.CTRL) {
+                ClickSound.play();
+                onlyMine = i == 1;
+                TABLE.scrollToTop();
+                return true;
+            }
+        }
+        if (createRect != null && mx >= createRect[0] && mx < createRect[0] + createRect[2] && my >= createRect[1]
+                && my < createRect[1] + createRect[3]) {
+            ClickSound.play();
+            f.host().action("demand_create", null);
+            return true;
+        }
+        if (TABLE.pressBar(mx, my)) {
+            return true;
+        }
+        ListTable.Hit hit = TABLE.click(mx, my);
+        if (hit == null || hit.row() < 0 || hit.row() >= rows.size()) {
+            return hit != null;
+        }
+        Row r = rows.get(hit.row());
+        DemandEntry e = r.entry();
+        ClickSound.play();
+        if ("fulfill".equals(hit.button()) || "cancel".equals(hit.button())) {
+            CompoundTag tag = new CompoundTag();
+            tag.putString("id", e.id);
+            f.host().action("cancel".equals(hit.button()) ? "demand_cancel_go" : "demand_fulfill_go", tag);
+            return true;
+        }
+        expandedId = e.id != null && e.id.equals(expandedId) ? null : e.id;
+        return true;
     }
 
     @Override
     public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
-        return scroll.releaseBar() | create.mouseReleased(mx, my, button) | filter.mouseReleased(mx, my, button)
-                | action.mouseReleased(mx, my, button);
+        return TABLE.releaseBar();
     }
 
     @Override
     public boolean mouseDragged(PageFrame f, double mx, double my, int button, double dx, double dy) {
-        return scroll.dragBar(my, listH);
+        return TABLE.dragBar(my);
     }
 
     @Override
     public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
-        if (my < f.listBottom()) {
-            scroll.wheel(scrollY);
-            return true;
-        }
-        return false;
+        return TABLE.wheel(mx, my, scrollY, false);
     }
 
     @Override
     public void cancelInput() {
-        scroll.releaseBar();
-        create.cancelPress();
-        filter.cancelPress();
-        action.cancelPress();
+        TABLE.releaseBar();
     }
 }

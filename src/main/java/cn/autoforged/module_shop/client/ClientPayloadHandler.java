@@ -7,7 +7,9 @@ import cn.autoforged.module_shop.client.screen.ShopScreen;
 import cn.autoforged.module_shop.client.screen.StallBrowseScreen;
 import cn.autoforged.module_shop.client.screen.TradeRequestScreen;
 import cn.autoforged.module_shop.client.screen.TradeScreen;
+import javax.annotation.Nullable;
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.entity.player.Player;
 
@@ -18,12 +20,25 @@ public final class ClientPayloadHandler {
 
     /** 网络层调用（Forge 1.20.1：主线程里没有 payload context，直接取当前玩家）。 */
     public static void handleSync(CompoundTag data) {
-        handleSync(data, net.minecraft.client.Minecraft.getInstance().player);
+        handleSync(data, Minecraft.getInstance().player);
     }
 
-    public static void handleSync(CompoundTag data, Player player) {
+    public static void handleSync(CompoundTag data, @Nullable Player player) {
         Minecraft minecraft = Minecraft.getInstance();
+        RegistryAccess registries = player != null && player.level() != null
+                ? player.level().registryAccess()
+                : (minecraft.level != null ? minecraft.level.registryAccess() : null);
         String kind = data.getString("kind");
+        // 拍卖行的独立数据包（列表 / 增量 / 详情 / 我的拍卖 / 管理配置 / 提交结果）：只更新缓存，界面每帧读取。
+        if (kind.startsWith("auction_")
+                && AuctionClient.handle(kind, data, registries)) {
+            return;
+        }
+        // 玩家商店大厅数据 / 上架结果（注意 stall_browse 仍走下面原有的摊位浏览分支）
+        if (("stall_market".equals(kind) || "stall_result".equals(kind))
+                && StallClient.handle(kind, data, registries)) {
+            return;
+        }
         if ("redeem_list".equals(kind)) {
             cn.autoforged.module_shop.client.screen.RedeemListScreen.applyList(data);
             return;
@@ -50,7 +65,7 @@ public final class ClientPayloadHandler {
                 Nav.openPushed(new StallBrowseScreen(data));
             }
         } else if ("trade".equals(kind)) {
-            ClientShopData.updateTrade(data, player.level().registryAccess());
+            ClientShopData.updateTrade(data, registries);
             if (minecraft.screen instanceof TradeScreen tradeScreen) {
                 tradeScreen.onDataUpdated();
             } else if (data.getBoolean("forceOpen")) {
@@ -86,11 +101,20 @@ public final class ClientPayloadHandler {
         } else if ("redeem_claimed".equals(kind)) {
             // 兑换码领取名单（列表界面「查看」弹窗）。
             ClientShopData.applyRedeemClaimed(data);
+        } else if ("cfg_export".equals(kind)) {
+            // 服务端下发的导出用模板：写进客户端 config/moduleshop/exports/ 并提示路径。
+            ClientTemplateIO.notifyExported(data.getString("json"), data.getString("name"));
+        } else if ("cfg_save_default".equals(kind)) {
+            // 保存为默认模板：写 config/moduleshop/shop_config.json（整合包可直接带上这份文件）。
+            ClientTemplateIO.notifySavedDefault(data.getString("json"), data.getString("name"));
+        } else if ("cfg_preview".equals(kind)) {
+            // 导入预览：交给界面弹出确认框（无界面时只提示）。
+            ClientTemplateIO.showPreview(data);
         } else if ("notify".equals(kind)) {
             // 需求 10：服务端权威下发未读数量，客户端渲染红点并（可能）播放提示音。
             cn.autoforged.module_shop.client.ClientNotifications.update(data);
         } else {
-            ClientShopData.update(data, player.level().registryAccess());
+            ClientShopData.update(data, registries);
             boolean silent = data.getBoolean("silent");
             // 只有服务端明确要求「打开界面」（/shop 等玩家主动请求）时才弹出；
             // 其余推送（午夜刷新 / 邮件合并 / 自动签到发奖…）一律**只更新数据**，

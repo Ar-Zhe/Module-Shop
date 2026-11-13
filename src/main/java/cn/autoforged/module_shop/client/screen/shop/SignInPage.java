@@ -1,135 +1,296 @@
 package cn.autoforged.module_shop.client.screen.shop;
 
+import cn.autoforged.module_shop.client.ClickSound;
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.screen.IOStyle;
-import cn.autoforged.module_shop.client.ui.AtomUi;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
-import cn.autoforged.module_shop.client.ui.widget.Button;
+import cn.autoforged.module_shop.client.ui.v2.ListTable;
+import cn.autoforged.module_shop.client.ui.v2.V2;
 import io.github.humbleui.skija.Canvas;
+import java.time.LocalDate;
+import java.time.YearMonth;
+import java.time.format.TextStyle;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 
 /**
- * 签到页（Skija 版）。
- *
- * <ul>
- *     <li>顶部里程进度条（开了累计加成或配置了里程奖励时显示）：细轨 + 里程圆点，到达变绿，
- *     悬停圆点看该里程奖励；右端「第 N 轮」；</li>
- *     <li>月历（与管理面板共用 {@link SignInCalendar}）：补签期内的过去日期可点击补签；</li>
- *     <li>底栏：今日签到按钮（悬停显示可得星币）+ 连续天数与今日收益。</li>
- * </ul>
+ * 签到（UI v2）：顶部指标条（连签 / 历史最长 / 本月已签 / 里程 / 补签），左边紧凑月历（与管理面板共用
+ * {@link SignInCalendar}，补签点日期），右边是本月逐日清单（状态 · 基础奖励 · 累计加成 · 活动 · 补签 / 签到）。
  */
 public final class SignInPage implements ShopPage {
+    private static final float STATS_H = 36.0F;
+    private static final float CAL_W = 196.0F;
+    private static final ListTable TABLE = new ListTable();
     private final SignInCalendar calendar = new SignInCalendar(false, true);
-    private final Button signIn = new Button(Button.Kind.ACCENT, () -> Component.translatable(
-            ClientShopData.signInDone ? "gui.module_shop.signin.done" : "gui.module_shop.signin.do").getString(), null)
-            .radius(2.0F).fontSize(Text.SMALL);
+    private float[] signRect;
+    private List<LocalDate> days = new ArrayList<>();
 
     @Override
     public String id() {
         return "signin";
     }
 
+    private static String tr(String key, Object... args) {
+        return Component.translatable(key, args).getString();
+    }
+
+    private static boolean over(PageFrame f, float x, float y, float w, float h) {
+        return f.mouseX() >= x && f.mouseX() < x + w && f.mouseY() >= y && f.mouseY() < y + h;
+    }
+
+    private static boolean signed(long epochDay) {
+        return ClientShopData.signInDays.contains(epochDay);
+    }
+
+    private static boolean canMakeup(long epochDay) {
+        long today = ClientShopData.signInToday;
+        return ClientShopData.signInMakeupDays > 0 && epochDay < today && epochDay >= today - ClientShopData.signInMakeupDays
+                && !signed(epochDay);
+    }
+
+    private static List<ClientShopData.ActivityView> activitiesOf(long day) {
+        List<ClientShopData.ActivityView> out = new ArrayList<>();
+        for (ClientShopData.ActivityView a : ClientShopData.activityDays) {
+            if (a.day == day) {
+                out.add(a);
+            }
+        }
+        return out;
+    }
+
     @Override
-    public void render(Canvas canvas, PageFrame f) {
-        float topY = f.y() + 2.0F;
-        // 关了「累计加成」也要画：里程奖励和累计加成是两回事，没这条玩家看不到本轮进度
-        if (ClientShopData.signInCumulative || hasMilestone()) {
-            drawProgress(canvas, f, topY);
-            topY += 19.0F;
+    public void render(Canvas c, PageFrame f) {
+        float x = f.x();
+        float y = f.y();
+        drawToolbar(c, f);
+        drawStats(c, f, x, y + V2.BAR, f.w());
+        float top = y + V2.BAR + STATS_H;
+        // 左：月历
+        Draw.fill(c, x + CAL_W - 0.5F, top, 0.5F, f.h() - V2.BAR - STATS_H, 0, IOStyle.BORDER_DIM);
+        calendar.render(c, f, x + 6, top + 6, CAL_W - 12);
+        // 右：本月逐日
+        YearMonth ym = SignInCalendar.shownMonth();
+        days = new ArrayList<>();
+        for (int d = 1; d <= ym.lengthOfMonth(); d++) {
+            days.add(ym.atDay(d));
         }
-        calendar.render(canvas, f, f.x(), topY, f.w());
-        drawFooter(canvas, f);
+        float bottom = y + f.h() - V2.FOOT;
+        drawTable(c, f, x + CAL_W, top, f.w() - CAL_W, bottom - top);
+        V2.foot(c, x + CAL_W, bottom, f.w() - CAL_W, tr("gui.module_shop.v2.signin.month", ym.getYear(), ym.getMonthValue()),
+                tr("gui.module_shop.v2.signin.hint"));
     }
 
-    /** 里程进度条：4px 细轨 + 每个里程一个 5px 圆点，下面 d 数小字（太密时跳过标签避免压字）。 */
-    private void drawProgress(Canvas canvas, PageFrame f, float y) {
-        int cycle = Math.max(1, ClientShopData.signInCycleDays);
-        int streak = ClientShopData.signInStreak;
-        int roundDay = streak <= 0 ? 0 : (streak - 1) % cycle + 1;
-        int round = streak <= 0 ? 1 : (streak - 1) / cycle + 1;
-        String roundText = Component.translatable("gui.module_shop.signin.round", round).getString();
-        float roundW = Text.width(roundText, AtomUi.REGULAR, Text.SMALL);
-        float px = f.x() + 6.0F;
-        float pw = Math.max(40.0F, f.w() - 12.0F - roundW - 8.0F);
-        float barY = y + 3.0F;
-        float barH = 4.0F;
-        float ratio = Math.min(1.0F, roundDay / (float) cycle);
-        Draw.fill(canvas, px, barY, pw, barH, 2.0F, IOStyle.SEG_TRACK);
-        if (ratio > 0.0F) {
-            Draw.fill(canvas, px, barY, Math.max(barH, pw * ratio), barH, 2.0F, IOStyle.GREEN);
-        }
-        float lastRight = Float.NEGATIVE_INFINITY;
-        int[] days = ClientShopData.signInMileDays;
-        Component tip = null;
-        for (int i = 0; i < days.length; i++) {
-            // 档位天数大于一轮长度的永远到不了，不画
-            if (days[i] <= 0 || days[i] > cycle) {
-                continue;
-            }
-            float dx = Math.max(px + 5.0F, Math.min(px + pw - 5.0F, px + pw * days[i] / (float) cycle));
-            boolean reached = roundDay >= days[i];
-            float dotY = barY + (barH - 5.0F) / 2.0F;
-            Draw.fill(canvas, dx - 2.5F, dotY, 5.0F, 5.0F, 2.5F, reached ? IOStyle.GREEN : IOStyle.TOGGLE_OFF);
-            if (!reached) {
-                Draw.stroke(canvas, dx - 2.5F, dotY, 5.0F, 5.0F, 2.5F, 1.0F, IOStyle.HAIR);
-            }
-            String label = days[i] + "d";
-            float lw = Text.width(label, AtomUi.REGULAR, Text.SMALL);
-            float lx = Math.max(f.x() + 2.0F, Math.min(px + pw - lw, dx - lw / 2.0F));
-            if (lx > lastRight + 3.0F) {
-                Text.drawLine(canvas, label, AtomUi.REGULAR, Text.SMALL, reached ? IOStyle.GREEN : IOStyle.TEXT_2,
-                        lx, barY + 11.0F, lw + 1.0F, Text.Align.LEFT);
-                lastRight = lx + lw;
-            }
-            if (f.mouseX() >= dx - 6.0F && f.mouseX() < dx + 6.0F && f.mouseY() >= dotY - 2.0F
-                    && f.mouseY() < dotY + 7.0F) {
-                long money = i < ClientShopData.signInMileMoney.length ? ClientShopData.signInMileMoney[i] : 0L;
-                tip = Component.translatable("gui.module_shop.signin.mile_tip", days[i],
-                        ClientShopData.money(money), ClientShopData.money(tierBonusAt(days[i])));
-            }
-        }
-        // 右端「第 N 轮」：每满一轮，里程档位重新可领
-        Text.drawLine(canvas, roundText, AtomUi.REGULAR, Text.SMALL, IOStyle.BLUE,
-                f.x() + f.w() - 4.0F - roundW, barY + barH / 2.0F, roundW + 1.0F, Text.Align.LEFT);
-        if (tip != null) {
-            f.host().textTooltip(tip);
-        }
-    }
-
-    private void drawFooter(Canvas canvas, PageFrame f) {
-        float barMid = f.barTop() + PageFrame.BAR_H / 2.0F;
+    private void drawToolbar(Canvas c, PageFrame f) {
+        float x = f.x();
+        float cy = f.y() + V2.BAR / 2;
+        float by = cy - V2.CTRL / 2;
+        Draw.hairline(c, x, f.y() + V2.BAR - 0.5F, f.w(), IOStyle.BORDER_DIM);
+        float tw = V2.bold(c, tr("tab.module_shop.signin"), V2.FS_T, IOStyle.TEXT, x + 8, cy, 90, Text.Align.LEFT);
         boolean done = ClientShopData.signInDone;
         boolean can = !done && ClientShopData.signInEnabled;
-        float btnW = 76.0F;
-        signIn.kind(can ? Button.Kind.ACCENT : Button.Kind.NORMAL)
-                .onClick(() -> f.host().action("sign_in", null))
-                .bounds(f.x() + 4.0F, barMid - 7.0F, btnW, 14.0F);
-        signIn.enabled(can);
-        signIn.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
-        long gain = ClientShopData.signInBase + tierBonusAt(ClientShopData.signInStreak);
-        if (signIn.isMouseOver(f.mouseX(), f.mouseY())) {
-            f.host().textTooltip(Component.translatable("gui.module_shop.signin.gain_tip",
-                    ClientShopData.money(gain)));
+        long gain = ClientShopData.signInBase + SignInPageTier.at(ClientShopData.signInStreak + (done ? 0 : 1));
+        String label = done ? tr("gui.module_shop.signin.done") : tr("gui.module_shop.v2.signin.do", V2.money(gain));
+        float w = V2.buttonWidth(label) + 10;
+        float bx = x + f.w() - 8 - w;
+        V2.button(c, label, can ? V2.Btn.PRIMARY : V2.Btn.DISABLED, bx, by, w, V2.CTRL, over(f, bx, by, w, V2.CTRL) ? 1 : 0);
+        signRect = can ? new float[]{bx, by, w, V2.CTRL} : null;
+        List<String> notes = new ArrayList<>();
+        if (ClientShopData.signInCumulative && ClientShopData.signInTierDays.length > 0) {
+            StringBuilder sb = new StringBuilder(tr("gui.module_shop.v2.signin.tiers"));
+            for (int i = 0; i < ClientShopData.signInTierDays.length; i++) {
+                long b = i < ClientShopData.signInTierBonus.length ? ClientShopData.signInTierBonus[i] : 0;
+                sb.append(' ').append(ClientShopData.signInTierDays[i]).append(tr("gui.module_shop.v2.signin.day_unit")).append(" +").append(b);
+            }
+            notes.add(sb.toString());
         }
-        float statusX = f.x() + 4.0F + btnW + 8.0F;
-        String status = Component.translatable(done ? "gui.module_shop.signin.status_done"
-                : "gui.module_shop.signin.status", ClientShopData.signInStreak, ClientShopData.money(gain)).getString();
-        Text.drawLine(canvas, status, AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_2, statusX, barMid,
-                f.x() + f.w() - 6.0F - statusX, Text.Align.LEFT);
+        if (ClientShopData.signInAuto) {
+            notes.add(tr("gui.module_shop.v2.signin.auto"));
+        }
+        V2.text(c, String.join("  ·  ", notes), V2.FS_XS, IOStyle.TEXT_3, x + 8 + tw + 12, cy, bx - 10 - (x + 8 + tw + 12),
+                Text.Align.RIGHT);
     }
 
-    /** 有没有「本轮内能达成、且有奖励」的里程档位。 */
-    private static boolean hasMilestone() {
-        int cycle = Math.max(1, ClientShopData.signInCycleDays);
-        for (int i = 0; i < ClientShopData.signInMileDays.length; i++) {
-            int day = ClientShopData.signInMileDays[i];
-            long money = i < ClientShopData.signInMileMoney.length ? ClientShopData.signInMileMoney[i] : 0L;
-            if (day > 0 && day <= cycle && money > 0L) {
-                return true;
+    private void drawStats(Canvas c, PageFrame f, float x, float y, float w) {
+        Draw.fill(c, x, y, w, STATS_H, 0, Draw.alpha(IOStyle.CARD, 0.6F));
+        Draw.hairline(c, x, y + STATS_H - 0.5F, w, IOStyle.BORDER_DIM);
+        YearMonth ym = YearMonth.now();
+        int monthSigned = 0;
+        for (long d : ClientShopData.signInDays) {
+            LocalDate ld = LocalDate.ofEpochDay(d);
+            if (ld.getYear() == ym.getYear() && ld.getMonth() == ym.getMonth()) {
+                monthSigned++;
             }
         }
-        return false;
+        int cycle = Math.max(1, ClientShopData.signInCycleDays);
+        int streak = ClientShopData.signInStreak;
+        int round = streak <= 0 ? 1 : (streak - 1) / cycle + 1;
+        int inCycle = streak <= 0 ? 0 : (streak - 1) % cycle + 1;
+        String[][] cells = {
+                {tr("gui.module_shop.v2.signin.streak"), tr("gui.module_shop.v2.signin.days", streak), ""},
+                {tr("gui.module_shop.v2.signin.best"), tr("gui.module_shop.v2.signin.days", Math.max(ClientShopData.signInBest, streak)), ""},
+                {tr("gui.module_shop.v2.signin.this_month"), monthSigned + " / " + LocalDate.now().getDayOfMonth(), ""},
+                {tr("gui.module_shop.v2.signin.mile"), tr("gui.module_shop.v2.signin.round", round, inCycle, cycle), ""},
+                {tr("gui.module_shop.v2.signin.makeup"), ClientShopData.signInMakeupDays > 0
+                        ? V2.money(ClientShopData.signInMakeupCost) : tr("gui.module_shop.v2.signin.makeup_off"),
+                        ClientShopData.signInMakeupDays > 0 ? tr("gui.module_shop.v2.signin.makeup_range", ClientShopData.signInMakeupDays) : ""}};
+        float cw = w / cells.length;
+        for (int i = 0; i < cells.length; i++) {
+            float cx = x + i * cw;
+            if (i > 0) {
+                Draw.fill(c, cx, y + 6, 0.5F, STATS_H - 12, 0, IOStyle.BORDER_DIM);
+            }
+            V2.text(c, cells[i][0], V2.FS_XS, IOStyle.TEXT_3, cx + 9, y + 9, cw - 14, Text.Align.LEFT);
+            V2.bold(c, cells[i][1], V2.FS + 1, i == 0 ? IOStyle.GREEN : IOStyle.TEXT, cx + 9, y + 21, cw - 14, Text.Align.LEFT);
+            if (!cells[i][2].isEmpty()) {
+                V2.text(c, cells[i][2], V2.FS_XS, IOStyle.TEXT_3, cx + 9, y + 30, cw - 14, Text.Align.LEFT);
+            }
+            if (i == 3) {
+                float pw = (cw - 22) / cycle;
+                for (int k = 0; k < cycle && k < 31; k++) {
+                    Draw.fill(c, cx + 9 + k * pw, y + 29, Math.max(1, pw - 1.5F), 2.5F, 1,
+                            k < inCycle ? IOStyle.BLUE : IOStyle.BORDER_DIM);
+                }
+            }
+        }
+    }
+
+    private void drawTable(Canvas c, PageFrame f, float x, float y, float w, float h) {
+        float[][] cols = V2.columns(x, w, 8, 6, 40, 30, 56, 40, 52, 0, 52);
+        String[] heads = {tr("gui.module_shop.v2.col.date"), tr("gui.module_shop.v2.col.weekday"), tr("gui.module_shop.v2.col.state"),
+                tr("gui.module_shop.v2.col.base"), tr("gui.module_shop.v2.col.tier"), tr("gui.module_shop.v2.col.activity"), ""};
+        Text.Align[] al = {Text.Align.LEFT, Text.Align.LEFT, Text.Align.LEFT, Text.Align.RIGHT, Text.Align.RIGHT,
+                Text.Align.LEFT, Text.Align.RIGHT};
+        TABLE.layout(x, y, w, h, cols, heads, al, null);
+        long today = ClientShopData.signInToday != 0 ? ClientShopData.signInToday : LocalDate.now().toEpochDay();
+        TABLE.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), days.size(), (cv, row, ry, hover) -> {
+            LocalDate d = days.get(row);
+            long ed = d.toEpochDay();
+            float cy = ry + V2.ROW / 2;
+            boolean isToday = ed == today;
+            if (isToday) {
+                TABLE.selected(cv, ry);
+            }
+            boolean weekend = d.getDayOfWeek().getValue() >= 6;
+            V2.bold(cv, String.format("%02d-%02d", d.getMonthValue(), d.getDayOfMonth()), V2.FS_S, IOStyle.TEXT, cols[0][0], cy,
+                    cols[0][1], Text.Align.LEFT);
+            V2.text(cv, d.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.getDefault()), V2.FS_S,
+                    weekend ? IOStyle.RED : IOStyle.TEXT_2, cols[1][0], cy, cols[1][1], Text.Align.LEFT);
+            String state;
+            int sc;
+            if (signed(ed)) {
+                state = tr("gui.module_shop.v2.signin.st_done");
+                sc = IOStyle.GREEN;
+            } else if (isToday) {
+                state = tr("gui.module_shop.v2.signin.st_today");
+                sc = IOStyle.BLUE;
+            } else if (ed > today) {
+                state = tr("gui.module_shop.v2.signin.st_future");
+                sc = IOStyle.TEXT_3;
+            } else if (canMakeup(ed)) {
+                state = tr("gui.module_shop.v2.signin.st_makeup");
+                sc = IOStyle.ORANGE;
+            } else {
+                state = tr("gui.module_shop.v2.signin.st_missed");
+                sc = IOStyle.TEXT_3;
+            }
+            V2.tag(cv, state, sc, cols[2][0], cy);
+            V2.text(cv, V2.money(ClientShopData.signInBase), V2.FS_S, ed > today ? IOStyle.TEXT_3 : IOStyle.TEXT, cols[3][0], cy,
+                    cols[3][1], Text.Align.RIGHT);
+            // 累计加成：已签的日子按当时（近似为今天的连签推算）不好还原，这里只对今天及以后给出预计值
+            if (ed >= today && ClientShopData.signInCumulative) {
+                int dayStreak = ClientShopData.signInStreak + (int) (ed - today) + (ClientShopData.signInDone ? 0 : 1);
+                long bonus = SignInPageTier.at(dayStreak);
+                V2.text(cv, bonus > 0 ? "+" + V2.money(bonus) : "—", V2.FS_S, bonus > 0 ? IOStyle.GREEN : IOStyle.TEXT_3,
+                        cols[4][0], cy, cols[4][1], Text.Align.RIGHT);
+            } else {
+                V2.text(cv, "—", V2.FS_S, IOStyle.TEXT_3, cols[4][0], cy, cols[4][1], Text.Align.RIGHT);
+            }
+            List<ClientShopData.ActivityView> acts = activitiesOf(ed);
+            if (!acts.isEmpty()) {
+                ClientShopData.ActivityView a = acts.get(0);
+                float ax = cols[5][0];
+                Draw.fill(cv, ax, cy - 2, 4, 4, 2, a.color != 0 ? (0xFF000000 | a.color) : IOStyle.BLUE);
+                StringBuilder sb = new StringBuilder(a.title == null ? "" : a.title);
+                if (a.money > 0) {
+                    sb.append("  +").append(V2.money(a.money));
+                }
+                if (a.itemText != null && !a.itemText.isEmpty()) {
+                    sb.append("  ").append(a.itemText);
+                }
+                if (acts.size() > 1) {
+                    sb.append("  ").append(tr("gui.module_shop.v2.signin.more_acts", acts.size() - 1));
+                }
+                V2.text(cv, sb.toString(), V2.FS_S, IOStyle.TEXT, ax + 7, cy, cols[5][1] - 7, Text.Align.LEFT);
+            } else {
+                V2.text(cv, "—", V2.FS_S, IOStyle.TEXT_3, cols[5][0], cy, cols[5][1], Text.Align.LEFT);
+            }
+            float right = cols[6][0] + cols[6][1];
+            if (isToday && !ClientShopData.signInDone && ClientShopData.signInEnabled) {
+                TABLE.button(cv, row, "sign", tr("gui.module_shop.v2.signin.sign"), V2.Btn.PRIMARY, right, ry, hover);
+            } else if (canMakeup(ed)) {
+                TABLE.button(cv, row, "makeup", tr("gui.module_shop.v2.signin.makeup_btn"), V2.Btn.NORMAL, right, ry, hover);
+            }
+        });
+    }
+
+    @Override
+    public boolean mouseClicked(PageFrame f, double mx, double my, int button) {
+        if (button == 0 && signRect != null && mx >= signRect[0] && mx < signRect[0] + signRect[2] && my >= signRect[1]
+                && my < signRect[1] + signRect[3]) {
+            ClickSound.play();
+            f.host().action("sign_in", null);
+            return true;
+        }
+        if (calendar.mouseClicked(f, mx, my, button)) {
+            return true;
+        }
+        if (button == 0 && TABLE.pressBar(mx, my)) {
+            return true;
+        }
+        ListTable.Hit hit = TABLE.click(mx, my);
+        if (hit == null || hit.button() == null || hit.row() < 0 || hit.row() >= days.size()) {
+            return hit != null;
+        }
+        ClickSound.play();
+        if ("sign".equals(hit.button())) {
+            f.host().action("sign_in", null);
+        } else if ("makeup".equals(hit.button())) {
+            CompoundTag extra = new CompoundTag();
+            extra.putLong("day", days.get(hit.row()).toEpochDay());
+            f.host().action("signin_makeup", extra);
+        }
+        return true;
+    }
+
+    @Override
+    public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
+        return TABLE.releaseBar();
+    }
+
+    @Override
+    public boolean mouseDragged(PageFrame f, double mx, double my, int button, double dx, double dy) {
+        return TABLE.dragBar(my);
+    }
+
+    @Override
+    public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
+        return TABLE.wheel(mx, my, scrollY, false);
+    }
+
+    @Override
+    public void cancelInput() {
+        TABLE.releaseBar();
+    }
+
+    /** 累计签到档位（与旧版 tierBonusAt 同一规则；AdminPage 等处也会用到）。 */
+    static final class SignInPageTier {
+        static long at(int day) {
+            return tierBonusAt(day);
+        }
     }
 
     /** 指定天数对应的累计签到加成（取不超过该天数的最高档位；关闭累计签到时为 0）。 */
@@ -146,23 +307,16 @@ public final class SignInPage implements ShopPage {
         return bonus;
     }
 
-    // ------------------------------------------------------------------ 输入
-
-    @Override
-    public boolean mouseClicked(PageFrame f, double mx, double my, int button) {
-        if (signIn.isEnabled() && signIn.mouseClicked(mx, my, button)) {
-            return true;
+    /** 旧版里程判定（AdminPage 用）。 */
+    static boolean hasMilestone() {
+        int cycle = Math.max(1, ClientShopData.signInCycleDays);
+        for (int i = 0; i < ClientShopData.signInMileDays.length; i++) {
+            int day = ClientShopData.signInMileDays[i];
+            long money = i < ClientShopData.signInMileMoney.length ? ClientShopData.signInMileMoney[i] : 0L;
+            if (day > 0 && day <= cycle && money > 0L) {
+                return true;
+            }
         }
-        return calendar.mouseClicked(f, mx, my, button);
-    }
-
-    @Override
-    public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
-        return signIn.mouseReleased(mx, my, button);
-    }
-
-    @Override
-    public void cancelInput() {
-        signIn.cancelPress();
+        return false;
     }
 }

@@ -14,14 +14,11 @@ import net.minecraft.network.chat.Component;
  * 顶部是整体提醒音效总开关，下面是各类型单独开关。
  * 界面点击音效（ui_click）不经过本开关，因此关闭提醒音效仍能听到界面点击声。
  */
-public class NotificationSettingsScreen extends Screen {
+public class NotificationSettingsScreen extends SkiaDialog {
     private static final int PANEL_W = 240;
     /** 比原来高一行：底部多了一行「界面点击音效」+ 一行提示，面板加高避免与返回按钮重叠。 */
     private static final int PANEL_H = 224;
     private static final int ROW_H = 20;
-    private static final int COLOR_TEXT = IOStyle.TEXT;
-    private static final int COLOR_MUTED = IOStyle.TEXT_2;
-    private static final int COLOR_GOLD = IOStyle.ORANGE;
     private static final int COLOR_ON = 0xFF3FA34D;
     private static final int COLOR_OFF = 0xFF5A2A2A;
 
@@ -43,12 +40,15 @@ public class NotificationSettingsScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         this.rows.clear();
         super.render(g, mouseX, mouseY, partialTick);
         int x = left();
         int y = top();
         Bricks.panel(g, x, y, PANEL_W, PANEL_H);
-        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 9, COLOR_GOLD);
+        IOStyle.centerAt(g, this.font, this.title, x + PANEL_W / 2, y + 9, IOStyle.ORANGE);
 
         int rowY = y + 26;
         addRow(g, x, rowY, Component.translatable("gui.module_shop.notify.master"), null);
@@ -61,30 +61,33 @@ public class NotificationSettingsScreen extends Screen {
         this.clickRow = new int[]{x + 10, rowY, PANEL_W - 20, ROW_H - 3};
         g.fill(x + 10, rowY, x + PANEL_W - 10, rowY + ROW_H - 3, 0xFF1B1C1F);
         g.drawString(this.font, Component.translatable("gui.module_shop.notify.clicksound"), x + 16, rowY + 5,
-                COLOR_TEXT, false);
+                IOStyle.TEXT, false);
         String name = ClickSound.displayName().getString();
-        IOStyle.centerAt(g, this.font, Component.literal(name), x + PANEL_W - 66, rowY + 5, COLOR_GOLD);
+        IOStyle.centerAt(g, this.font, Component.literal(name), x + PANEL_W - 66, rowY + 5, IOStyle.ORANGE);
         IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.notify.clicksound_hint"),
-                x + PANEL_W / 2, rowY + ROW_H - 1, COLOR_MUTED);
+                x + PANEL_W / 2, rowY + ROW_H - 1, IOStyle.TEXT_2);
 
         drawButton(g, x + 10, y + PANEL_H - 24, 70, 16, Component.translatable("gui.module_shop.back"));
     }
 
     private void addRow(GuiGraphics g, int x, int y, Component label, NotificationType type) {
         g.fill(x + 10, y, x + PANEL_W - 10, y + ROW_H - 3, 0xFF1B1C1F);
-        g.drawString(this.font, label, x + 16, y + 5, COLOR_TEXT, false);
+        g.drawString(this.font, label, x + 16, y + 5, IOStyle.TEXT, false);
         boolean on = type == null ? ClientNotifications.masterSound : ClientNotifications.typeSound(type);
         int bx = x + PANEL_W - 62;
         int by = y + 2;
         g.fill(bx, by, bx + 48, by + 13, on ? COLOR_ON : COLOR_OFF);
         g.fill(bx, by, bx + 48, by + 1, on ? 0xFF6FE07F : 0xFF8A4A4A);
         IOStyle.centerAt(g, this.font, on ? Component.translatable("gui.module_shop.notify.on")
-                : Component.translatable("gui.module_shop.notify.off"), bx + 24, by + 3, COLOR_TEXT);
+                : Component.translatable("gui.module_shop.notify.off"), bx + 24, by + 3, IOStyle.TEXT);
         this.rows.add(new Row(bx, by, 48, 13, type));
     }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         int x = left();
         int y = top();
         if (button == 0 && mouseX >= x + 10 && mouseX < x + 80
@@ -129,12 +132,62 @@ public class NotificationSettingsScreen extends Screen {
         return false;
     }
 
+    // ------------------------------------------------------------------ Skija
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 240.0F;
+        float rowH = 20.0F;
+        int rowsN = 1 + NotificationType.values().length;
+        float h = HEADER_H + 8 + rowsN * rowH + 6 + 22 + 12 + 8 + 20 + PAD;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        panel(c, x, y, w, h, this.title.getString());
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        float ry = y + HEADER_H + 8;
+        card(c, innerX, ry, innerW, rowsN * rowH);
+        for (int i = 0; i < rowsN; i++) {
+            NotificationType type = i == 0 ? null : NotificationType.values()[i - 1];
+            float rowY = ry + i * rowH;
+            if (i > 0) {
+                cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX + 6, rowY, innerW - 12, 1, 0,
+                        IOStyle.HAIR);
+            }
+            String label = (type == null ? Component.translatable("gui.module_shop.notify.master")
+                    : Component.translatable("gui.module_shop.notify." + type.id())).getString();
+            text(c, label, innerX + 8, rowY + rowH / 2, innerW - 50, type == null ? IOStyle.TEXT : IOStyle.TEXT_2);
+            boolean on = type == null ? ClientNotifications.masterSound : ClientNotifications.typeSound(type);
+            toggle(c, "row" + i, innerX + innerW - 30, rowY + (rowH - 12) / 2, on, () -> {
+                if (type == null) {
+                    ClientNotifications.masterSound = !ClientNotifications.masterSound;
+                } else {
+                    ClientNotifications.setTypeSound(type, !ClientNotifications.typeSound(type));
+                }
+            });
+        }
+        float cy = ry + rowsN * rowH + 6;
+        float hv = hover("click", innerX, cy, innerW, 22);
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX, cy, innerW, 22, 3,
+                cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.CARD, IOStyle.GRAY_BTN_HOVER, hv));
+        cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, innerX, cy, innerW, 22, 3, 1,
+                cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, hv));
+        text(c, Component.translatable("gui.module_shop.notify.clicksound").getString(), innerX + 8, cy + 11,
+                innerW * 0.5F, IOStyle.TEXT);
+        right(c, ClickSound.displayName().getString() + "  ›", innerX, cy + 11, innerW - 8, IOStyle.BLUE);
+        hit(innerX, cy, innerW, 22, ClickSound::next, null);
+        small(c, Component.translatable("gui.module_shop.notify.clicksound_hint").getString(), innerX, cy + 30,
+                innerW, IOStyle.TEXT_3);
+        button(c, "back", Component.translatable("gui.module_shop.back").getString(), x + PAD, y + h - PAD - 20, 70,
+                20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, this::onClose);
+    }
+
     private void drawButton(GuiGraphics g, int x, int y, int w, int h, Component label) {
         // 新 UI 皮肤：渐变底 + 内高光 + 悬停上浮 + 按下缩放 + 点击水波。
         double[] m = IOStyle.mouseGui();
         boolean hover = IOStyle.inside(x, y, w, h, m[0], m[1]);
         IOStyle.smallButton(g, x, y, w, h, label, this.font, hover, IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER,
-                COLOR_TEXT, (int) Math.round(m[0]), (int) Math.round(m[1]));
+                IOStyle.TEXT, (int) Math.round(m[0]), (int) Math.round(m[1]));
     }
 
     private record Row(int x, int y, int w, int h, NotificationType type) {

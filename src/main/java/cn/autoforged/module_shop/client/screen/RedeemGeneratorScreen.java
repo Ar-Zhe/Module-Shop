@@ -22,7 +22,7 @@ import net.minecraft.network.chat.Component;
  * 面板底图在 {@link #renderBackground} 里绘制：否则面板会盖住原版输入框的背景与描边，
  * 看起来就是「输入框没有区域、只有几行字」。
  */
-public class RedeemGeneratorScreen extends Screen {
+public class RedeemGeneratorScreen extends SkiaDialog {
     private static final int PANEL_W = 400;
     private static final int PANEL_H = 250;
     private static RedeemGeneratorScreen open;
@@ -76,8 +76,10 @@ public class RedeemGeneratorScreen extends Screen {
 
     @Override
     protected void init() {
-        super.init();
         open = this;
+        if (skiaInit()) {
+            return;
+        }
         int x = left();
         int y = top();
         // 输入框一律「有区域」：自己画一层字段底 + 描边，原版 EditBox 的深色底在暗色面板上几乎看不见。
@@ -146,6 +148,9 @@ public class RedeemGeneratorScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         this.regions.clear();
         this.pointerX = mouseX;
         this.pointerY = mouseY;
@@ -237,6 +242,143 @@ public class RedeemGeneratorScreen extends Screen {
         }
     }
 
+    // ------------------------------------------------------------------ Skija
+
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skCode;
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skPer;
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skTotal;
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skTitle;
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skNote;
+
+    @Override
+    protected void initSkia() {
+        this.skCode = field(19, "AB12-CD34-EF56");
+        this.codeBox = this.skCode.editBox();
+        initCodeBox(this.codeBox);
+        this.skPer = field(120, "1");
+        this.perPlayerBox = this.skPer.editBox();
+        this.skTotal = field(120, "0");
+        this.totalBox = this.skTotal.editBox();
+        this.skTitle = field(120, "");
+        this.titleBox = this.skTitle.editBox();
+        this.skNote = field(120, "");
+        this.noteBox = this.skNote.editBox();
+        this.perPlayerBox.setValue("1");
+        this.totalBox.setValue("0");
+        restoreInputStash();
+        this.skCode.focus();
+        send("admin_redeem_draft_request", null);
+    }
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 400.0F;
+        float h = 262.0F;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        panel(c, x, y, w, h, this.title.getString());
+        cn.autoforged.module_shop.client.ui.widget.Button.Kind n =
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL;
+        // 标题栏：左「兑换码列表」，右「×」
+        float lhv = hover("list", innerX, y + 6, 60, 14);
+        small(c, "‹ " + Component.translatable("gui.module_shop.redeem.list").getString(), innerX, y + 13, 80,
+                cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.TEXT_2, IOStyle.BLUE, lhv));
+        hit(innerX, y + 6, 60, 14, () -> Nav.open(new RedeemListScreen()), null);
+        float cx = x + w - PAD - 10;
+        float chv = hover("close", cx - 5, y + 6, 14, 14);
+        cn.autoforged.module_shop.client.ui.render.Draw.cross(c, cx + 2, y + 13, 3.5F, 1.3F,
+                cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.TEXT_2, IOStyle.RED, chv));
+        hit(cx - 5, y + 6, 14, 14, this::onClose, null);
+        float labelW = 72;
+        float fx = innerX + labelW;
+        float cy = y + HEADER_H + 8;
+        // 兑换码 + 随机
+        text(c, Component.translatable("gui.module_shop.field.code").getString(), innerX, cy + 9, labelW,
+                IOStyle.TEXT_2);
+        this.skCode.bounds(fx, cy, 180, 18);
+        button(c, "random", "", fx + 184, cy, 22, 18, n, true,
+                () -> this.codeBox.setValue(cn.autoforged.module_shop.data.RedeemCode.randomCode(new java.util.Random())));
+        // 骰子图标（字体里没有 🎲，手绘）
+        float dx = fx + 184 + 6;
+        float dy = cy + 4;
+        cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, dx, dy, 10, 10, 2, 1.1F, IOStyle.TEXT);
+        for (float[] p : new float[][]{{2.5F, 2.5F}, {5F, 5F}, {7.5F, 7.5F}}) {
+            cn.autoforged.module_shop.client.ui.render.Draw.fill(c, dx + p[0] - 0.9F, dy + p[1] - 0.9F, 1.8F, 1.8F,
+                    0.9F, IOStyle.TEXT);
+        }
+        if (over(fx + 184, cy, 22, 18)) {
+            tip(Component.translatable("gui.module_shop.redeem.random"));
+        }
+        cy += 24;
+        // 时效
+        text(c, Component.translatable("gui.module_shop.field.days").getString(), innerX, cy + 9, labelW,
+                IOStyle.TEXT_2);
+        int[] dayValues = {7, 30, 0};
+        String[] dayLabels = {"7", "30", "∞"};
+        for (int i = 0; i < 3; i++) {
+            final int v = dayValues[i];
+            chip(c, "days" + v, dayLabels[i], fx + i * 60, cy, 56, 18, this.days == v, IOStyle.BLUE,
+                    () -> this.days = v);
+        }
+        cy += 24;
+        // 限领 / 总上限
+        text(c, Component.translatable("gui.module_shop.field.perPlayer").getString(), innerX, cy + 9, labelW,
+                IOStyle.TEXT_2);
+        this.skPer.bounds(fx, cy, 60, 18);
+        float tx = fx + 76;
+        float tlw = text(c, Component.translatable("gui.module_shop.field.total").getString(), tx, cy + 9, 80,
+                IOStyle.TEXT_2);
+        this.skTotal.bounds(tx + tlw + 8, cy, 60, 18);
+        cy += 26;
+        // 奖励
+        small(c, Component.translatable("gui.module_shop.redeem.section_reward").getString(), innerX, cy + 4, innerW,
+                IOStyle.TEXT_3);
+        cy += 10;
+        card(c, innerX, cy, innerW, 36);
+        boolean readyReward = hasReward();
+        button(c, "reward", Component.translatable("gui.module_shop.redeem.reward_btn").getString(), innerX + 8,
+                cy + 8, 110, 20, readyReward ? cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL
+                        : cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, true, this::openRewardEditor);
+        String items = ClientShopData.redeemDraftItems == null || ClientShopData.redeemDraftItems.isEmpty()
+                ? Component.translatable("gui.module_shop.redeem.reward_none").getString()
+                : ClientShopData.redeemDraftItems;
+        float sx = innerX + 126;
+        float sw = innerW - 134;
+        small(c, Component.translatable("gui.module_shop.redeem.reward_items_line", items).getString(), sx, cy + 12,
+                sw, readyReward ? IOStyle.TEXT : IOStyle.TEXT_2);
+        Component summary = ClientShopData.redeemDraftPlayers.isEmpty()
+                ? Component.translatable("gui.module_shop.redeem.reward_summary_all",
+                ClientShopData.money(ClientShopData.redeemDraftMoney))
+                : Component.translatable("gui.module_shop.redeem.reward_summary",
+                ClientShopData.money(ClientShopData.redeemDraftMoney), ClientShopData.redeemDraftPlayers.size());
+        small(c, summary.getString(), sx, cy + 24, sw,
+                ClientShopData.redeemDraftMoney > 0L ? IOStyle.ORANGE : IOStyle.TEXT_2);
+        cy += 36 + 8;
+        // 标题 / 正文
+        text(c, Component.translatable("gui.module_shop.field.title").getString(), innerX, cy + 9, labelW,
+                IOStyle.TEXT_2);
+        this.skTitle.bounds(fx, cy, innerW - labelW, 18);
+        cy += 24;
+        text(c, Component.translatable("gui.module_shop.field.note").getString(), innerX, cy + 9, labelW,
+                IOStyle.TEXT_2);
+        this.skNote.bounds(fx, cy, innerW - labelW, 18);
+        // 底部
+        float by = y + h - PAD - 20;
+        if (!this.hint.isEmpty()) {
+            small(c, this.hint, innerX, by - 8, innerW, this.error ? IOStyle.RED : IOStyle.GREEN);
+        }
+        button(c, "clear", Component.translatable("gui.module_shop.redeem.clear").getString(), innerX, by, 80, 20, n,
+                true, this::clear);
+        boolean ready = ready();
+        button(c, "generate", Component.translatable("gui.module_shop.redeem.generate").getString(),
+                innerX + innerW - 120, by, 120, 20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT,
+                ready, this::generate);
+        small(c, Component.translatable("gui.module_shop.redeem.mail_hint").getString(), innerX + 88, by + 10,
+                innerW - 88 - 128, IOStyle.TEXT_3);
+    }
+
     /** 0.8 倍小字号（左对齐），与签到/日程设置的排版一致。 */
     private void small(GuiGraphics g, int x, int y, Component text) {
         small(g, x, y, text, IOStyle.TEXT_2);
@@ -280,6 +422,9 @@ public class RedeemGeneratorScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         for (Region region : this.regions) {
             if (!IOStyle.inside(region.x, region.y, region.w, region.h, mouseX, mouseY)) {
                 continue;

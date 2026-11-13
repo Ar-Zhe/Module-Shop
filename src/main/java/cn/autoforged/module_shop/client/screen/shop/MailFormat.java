@@ -48,9 +48,10 @@ public final class MailFormat {
     public static int kindColor(MailEntry entry) {
         String kind = entry.kind == null ? "" : entry.kind;
         return switch (kind) {
-            case "auction" -> 0xFFB388FF;
+            case "auction" -> IOStyle.EPIC;
             case "stall" -> IOStyle.BLUE;
-            case "trade" -> 0xFF4DD0E1;
+            case "trade" -> cn.autoforged.module_shop.client.ui.render.Draw.lerp(0xFF4DD0E1, 0xFF0C849C,
+                    IOStyle.themeProgress());
             case "redeem" -> IOStyle.ORANGE;
             case "activity" -> IOStyle.GREEN;
             case "refund" -> IOStyle.TEXT_2;

@@ -1,11 +1,14 @@
 package cn.autoforged.module_shop.client.ui.render;
 
+import cn.autoforged.module_shop.client.ui.AtomUi;
 import com.atom.lib.client.render.MinecraftRenderBridge;
+import com.mojang.blaze3d.platform.Lighting;
 import com.mojang.blaze3d.systems.RenderSystem;
 import io.github.humbleui.skija.Canvas;
 import java.util.function.Consumer;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
+import org.lwjgl.opengl.GL11;
 
 /**
  * 一帧 Skija 绘制的编排（参考 AtomChat {@code SkiaGraphics} 的精简版，MIT）。
@@ -20,6 +23,23 @@ import net.minecraft.client.gui.GuiGraphics;
  * 之后调用方可以继续用 {@link GuiGraphics} 在 Skija 之上叠加原版内容（物品、tooltip、隐藏输入框）。
  */
 public final class SkiaFrame {
+    /** 当前（或最近一次）Skija 帧里 1 个画布单位 = 多少物理像素。旧界面 = GUI 缩放；UI v2 = 自有缩放。 */
+    private static float unitScale = 0.0F;
+
+    /**
+     * 画布单位 → 原版 GUI 坐标的换算系数（UI v2 自有缩放时不为 1）。
+     * 隐藏输入框（{@code SkiaTextField}）据此把原版 EditBox 放到和画面一致的位置。
+     */
+    public static float unitsToGui() {
+        float gui = (float) Minecraft.getInstance().getWindow().getGuiScale();
+        return unitScale <= 0.0F || gui <= 0.0F ? 1.0F : unitScale / gui;
+    }
+
+    /** 1 个画布单位 = 多少物理像素（还没画过任何帧时等于 GUI 缩放）。 */
+    public static float unitScale() {
+        return unitScale <= 0.0F ? (float) Minecraft.getInstance().getWindow().getGuiScale() : unitScale;
+    }
+
     private SkiaFrame() {
     }
 
@@ -29,12 +49,56 @@ public final class SkiaFrame {
 
     public static void draw(GuiGraphics graphics, Runnable preUi, Consumer<Canvas> painter) {
         RenderSystem.assertOnRenderThread();
+        if (!AtomUi.available()) {
+            // 本帧之前 AtomLib 已被禁用（见下方 LinkageError 处理）：什么都不画，等界面关闭后走旧版。
+            return;
+        }
+        try {
+            drawUnchecked(graphics, preUi, painter);
+        } catch (LinkageError error) {
+            // 前置库更新后接口不兼容：只禁用 AtomLib、关掉当前界面，不让游戏崩溃。
+            // 玩家重新打开时 AtomUi.available() 为 false，界面会使用旧版绘制。
+            AtomUi.disable(error);
+            Minecraft mc = Minecraft.getInstance();
+            mc.execute(() -> {
+                mc.setScreen(null);
+                if (mc.player != null) {
+                    mc.player.displayClientMessage(net.minecraft.network.chat.Component.translatable(
+                            "msg.module_shop.atomlib_incompatible"), false);
+                }
+            });
+        }
+    }
+
+    /**
+     * 用自定义缩放绘制：画布 1 单位 = {@code scale} 个物理像素（不跟随 Minecraft 的 GUI 缩放）。
+     * UI v2 的界面用它按窗口实际大小决定自己的缩放；调用方负责把鼠标坐标换算到同一单位。
+     */
+    public static void drawScaled(GuiGraphics graphics, float scale, Consumer<Canvas> painter) {
+        RenderSystem.assertOnRenderThread();
+        if (!AtomUi.available()) {
+            return;
+        }
+        try {
+            drawUnchecked(graphics, null, painter, scale);
+        } catch (LinkageError error) {
+            AtomUi.disable(error);
+            Minecraft mc = Minecraft.getInstance();
+            mc.execute(() -> mc.setScreen(null));
+        }
+    }
+
+    private static void drawUnchecked(GuiGraphics graphics, Runnable preUi, Consumer<Canvas> painter) {
+        drawUnchecked(graphics, preUi, painter, (float) Minecraft.getInstance().getWindow().getGuiScale());
+    }
+
+    private static void drawUnchecked(GuiGraphics graphics, Runnable preUi, Consumer<Canvas> painter, float scale) {
         graphics.flush();
         MinecraftRenderBridge bridge = MinecraftRenderBridge.get();
         if (preUi != null) {
             bridge.vanillaPass(preUi);
         }
-        float scale = (float) Minecraft.getInstance().getWindow().getGuiScale();
+        unitScale = scale;
         bridge.drawFrame((canvas, frame) -> {
             int base = canvas.getSaveCount();
             canvas.save();
@@ -46,5 +110,25 @@ public final class SkiaFrame {
                 canvas.restoreToCount(base);
             }
         });
+        restoreVanillaState();
+    }
+
+    /**
+     * Skija 画完后把原版渲染依赖的全局状态设回标准值（1.20.1 图标闪烁修复）。
+     *
+     * <p>Skija 之后原版还会叠画物品：页面物品层、容器界面的物品格（出货箱 / 放入物品 / 发放…）、次级弹窗里的物品。
+     * AtomLib 会完整恢复 Skija 改动的 GL 状态，但同一帧里其它渲染（别的模组的界面事件等）可能留下
+     * 非白的着色颜色 / 物品光照 / 深度缓冲内容，原版画物品会直接沿用，表现为图标偶尔一两帧不显示。
+     * 这里统一复位着色颜色、混合、深度测试与写入、物品光照，并清深度缓冲
+     * （之后画的东西都在已画内容之上，GUI 本来就是按绘制顺序叠的）。
+     */
+    public static void restoreVanillaState() {
+        RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.enableDepthTest();
+        RenderSystem.depthMask(true);
+        RenderSystem.clear(GL11.GL_DEPTH_BUFFER_BIT, Minecraft.ON_OSX);
+        Lighting.setupFor3DItems();
     }
 }

@@ -1,18 +1,14 @@
 package cn.autoforged.module_shop.client.screen.shop;
 
 import cn.autoforged.module_shop.client.ClickSound;
-import cn.autoforged.module_shop.client.ClientNotifications;
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.screen.IOStyle;
-import cn.autoforged.module_shop.client.screen.Skins;
-import cn.autoforged.module_shop.client.ui.AtomUi;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
-import cn.autoforged.module_shop.client.ui.widget.Button;
-import cn.autoforged.module_shop.client.ui.widget.Motion;
-import cn.autoforged.module_shop.client.ui.widget.ScrollController;
+import cn.autoforged.module_shop.client.ui.v2.ListTable;
+import cn.autoforged.module_shop.client.ui.v2.V2;
 import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
-import cn.autoforged.module_shop.data.NotificationType;
+import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
 import io.github.humbleui.skija.Canvas;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -23,30 +19,19 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 
 /**
- * 交易 / 转账页（Skija 版）：在线玩家列表 + 搜索框。两个页签共用此类，transfer 只影响文案、色条与点击后的行为
- * （点击统一走 trade_pick，由 ShopScreen 按当前页签决定是发起交易还是输入转账金额）。
- *
- * <p>搜索框是 {@link SkiaTextField}（支持中文输入法）；列表平滑滚动替代翻页；
- * 交易页底部有「交易请求」入口，带未读红点。
+ * 交易 / 转账（UI v2 列表视图）：在线玩家表（搜索、发起交易 / 转账）。
+ * 交易页顶部直接列出收到的交易请求，可就地接受 / 拒绝（与「交易请求」界面同一套动作）。
  */
 public final class PlayerPickerPage implements ShopPage {
-    private static final float SEARCH_H = 17.0F;
-    private static final float ROW_H = 24.0F;
-    private static final float CARD_H = 22.0F;
-    /** 搜索词按页签分别保留（跨界面重建）。 */
     private static final Map<Boolean, String> SAVED_QUERY = new HashMap<>();
+    private static final Map<Boolean, ListTable> TABLES = new HashMap<>();
+    private static final float REQ_H = 24.0F;
 
     private final boolean transfer;
-    private final ScrollController scroll = new ScrollController();
-    private final Map<String, Float> hoverT = new HashMap<>();
     private SkiaTextField search;
-
-    private final Button requests = new Button(Button.Kind.NORMAL,
-            () -> Component.translatable("gui.module_shop.trade.requests").getString(), null)
-            .radius(2.0F).fontSize(Text.SMALL);
-
-    private float listX, listY, listW, listH;
     private List<ClientShopData.OnlinePlayer> shown = List.of();
+    private final List<float[]> btnRects = new ArrayList<>();
+    private final List<Runnable> btnRuns = new ArrayList<>();
 
     public PlayerPickerPage(boolean transfer) {
         this.transfer = transfer;
@@ -57,15 +42,20 @@ public final class PlayerPickerPage implements ShopPage {
         return transfer ? "transfer" : "trade";
     }
 
+    private ListTable table() {
+        return TABLES.computeIfAbsent(transfer, k -> new ListTable());
+    }
+
+    private static String tr(String key, Object... args) {
+        return Component.translatable(key, args).getString();
+    }
+
     @Override
     public void init(ShopHost host) {
         String value = search == null ? SAVED_QUERY.getOrDefault(transfer, "") : search.value();
         search = new SkiaTextField(host.screen(), host.font(), 32)
-                .placeholder(Component.translatable("gui.module_shop.trade.search_hint").getString())
-                .onChange(text -> {
-                    SAVED_QUERY.put(transfer, text);
-                    scroll.scrollTo(0.0F, false);
-                });
+                .placeholder(tr("gui.module_shop.trade.search_hint")).fontSize(V2.FS_S)
+                .onChange(text -> SAVED_QUERY.put(transfer, text));
         search.setValue(value);
         host.registerInput(search.editBox());
     }
@@ -83,138 +73,134 @@ public final class PlayerPickerPage implements ShopPage {
             }
             out.add(p);
         }
+        out.sort((a, b) -> a.name.compareToIgnoreCase(b.name));
         return out;
     }
 
-    @Override
-    public void render(Canvas canvas, PageFrame f) {
-        if (search != null) {
-            search.bounds(f.x() + 4.0F, f.y(), f.w() - 8.0F, SEARCH_H).visible(true);
-            search.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
-        }
-        shown = players();
-        listX = f.x();
-        listY = f.y() + SEARCH_H + 4.0F;
-        listW = f.w();
-        listH = f.listBottom() - listY;
-
-        if (shown.isEmpty()) {
-            PageKit.emptyText(canvas, Component.translatable("gui.module_shop.trade.no_online").getString(),
-                    f.x(), listY + 44.0F, f.w());
-        } else {
-            scroll.setContent(shown.size() * ROW_H - (ROW_H - CARD_H), listH);
-            scroll.update();
-            float rowW = listW - 8.0F - (scroll.canScroll() ? 6.0F : 0.0F);
-            boolean inList = f.mouseX() >= listX + 4.0F && f.mouseX() < listX + 4.0F + rowW
-                    && f.mouseY() >= listY && f.mouseY() < listY + listH;
-            int saved = canvas.save();
-            f.host().items().pushClip(listX, listY, listW, listH);
-            try {
-                Draw.clip(canvas, listX, listY, listW, listH);
-                float off = scroll.offset();
-                for (int i = Math.max(0, (int) (off / ROW_H)); i < shown.size(); i++) {
-                    float y = listY + i * ROW_H - off;
-                    if (y > listY + listH) {
-                        break;
-                    }
-                    ClientShopData.OnlinePlayer p = shown.get(i);
-                    boolean hover = inList && !scroll.isDragging() && f.mouseY() >= y && f.mouseY() < y + CARD_H;
-                    float ht = Motion.approach(hoverT.getOrDefault(p.name, 0.0F), hover ? 1.0F : 0.0F, f.dtMs(),
-                            Motion.HOVER_MS);
-                    hoverT.put(p.name, ht);
-                    float x = listX + 4.0F;
-                    PageKit.hoverCard(canvas, x, y, rowW, CARD_H, ht);
-                    // 色条：交易 = 金、转账 = 蓝
-                    Draw.fill(canvas, x + 4.0F, y + 4.0F, 2.5F, CARD_H - 8.0F, 1.0F,
-                            transfer ? IOStyle.BLUE : IOStyle.ORANGE);
-                    if (p.uuid != null) {
-                        int hx = Math.round(x + 9.0F);
-                        int hy = Math.round(y + 3.0F);
-                        f.host().items().addCustom(hx, hy, 16.0F, 16.0F,
-                                (g, font) -> Skins.drawHead(g, p.uuid, hx, hy, 16));
-                    }
-                    String hint = Component.translatable(transfer ? "gui.module_shop.transfer.click_to_transfer"
-                            : "gui.module_shop.trade.click_to_trade").getString();
-                    float hw = Text.width(hint, AtomUi.REGULAR, Text.SMALL);
-                    Text.drawLine(canvas, hint, AtomUi.REGULAR, Text.SMALL,
-                            Draw.lerp(IOStyle.TEXT_3, IOStyle.TEXT_2, ht), x + rowW - 6.0F - hw, y + CARD_H / 2.0F,
-                            hw + 1.0F, Text.Align.LEFT);
-                    Text.drawLine(canvas, p.name, AtomUi.REGULAR, Text.BODY, IOStyle.TEXT,
-                            x + 30.0F, y + CARD_H / 2.0F, rowW - 30.0F - hw - 12.0F, Text.Align.LEFT);
-                }
-            } finally {
-                f.host().items().popClip();
-                canvas.restoreToCount(saved);
-            }
-            scroll.drawBar(canvas, listX, listY, listW, listH, f.mouseX(), f.mouseY(), f.dtMs());
-        }
-
-        // 交易页：交易请求入口 + 未读红点
-        requests.visible(!transfer);
-        if (!transfer) {
-            float barMid = f.barTop() + PageFrame.BAR_H / 2.0F;
-            float bx = f.x() + 4.0F;
-            float by = barMid - 7.0F;
-            requests.onClick(() -> f.host().action("trade_requests_open", null)).bounds(bx, by, 66.0F, 14.0F);
-            requests.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
-            int right = Math.round(bx + 66.0F);
-            int top = Math.round(by);
-            f.host().items().addCustom(right - 10, top, 12.0F, 12.0F,
-                    (g, font) -> ClientNotifications.drawBadge(g, font, NotificationType.TRADE, right, top));
-        }
+    private static boolean over(PageFrame f, float x, float y, float w, float h) {
+        return f.mouseX() >= x && f.mouseX() < x + w && f.mouseY() >= y && f.mouseY() < y + h;
     }
 
-    // ------------------------------------------------------------------ 输入
+    private float btn(Canvas c, PageFrame f, String label, V2.Btn kind, float x, float y, Runnable run) {
+        float w = V2.buttonWidth(label);
+        V2.button(c, label, kind, x, y, w, V2.CTRL, over(f, x, y, w, V2.CTRL) ? 1 : 0);
+        btnRects.add(new float[]{x, y, w, V2.CTRL});
+        btnRuns.add(run);
+        return w;
+    }
+
+    private static void sendRequest(String action, long id) {
+        CompoundTag tag = new CompoundTag();
+        tag.putString("action", action);
+        tag.putLong("id", id);
+        ServerboundShopActionPayload.send(tag);
+    }
+
+    @Override
+    public void render(Canvas c, PageFrame f) {
+        btnRects.clear();
+        btnRuns.clear();
+        float x = f.x();
+        float cy = f.y() + V2.BAR / 2;
+        float by = cy - V2.CTRL / 2;
+        Draw.hairline(c, x, f.y() + V2.BAR - 0.5F, f.w(), IOStyle.BORDER_DIM);
+        float tw = V2.bold(c, tr(transfer ? "tab.module_shop.transfer" : "tab.module_shop.trade"), V2.FS_T, IOStyle.TEXT, x + 8, cy,
+                90, Text.Align.LEFT);
+        search.visible(true).bounds(x + 8 + tw + 10, by, 160, V2.CTRL);
+        search.render(c, f.mouseX(), f.mouseY(), f.dtMs());
+        shown = players();
+        V2.text(c, tr("gui.module_shop.v2.trade.online", shown.size()), V2.FS_XS, IOStyle.TEXT_2, x + 8 + tw + 178, cy, 120,
+                Text.Align.LEFT);
+        if (!transfer) {
+            String rl = tr("gui.module_shop.v2.trade.requests", ClientShopData.tradeRequests.size());
+            float rw = V2.buttonWidth(rl);
+            btn(c, f, rl, V2.Btn.NORMAL, x + f.w() - 8 - rw, by, () -> f.host().action("trade_requests_open", null));
+        }
+        float top = f.y() + V2.BAR;
+        // 交易请求条
+        if (!transfer && !ClientShopData.tradeRequests.isEmpty()) {
+            Draw.fill(c, x, top, f.w(), REQ_H, 0, Draw.alpha(IOStyle.ORANGE, 0.08F));
+            Draw.hairline(c, x, top + REQ_H - 0.5F, f.w(), IOStyle.BORDER_DIM);
+            float rx = x + 8;
+            float rcy = top + REQ_H / 2;
+            rx += V2.text(c, tr("gui.module_shop.v2.trade.incoming"), V2.FS_XS, IOStyle.TEXT_2, rx, rcy, 80, Text.Align.LEFT) + 8;
+            for (ClientShopData.TradeRequest r : ClientShopData.tradeRequests) {
+                if (rx > x + f.w() - 120) {
+                    break;
+                }
+                long age = (r.ageMs + System.currentTimeMillis() - r.receivedAt) / 1000;
+                float nw = V2.bold(c, r.from, V2.FS_S, IOStyle.TEXT, rx, rcy, 90, Text.Align.LEFT);
+                rx += nw + 4;
+                rx += V2.text(c, tr("gui.module_shop.v2.trade.ago", age), V2.FS_XS, IOStyle.TEXT_3, rx, rcy, 60, Text.Align.LEFT) + 5;
+                long id = r.id;
+                rx += btn(c, f, tr("gui.module_shop.v2.trade.accept"), V2.Btn.PRIMARY, rx, rcy - V2.CTRL / 2,
+                        () -> sendRequest("trade_accept", id)) + 3;
+                rx += btn(c, f, tr("gui.module_shop.v2.trade.decline"), V2.Btn.NORMAL, rx, rcy - V2.CTRL / 2,
+                        () -> sendRequest("trade_decline", id)) + 14;
+            }
+            top += REQ_H;
+        }
+        float bottom = f.y() + f.h() - V2.FOOT;
+        ListTable table = table();
+        float[][] cols = V2.columns(x, f.w(), 10, 8, 12, 0, 80, 90);
+        String[] heads = {"", tr("gui.module_shop.v2.col.player"), tr("gui.module_shop.v2.col.state"), ""};
+        Text.Align[] al = {Text.Align.LEFT, Text.Align.LEFT, Text.Align.LEFT, Text.Align.RIGHT};
+        table.layout(x, top, f.w(), bottom - top, cols, heads, al, null);
+        if (shown.isEmpty()) {
+            V2.tableHead(c, x, top, f.w(), cols, heads, al, -1, false);
+            V2.empty(c, tr("gui.module_shop.trade.no_online"), x, top + V2.HEAD, f.w(), bottom - top - V2.HEAD);
+        } else {
+            table.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), shown.size(), (cv, row, ry, hover) -> {
+                ClientShopData.OnlinePlayer p = shown.get(row);
+                float rcy = ry + V2.ROW / 2;
+                int col = transfer ? IOStyle.BLUE : IOStyle.ORANGE;
+                Draw.fill(cv, cols[0][0], rcy - 5.5F, 11, 11, 2.5F, Draw.alpha(col, 0.22F));
+                V2.bold(cv, p.name.isEmpty() ? "?" : p.name.substring(0, 1).toUpperCase(Locale.ROOT), V2.FS_S, col, cols[0][0], rcy, 11,
+                        Text.Align.CENTER);
+                V2.text(cv, p.name, V2.FS, IOStyle.TEXT, cols[1][0], rcy, cols[1][1], Text.Align.LEFT);
+                Draw.fill(cv, cols[2][0], rcy - 2, 4, 4, 2, IOStyle.GREEN);
+                V2.text(cv, tr("gui.module_shop.v2.trade.st_online"), V2.FS_S, IOStyle.TEXT_2, cols[2][0] + 7, rcy, cols[2][1] - 7,
+                        Text.Align.LEFT);
+                table.button(cv, row, "pick", tr(transfer ? "gui.module_shop.v2.trade.transfer" : "gui.module_shop.v2.trade.start"),
+                        V2.Btn.NORMAL, cols[3][0] + cols[3][1], ry, hover);
+            });
+        }
+        V2.foot(c, x, bottom, f.w(), tr("gui.module_shop.v2.trade.online", shown.size()),
+                tr(transfer ? "gui.module_shop.v2.trade.transfer_hint" : "gui.module_shop.v2.trade.hint"));
+    }
 
     @Override
     public boolean mouseClicked(PageFrame f, double mx, double my, int button) {
-        if (search != null && search.mouseClicked(mx, my, button)) {
+        if (search != null && search.isVisible() && search.mouseClicked(mx, my, button)) {
             return true;
         }
-        if (button == 0 && scroll.pressBar(mx, my, listX, listY, listW, listH)) {
-            return true;
+        if (search != null && search.isFocused()) {
+            search.blur();
         }
-        if (requests.isVisible() && requests.mouseClicked(mx, my, button)) {
-            return true;
+        if (button != 0) {
+            return false;
         }
-        if (button == 0 && mx >= listX + 4.0F && mx < listX + listW - 6.0F && my >= listY && my < listY + listH) {
-            float local = (float) (my - listY + scroll.offset());
-            int index = (int) (local / ROW_H);
-            if (index >= 0 && index < shown.size() && local - index * ROW_H < CARD_H) {
+        for (int i = 0; i < btnRects.size(); i++) {
+            float[] r = btnRects.get(i);
+            if (mx >= r[0] && mx < r[0] + r[2] && my >= r[1] && my < r[1] + r[3]) {
                 ClickSound.play();
-                CompoundTag tag = new CompoundTag();
-                tag.putString("name", shown.get(index).name);
-                f.host().action("trade_pick", tag);
+                btnRuns.get(i).run();
                 return true;
             }
         }
-        return false;
-    }
-
-    @Override
-    public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
-        boolean handled = scroll.releaseBar() | requests.mouseReleased(mx, my, button);
-        if (search != null) {
-            handled |= search.mouseReleased(mx, my, button);
-        }
-        return handled;
-    }
-
-    @Override
-    public boolean mouseDragged(PageFrame f, double mx, double my, int button, double dx, double dy) {
-        if (search != null && search.mouseDragged(mx, my, button, dx, dy)) {
+        ListTable table = table();
+        if (table.pressBar(mx, my)) {
             return true;
         }
-        return scroll.dragBar(my, listH);
-    }
-
-    @Override
-    public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
-        if (my >= listY && my < f.listBottom()) {
-            scroll.wheel(scrollY);
-            return true;
+        ListTable.Hit hit = table.click(mx, my);
+        if (hit == null || hit.row() < 0 || hit.row() >= shown.size()) {
+            return hit != null;
         }
-        return false;
+        ClickSound.play();
+        CompoundTag tag = new CompoundTag();
+        tag.putString("name", shown.get(hit.row()).name);
+        f.host().action("trade_pick", tag);
+        return true;
     }
 
     @Override
@@ -225,12 +211,31 @@ public final class PlayerPickerPage implements ShopPage {
     }
 
     @Override
-    public void cancelInput() {
-        scroll.releaseBar();
-        requests.cancelPress();
+    public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
         if (search != null) {
-            search.blur();
-            search.visible(false); // 下次渲染时重新显示；不渲染期间不能被点中
+            search.mouseReleased(mx, my, button);
         }
+        return table().releaseBar();
+    }
+
+    @Override
+    public boolean mouseDragged(PageFrame f, double mx, double my, int button, double dx, double dy) {
+        if (search != null && search.mouseDragged(mx, my, button, dx, dy)) {
+            return true;
+        }
+        return table().dragBar(my);
+    }
+
+    @Override
+    public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
+        return table().wheel(mx, my, scrollY, false);
+    }
+
+    @Override
+    public void cancelInput() {
+        if (search != null) {
+            search.visible(false);
+        }
+        table().releaseBar();
     }
 }

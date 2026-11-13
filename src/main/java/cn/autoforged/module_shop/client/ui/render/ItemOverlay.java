@@ -38,6 +38,12 @@ public final class ItemOverlay {
     private double mouseX;
     private double mouseY;
     private boolean hoverEnabled = true;
+    /** 画布单位 → GUI 坐标（UI v2 自有缩放时 ≠ 1），只影响裁剪框。 */
+    private float clipScale = 1.0F;
+
+    public void setClipScale(float clipScale) {
+        this.clipScale = clipScale <= 0 ? 1.0F : clipScale;
+    }
     private ItemStack hovered = ItemStack.EMPTY;
 
     /** 每帧开始时调用：清空上一帧的登记。hoverEnabled=false 时不检测悬停（例如被弹窗遮住）。 */
@@ -48,6 +54,14 @@ public final class ItemOverlay {
         this.mouseY = mouseY;
         this.hoverEnabled = hoverEnabled;
         hovered = ItemStack.EMPTY;
+        fixedCount = 0;
+    }
+
+    /** 此前登记的条目属于“固定层”（外壳的头像、红点、铃铛），{@link #flush(GuiGraphics, Font, float)} 的位移不作用于它们。 */
+    private int fixedCount;
+
+    public void markFixed() {
+        fixedCount = entries.size();
     }
 
     /** 之后登记的物品都裁剪到该矩形内（与当前裁剪区取交集）。 */
@@ -115,9 +129,21 @@ public final class ItemOverlay {
 
     /** 把本帧登记的物品画出来。必须在 Skija 绘制（SkiaFrame.draw）之后调用。 */
     public void flush(GuiGraphics graphics, Font font) {
+        flush(graphics, font, 0.0F);
+    }
+
+    /** 同上；固定层之后的条目整体下移 dy（换页过渡时页面内容滑动，外壳不动）。 */
+    public void flush(GuiGraphics graphics, Font font, float dy) {
+        if (entries.isEmpty()) {
+            return;
+        }
+        // 叠画物品前复位原版渲染状态（见 SkiaFrame#restoreVanillaState，1.20.1 图标闪烁修复）
+        SkiaFrame.restoreVanillaState();
         Clip active = null;
         boolean scissor = false;
-        for (Entry e : entries) {
+        for (int i = 0; i < entries.size(); i++) {
+            Entry e = entries.get(i);
+            float off = i >= fixedCount ? dy : 0.0F;
             if (e.clip != active) {
                 if (scissor) {
                     graphics.disableScissor();
@@ -125,19 +151,24 @@ public final class ItemOverlay {
                 }
                 active = e.clip;
                 if (active != null) {
-                    graphics.enableScissor(active.x0, active.y0, active.x1, active.y1);
+                    // 裁剪是画布单位；原版 scissor 不受 pose 缩放影响，要按 clipScale 换算成 GUI 坐标
+                    graphics.enableScissor((int) Math.floor(active.x0 * clipScale), (int) Math.floor(active.y0 * clipScale),
+                            (int) Math.ceil(active.x1 * clipScale), (int) Math.ceil(active.y1 * clipScale));
                     scissor = true;
                 }
             }
             if (e.custom != null) {
                 graphics.pose().pushPose();
+                if (off != 0.0F) {
+                    graphics.pose().translate(0.0F, off, 0.0F);
+                }
                 e.custom.accept(graphics, font);
                 graphics.pose().popPose();
                 continue;
             }
             float scale = e.size / 16.0F;
             graphics.pose().pushPose();
-            graphics.pose().translate(e.x, e.y, 0.0F);
+            graphics.pose().translate(e.x, e.y + off, 0.0F);
             graphics.pose().scale(scale * e.scaleX, scale, 1.0F);
             graphics.renderItem(e.stack, 0, 0);
             if (e.decorations) {

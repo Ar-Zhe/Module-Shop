@@ -59,6 +59,8 @@ public final class AtomUi {
             text = new TextService(registry);
             Design.host(ShopDesign.INSTANCE);
             LOGGER.info("[module_shop] AtomLib UI 已就绪");
+            // 读取保存的日间 / 暗色设置（不论最先打开的是商店还是出货箱等次级界面）
+            cn.autoforged.module_shop.client.UITheme.ensureLoaded();
             return true;
         } catch (Throwable t) {
             failure = t;
@@ -68,20 +70,37 @@ public final class AtomUi {
         }
     }
 
+    /**
+     * 运行中发现 AtomLib 不兼容（典型是前置库更新后某个方法 / 类没了，抛 {@link LinkageError}）时调用：
+     * 关掉本模组的 AtomLib 运行时，之后 {@link #available()} 一律返回 false，所有界面改走旧版绘制。
+     * 只禁用一次，重复调用无副作用。
+     */
+    public static synchronized void disable(Throwable cause) {
+        if (attempted && text == null) {
+            return;
+        }
+        attempted = true;
+        failure = cause;
+        LOGGER.error("[module_shop] AtomLib 运行中出错（可能是前置库版本不兼容），本次游戏改用旧版界面", cause);
+        closeQuietly();
+    }
+
     /** 初始化失败的原因（没失败或还没尝试时为 null）。 */
     public static synchronized Throwable failure() {
         return failure;
     }
 
     public static synchronized TextService text() {
-        if (text == null) {
+        // 还没初始化就先初始化：附属的界面可能比商店先打开（例如收到红包详情时还没开过商店），
+        // 不能因为“没人先调 available()”就崩游戏。
+        if (text == null && !available()) {
             throw new IllegalStateException("AtomLib 不可用；调用前先检查 AtomUi.available()");
         }
         return text;
     }
 
     public static synchronized FontRegistry fonts() {
-        if (fonts == null) {
+        if (fonts == null && !available()) {
             throw new IllegalStateException("AtomLib 不可用；调用前先检查 AtomUi.available()");
         }
         return fonts;

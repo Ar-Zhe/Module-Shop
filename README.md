@@ -1,34 +1,5 @@
 # Module Shop · 模块商店
 
-> **这个分支是 1.20.1 / Forge 版本**（分支 `forge-1.20.1`）。
-> 版本号 **1.0.2-beta**（测试版），依赖 **Minecraft 1.20.1 + Forge 47.4.9 + Java 17**。
-> 1.21.1 / NeoForge 版本在 `main` 分支（同号 1.0.2，无 beta 后缀），两个分支各自维护、互不影响。
-
-## 1.20.1 / Forge 版怎么构建
-
-ForgeGradle 需要一个**完整 JDK 17**（`bin/javac.exe` 必须存在；指向 JRE 会报
-`Java compiler is not available`），它用这个 JDK 编译 Minecraft。
-
-```powershell
-# 1) 只构建模组（不含 KubeJS 桥接）
-.\build.ps1 -JdkPath 'C:\Path\To\jdk-17'
-
-# 2) 带 KubeJS 桥接（需要 kubejs-forge 2001.x 的 jar）
-.\build.ps1 -JdkPath 'C:\Path\To\jdk-17' -KubejsJar '.\libs\kubejs-forge-2001.6.5-build.26.jar'
-
-# 3) 起开发测试服 / 客户端（首次会自动下载依赖和资源）
-.\build.ps1 -JdkPath 'C:\Path\To\jdk-17' -Task runServer
-.\build.ps1 -JdkPath 'C:\Path\To\jdk-17' -Task runClient
-```
-
-产物：`build/libs/module_shop-1.0.2-beta-forge-1.20.1.jar`
-
-- 客户端要装同一个 jar；只装服务端不会有界面。
-- KubeJS 桥接是**可选模块**：不传 `-KubejsJar` 时完全不编译，主模组不依赖 KubeJS。
-- 与 1.21.1 版本的差异（纯平台适配）见 [CHANGELOG.md](CHANGELOG.md) 的 1.0.2-beta 条目。
-
----
-
 **English** — A full server-side shop & economy mod for **Minecraft 1.21.1 / NeoForge 21.1.x** (tested on Arclight):
 daily shop with paid refresh, daily buyback with a completion bonus, auction house, player stalls, player trading,
 wallet transfers, mailbox, **currency exchange (items ⇄ Star Coins)**, admin grants (GUI), transaction history,
@@ -47,7 +18,15 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 
 > **1.0.3 起界面改用 [AtomLib](https://github.com/NoWordz/AtomLib)（Skija）绘制**：12 个页面全部重绘（翻牌动画、签到月历、
 > 购物城、管理面板等），支持中文输入法；AtomLib 只带 Windows 原生库，其它平台自动回退到旧版界面，功能不受影响。
-> 同时开放了**附属模组接口**：附属可以把自己的功能挂进商店侧栏、直接画在内容区（示例：[module-shop: Red envelope](https://github.com/ChatMiaoPT-Meow/Module-Shop-RedPacket)，目前只有 1.21.1 版）。
+> 同时开放了**附属模组接口**：附属可以把自己的功能挂进商店侧栏、直接画在内容区（示例：[module-shop: Red envelope](https://github.com/ChatMiaoPT-Meow/Module-Shop-RedPacket)）。
+>
+> **1.0.4**：外壳与 22 个次级界面也改用 AtomLib 绘制，加入动效；新增**界面皮肤**（日间 / 夜间 / 樱糖 / 薄荷 / 雾蓝 / 奶茶 / 夜樱，
+> 带渐变与柔光，右上角切换），主面板与弹窗改为半透明。
+>
+> **1.0.5**：拍卖行全面升级（大厅搜索 / 分类 / 排序、详情页、一口价、防截拍、资金托管与审计、管理界面）；
+> 玩家商店升级（商店大厅、摊位详情、从背包上架、补货）；修复出货箱倒计时结束后不出货。
+>
+> **1.0.6**：商店配置导出 / 导入 / 跨世界共享；兼容 AtomLib 0.4.0（运行中遇到前置库不兼容会自动退回旧版界面）；修复拍卖行在窄窗口下部分 UI 块超出面板。
 
 ---
 
@@ -58,8 +37,8 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | **每日商店** | 卡牌翻牌查看商品；3 列 × 2 行；每件商品独立限购；普通档每日最多 3 个；可用星币**付费刷新**（默认第 1 次 200、第 2 次 500，每日 2 次，价格与次数可配） |
 | **每日收购** | 每日随机最多 6 项收购需求；按物品显示收购价与剩余可收数量；**当日清单全部卖满额外奖励 1000 星币**（可配） |
 | **购物城** | 管理员上架的**常驻货架**（不会每日重抽）：两行六列一页 12 件，显示价格与库存，**品质只用 1px 颜色细边框表示**；支持**搜索**（物品名 / 模组名）、**排序**（价格 / 库存 升降序）、**按模组分类**（下拉，按首字母排序）、**只收藏**（本地收藏，★）与**最近购买**记录；库存实时扣减、售罄变灰；管理员可单件上架，也可**一次导入整个模组的全部物品**（统一价格 / 库存 / 品质） |
-| **拍卖行** | 上架拍卖、**出价即从余额扣款**、**被超价自动全额退回**（余额装不下时自动转金额邮件）、到期自动结算（买家收物品邮件、卖家收货款、按比例手续费）、无人出价原物退回 |
-| **玩家摊位** | 上架 / 改价 / 下架 / 浏览购买，支持库存与售出统计；可配置上架手续费 |
+| **拍卖行** | 独立上架界面（直接从背包选物品，数量 / 起拍价 / 加价幅度 / 一口价 / 时长 / 是否允许竞价）、**搜索（名称 / 物品ID / 模组 / 附魔 / 卖家）+ 9 种分类 + 7 种排序 + 分页**、详情页（完整属性、竞价记录）、**一口价**、**防截拍自动延时**、无人出价可撤销、**我的拍卖**（出售中 / 我的竞拍 / 已成交 / 已流拍 / 已撤销 + 重新上架）；出价资金托管，被超价同一时刻全额退回；结算幂等、重启续结算；上架费 / 成交费 / 黑名单（含容器内物品）/ 绑定与特殊 NBT 限制；管理员界面与 `/shop auction` 审计命令。详见 [docs/拍卖行.md](docs/拍卖行.md) |
+| **玩家商店（摊位）** | 我的商店（从背包上架 / 改价 / 补货 / 下架 / 交易记录）、**商店大厅**（全服商品搜索 / 分类 / 排序 / 分页）、查看摊位（摊位详情：物品格子、数量调整、总价、购买）；按商品 id 交易、价格核对、请求去重。详见 [docs/玩家商店.md](docs/玩家商店.md) |
 | **玩家交易** | 双方放入物品与星币 → 双方同意 → 倒计时 → 双方确认后原子交换；闲置 10 分钟自动结束并按"背包 → 邮箱 → 掉落"退回 |
 | **钱包** | 余额查询、玩家间转账（同 IP 拦截、冷却、余额上限饱和处理，不溢出不变负） |
 | **邮箱** | 物品邮件与金额邮件；一键领取 / 清理已读；背包满自动转邮箱；**同渠道邮件自动合并**、附件用可滚动的物品格子展示；默认上限 100 封（满时自动清理最早的已读邮件） |
@@ -71,7 +50,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | **管理员发放** | `/shop admin money <金额> [目标...]` 发星币（不填目标 = 所有已知玩家，含离线；目标可写玩家名 / UUID / `all` / `@a`），`/shop admin money set <目标> <金额>` 直接改余额（0 = 清零），`/shop admin send` 打开图形发放界面：放入物品 + 勾选玩家或全体 + 可选金额 → 发送，玩家在邮箱领取；也可用 `/shop wallet give <在线玩家> <金额>` 只发一个人 |
 | **交易流水** | 所有资产变动都记流水（买卖 / 摊位 / 拍卖 / 转账 / 交易 / 邮箱 / 管理员发放 / 刷新商店 / 刷新收购 / 全清奖励），管理员用 `/shop admin history <玩家>` 翻页查看 |
 
-## 公共 API（当前 1.1.0）
+## 公共 API（当前 1.2.0）
 
 模组现在对外提供**稳定的公共 API**，供其他模组、KubeJS 脚本与外部服务调用：
 
@@ -86,6 +65,7 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | 商店 | `ModuleShopApi.shop()` | 只读商品/价格/库存 + 受校验的购买/出售 + 拍卖出价 / 求购发布 / 摊位上架 |
 | 事件 | `ModuleShopApi.events()` | 余额变更 / 邮件创建 / 奖励发放 / 签到 / 成交 …（业务成功后通知，不可取消） |
 | **附属页面**（1.1.0） | `api.client.ShopModules` | 客户端：附属模组在商店侧栏注册条目，`registerPage` 画在内容区（`AddonPage` + `ShopTheme` + UI 套件），`register` 弹出自己的界面 |
+| **皮肤**（1.2.0） | `api.client.ShopTheme` | 客户端：跟随玩家选择的界面皮肤取色；渐变端点、柔光，以及和主体一致的弹窗底板 `dialogPanel` |
 
 三条硬规则：**只在服务端主线程调用**、**只用 `ApiResult` 判断成败**、**写操作必须带幂等键**。
 
@@ -95,16 +75,16 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 2. **KubeJS**：脚本里直接用全局 `ModuleShop`（示例：[examples/kubejs](examples/kubejs)）；
 3. **HTTP / REST**：可选、**默认关闭**，需显式开启并设置 token（默认只监听 `127.0.0.1`、默认只读）。
 
-> API 版本 `1.1.0` 与模组版本独立；同一主版本内只增不改（UI 套件同样适用）。附属页面出错时商店会停用该页面并改用附属的回退界面，不会崩溃。
+> API 版本 `1.2.0` 与模组版本独立；同一主版本内只增不改（UI 套件同样适用）。附属页面出错时商店会停用该页面并改用附属的回退界面，不会崩溃。
 
 ## 安装
 
-1. 服务端：把 `module_shop-1.0.3-beta-forge-1.20.1.jar` 放进 `mods/`，重启（服务端**不需要** AtomLib）。
+1. 服务端：把 `module_shop-1.0.6.jar` 放进 `mods/`，重启（服务端**不需要** AtomLib）。
 2. 客户端：**玩家也必须安装同一个 jar**（商店界面是客户端代码），另外安装前置
-   [AtomLib 0.1.0-beta](https://github.com/NoWordz/AtomLib/releases/tag/v0.1.0-beta-beta3)（`atomlib-1.20.1-forge-0.1.0-beta.jar`，仓库 `libs/` 里就有）。
+   [AtomLib 0.1.0-beta](https://github.com/NoWordz/AtomLib/releases/tag/v0.1.0-beta-beta3)（`atomlib-1.21.1-neoforge-0.1.0-beta.jar`）。
    AtomLib 只支持 Windows x64 / ARM64；macOS / Linux 客户端会自动使用旧版界面。
 3. 客户端与服务端都启动后执行 `/shop` 打开界面；管理员用 `/shop admin` 打开设置页，
-   或在商店界面**右下角**点小按钮「商店设置」。
+   或在商店界面**右上角**点「商店设置」。界面皮肤在右上角的太阳 / 月亮按钮里切换（每个玩家各自保存）。
 
 > 版本要求：Minecraft 1.21.1 / NeoForge 21.1.x（已在 Arclight 1.21.1 混合服务端实测）。
 >
@@ -114,9 +94,9 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 
 ```bash
 ./gradlew build          # Windows: gradlew.bat build
-# 产物：build/libs/module_shop-1.0.3-beta-forge-1.20.1.jar      主模组
-#       build/libs/module_shop-1.0.3-beta-forge-1.20.1-api.jar  公共 API + UI 套件（给附属编译用）
-# AtomLib 锁定在 libs/，编译前校验 SHA-256（校验值见 build.gradle）
+# 产物：build/libs/module_shop-1.0.6.jar      主模组
+#       build/libs/module_shop-1.0.6-api.jar  公共 API + UI 套件（给附属编译用）
+# 首次构建会自动下载 AtomLib 发布包到 .atomlib/ 并做 SHA-256 校验（版本与校验值见 gradle.properties）
 
 # 需要一个带 KubeJS 桥接（脚本全局 ModuleShop）的 jar：
 ./gradlew build -PkubejsJar=/path/to/kubejs-neoforge-2101.x-build.xxx.jar
@@ -128,14 +108,16 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 
 | 库 | 版本 | 用途 | 依赖方式 | 许可 |
 | --- | --- | --- | --- | --- |
-| Forge | 47.4.9 | 模组加载器、事件、网络、配置 | 运行环境 | LGPL-2.1 |
-| Minecraft | 1.20.1 | 游戏本体 | 运行环境 | — |
-| **AtomLib** | 0.1.0-beta（发布标签 `v0.1.0-beta-beta3`） | 客户端 UI：Minecraft ↔ Skija 渲染桥（`MinecraftRenderBridge`）、字体与文字排版（`FontRegistry` / `TextService`）、设计包 `design.atomchat`（`SkiaDraw`、`Design` 主题注入） | **客户端必需前置**；锁定的 jar 随仓库提交在 `libs/` 并校验 SHA-256，**不打包进本模组** | Apache-2.0 |
-| Skija | 0.143.18 | Skia 的 Java 绑定，所有新界面的 `Canvas` 绘制 | 运行时由 AtomLib 以 Jar-in-Jar 内置（只带 Windows x64 / ARM64 原生库）；编译期从 AtomLib 的 Jar-in-Jar 里抽出给 javac | Apache-2.0 |
+| NeoForge | 21.1.248 | 模组加载器、事件、网络、配置 | 运行环境 | LGPL-2.1 |
+| Minecraft | 1.21.1 | 游戏本体 | 运行环境 | — |
+| **AtomLib** | 0.1.0-beta（发布标签 `v0.1.0-beta-beta3`） | 客户端 UI：Minecraft ↔ Skija 渲染桥（`MinecraftRenderBridge`）、字体与文字排版（`FontRegistry` / `TextService`）、设计包 `design.atomchat`（`SkiaDraw`、`Design` 主题注入） | **客户端必需前置**；构建时从 GitHub Release 下载并校验，**不打包进本模组** | Apache-2.0 |
+| Skija | 0.143.18 | Skia 的 Java 绑定，所有新界面的 `Canvas` 绘制 | 运行时由 AtomLib 以 Jar-in-Jar 内置（只带 Windows x64 / ARM64 原生库）；编译期作为 AtomLib 的传递依赖从 Maven Central 取 | Apache-2.0 |
 | Noto Sans SC（子集） | 随 AtomLib | 界面中文字体（常规 / 粗体） | 由 AtomLib 内置 | OFL-1.1 |
 | AtomChat 组件（移植） | — | `UiComponent`、`ScrollController`、`SkiaTextField`（隐藏 EditBox + Skija 绘制的输入框思路）、帧编排 `SkiaFrame` | 源码移植进 `client/ui/`，保留出处注释 | MIT |
-| KubeJS | 2001.x（kubejs-forge） | 脚本全局 `ModuleShop` 桥接 | 可选，`-PkubejsJar=...` 时才编译 | LGPL-3.0 |
-| ForgeGradle | 6.0.24 | 构建插件（官方映射） | Gradle | LGPL-2.1 |
+| JEI API | 19.8.4.110 | 商店里悬停物品按 R / U 查配方 | `compileOnly` 软依赖，不装 JEI 时完全不影响 | MIT |
+| KubeJS | 2101.7.x | 脚本全局 `ModuleShop` 桥接 | 可选，`-PkubejsJar=...` 时才编译 | LGPL-3.0 |
+| ModDevGradle | 2.0.144 | 构建插件 | Gradle | LGPL-2.1 |
+| Parchment | 2024.11.17 | 参数名映射（只影响开发） | Gradle | CC0 |
 
 界面相关的 AtomLib / Skija 调用全部收口在 `client/ui/`（薄适配层），各页面在 `client/screen/shop/`，
 迁移方案与进度见 [docs/atomlib-migration.md](docs/atomlib-migration.md)。
@@ -154,6 +136,8 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 /shop admin money set <目标> <金额>  把某玩家余额**直接设为**该值（写 0 = 清零，离线也可）
 /shop admin send                   打开发放界面（物品 + 星币，邮箱领取）
 /shop admin history <玩家> [页码]   查看交易流水
+/shop auction list | history [页] | anomalies | audit       拍卖行：进行中 / 历史 / 异常 / 资金审计
+/shop auction cancel <id> | end <id>                        强制撤销（全额退款）/ 强制结束（按当前状态结算）
 /shop wallet balance | pay <玩家> <金额> | give <玩家> <金额>
 ```
 
@@ -174,6 +158,11 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
                 buybackRefreshCosts = ["200", "500"]
 [mailbox]       maxMailboxSize = 100       transactionHistorySize = 50
 [trade]         tradeRequestExpireSeconds = 60   tradeSessionTimeoutSeconds = 600
+[auction]       auctionEnabled = true      maxAuctionsGlobal = 500   maxConcurrentAuctions = 6
+                auctionDurationOptions = ["30","60","180","360","720","1440","2880"]
+                auctionListingFeeFixed = 0  auctionListingFeePercent = 0.0  auctionFeePercent = 5.0
+                antiSnipe = true  antiSnipeSeconds = 60  antiSnipeExtensionSeconds = 30  antiSnipeMaxExtensions = 10
+                auctionBlacklist = [...]   auctionAllowBound = false  auctionAllowCustomData = true
 ```
 > 付费刷新：`dailyRefreshCosts` 是**每日商店**的价格表，`buybackRefreshCosts` 是**每日收购**的价格表，
 > 两者各自独立，**列表长度 = 每天可刷新次数**（例如 `["300"]` = 每天只能刷 1 次、每次 300 星币）。
@@ -186,6 +175,8 @@ Fully server-authoritative, bilingual GUI (English / 简体中文).
 | --- | --- |
 | [使用教程.md](docs/使用教程.md) | 服主上手：安装、模块、权限、常用流程 |
 | [模组介绍.md](docs/模组介绍.md) | 面向玩家的功能说明 |
+| [拍卖行.md](docs/拍卖行.md) | 拍卖行：玩法、配置、资金托管与安全设计、管理命令、测试清单 |
+| [玩家商店.md](docs/玩家商店.md) | 玩家商店：三个入口、摊位详情、交易安全、测试清单 |
 | [公共API-使用文档.md](docs/公共API-使用文档.md) | 开发者接入：接口、返回码、事件、KubeJS、HTTP、附属页面（第 10 节） |
 | [atomlib-migration.md](docs/atomlib-migration.md) | AtomLib 界面迁移方案、进度与游戏内 QA 清单 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |

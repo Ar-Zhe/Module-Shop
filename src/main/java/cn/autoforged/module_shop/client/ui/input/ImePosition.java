@@ -73,7 +73,8 @@ public final class ImePosition {
             return;
         }
         Minecraft minecraft = Minecraft.getInstance();
-        double scale = minecraft.getWindow().getGuiScale();
+        // 坐标是画布单位：按当前帧的单位缩放换算成物理像素（旧界面 = GUI 缩放，UI v2 = 自有缩放）
+        double scale = cn.autoforged.module_shop.client.ui.render.SkiaFrame.unitScale();
         int x = px(caretX, scale);
         int y = px(lineTop, scale);
         int h = Math.max(1, px(lineHeight, scale));

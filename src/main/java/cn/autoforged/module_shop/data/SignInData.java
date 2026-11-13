@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -39,7 +39,7 @@ public final class SignInData {
         return signedDays.contains(day);
     }
 
-    public CompoundTag save(RegistryAccess registries) {
+    public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = new CompoundTag();
         tag.putLong("lastSignDay", lastSignDay);
         tag.putInt("streak", streak);
@@ -53,7 +53,7 @@ public final class SignInData {
         return tag;
     }
 
-    public static SignInData load(CompoundTag tag, RegistryAccess registries) {
+    public static SignInData load(CompoundTag tag, HolderLookup.Provider registries) {
         SignInData data = new SignInData();
         data.lastSignDay = tag.getLong("lastSignDay");
         data.streak = tag.getInt("streak");
