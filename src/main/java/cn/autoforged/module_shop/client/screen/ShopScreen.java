@@ -578,8 +578,9 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     @Override
     protected void init() {
         super.init();
-        // 读取客户端保存的日间 / 暗色主题（config/module_shop_ui_theme.txt）。
+        // 读取客户端保存的日间 / 暗色主题（config/module_shop_ui_theme.txt）与视图模式（config/module_shop_ui_view.txt）。
         UITheme.ensureLoaded();
+        cn.autoforged.module_shop.client.UIViewMode.ensureLoaded();
         // 还原上次的页数与编辑模块：服务端每次操作后会重建界面（编辑条目、买卖等），
         // 不还原的话管理员改完一条就被弹回第一页，翻页很痛苦。
         this.auctionPage = ClientShopData.lastAuctionPage;

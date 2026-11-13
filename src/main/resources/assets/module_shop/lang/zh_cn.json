@@ -1419,5 +1419,14 @@
   "gui.module_shop.v2.trade.hint": "发起交易后对方接受才会打开交易面板",
   "gui.module_shop.v2.trade.transfer_hint": "点「转账」输入金额，确认后立即到账",
   "gui.module_shop.v2.admin.count": "共 %s 条 · 左键「编辑」改价 / 改数量 · 右键或「删除」移除",
-  "gui.module_shop.v2.col.amount": "数量"
+  "gui.module_shop.v2.col.amount": "数量",
+  "gui.module_shop.view.to_grid": "当前：列表视图（点击切换为方块视图）",
+  "gui.module_shop.view.to_list": "当前：方块视图（点击切换为列表视图）",
+  "gui.module_shop.v2.sort.default": "默认排序",
+  "gui.module_shop.v2.daily.tap_flip": "点击翻开牌面",
+  "gui.module_shop.v2.card.bag": "背包 %s",
+  "gui.module_shop.v2.card.gain": "可得 %s",
+  "gui.module_shop.v2.card.sold_rev": "已售 %s · %s",
+  "gui.module_shop.v2.card.bidders": "%s人/%s次出价",
+  "gui.module_shop.v2.demand.click_detail": "点击查看清单详情"
 }

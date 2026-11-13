@@ -3,10 +3,12 @@ package cn.autoforged.module_shop.client.screen.shop;
 import cn.autoforged.module_shop.client.ClickSound;
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.MallFavorites;
+import cn.autoforged.module_shop.client.UIViewMode;
 import cn.autoforged.module_shop.client.screen.IOStyle;
 import cn.autoforged.module_shop.client.screen.ShopScreen;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.CardGrid;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
 import cn.autoforged.module_shop.client.ui.v2.V2;
 import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
@@ -36,6 +38,7 @@ public final class MallPage implements ShopPage {
     /** 跨界面重建保留：表格滚动与客户端附加筛选。 */
     private static final ListTable TABLE = new ListTable();
     private static final ListTable RECENT = new ListTable();
+    private static final CardGrid GRID = new CardGrid();
     private static boolean onlyStock;
     private static boolean affordable;
 
@@ -45,6 +48,7 @@ public final class MallPage implements ShopPage {
     private float segY;
     private final List<float[]> filterRects = new ArrayList<>();
     private final List<String> filterKeys = new ArrayList<>();
+    private final List<float[]> sortPillRects = new ArrayList<>();
 
     @Override
     public String id() {
@@ -60,6 +64,7 @@ public final class MallPage implements ShopPage {
                     ClientShopData.mallSearch = text;
                     ClientShopData.mallPage = 0;
                     TABLE.scrollToTop();
+                    GRID.scrollToTop();
                 });
         search.setValue(ClientShopData.mallSearch == null ? "" : ClientShopData.mallSearch);
         host.registerInput(search.editBox());
@@ -103,10 +108,17 @@ public final class MallPage implements ShopPage {
         }
         drawFilter(c, f, f.x(), top, bottom - top);
         shown = filtered();
-        drawTable(c, f, f.x() + FILTER_W, top, f.w() - FILTER_W, bottom - top);
-        V2.foot(c, f.x() + FILTER_W, bottom, f.w() - FILTER_W,
-                tr("gui.module_shop.v2.showing", TABLE.firstVisible(), TABLE.lastVisible(), shown.size()),
-                tr("gui.module_shop.v2.mall.hint"));
+        if (UIViewMode.isGrid()) {
+            drawGrid(c, f, f.x() + FILTER_W, top, f.w() - FILTER_W, bottom - top);
+            V2.foot(c, f.x() + FILTER_W, bottom, f.w() - FILTER_W,
+                    tr("gui.module_shop.v2.showing", GRID.firstVisible(), GRID.lastVisible(), shown.size()),
+                    tr("gui.module_shop.v2.mall.hint"));
+        } else {
+            drawTable(c, f, f.x() + FILTER_W, top, f.w() - FILTER_W, bottom - top);
+            V2.foot(c, f.x() + FILTER_W, bottom, f.w() - FILTER_W,
+                    tr("gui.module_shop.v2.showing", TABLE.firstVisible(), TABLE.lastVisible(), shown.size()),
+                    tr("gui.module_shop.v2.mall.hint"));
+        }
     }
 
     private void drawToolbar(Canvas c, PageFrame f, boolean recent) {
@@ -237,6 +249,47 @@ public final class MallPage implements ShopPage {
         });
     }
 
+    private void drawGrid(Canvas c, PageFrame f, float x, float y, float w, float h) {
+        int sort = ClientShopData.mallSort;
+        String priceLabel = tr("gui.module_shop.v2.col.price") + (sort == 1 ? " ↑" : sort == 2 ? " ↓" : "");
+        String stockLabel = tr("gui.module_shop.v2.col.stock") + (sort == 3 ? " ↑" : sort == 4 ? " ↓" : "");
+        String[] sortLabels = {tr("gui.module_shop.v2.sort.default"), priceLabel, stockLabel};
+        int activeSort = (sort == 1 || sort == 2) ? 1 : (sort == 3 || sort == 4) ? 2 : 0;
+        CardGrid.drawSortBar(c, x, y, w, f.mouseX(), f.mouseY(), sortLabels, activeSort, null, sortPillRects);
+
+        GRID.layoutUnified(x, y + V2.HEAD, w, h - V2.HEAD);
+        if (shown.isEmpty()) {
+            V2.empty(c, tr(ClientShopData.mall.isEmpty() ? "gui.module_shop.empty" : "gui.module_shop.v2.no_match"),
+                    x, y + V2.HEAD, w, h - V2.HEAD);
+            return;
+        }
+        GRID.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), shown.size(), (cv, card, cx, cy, cw, ch, hover) -> {
+            ClientShopData.MallView v = shown.get(card);
+            boolean sold = v.soldOut();
+            int rc = IOStyle.rarity(v.rarity);
+            boolean fav = MallFavorites.contains(ShopScreen.mallItemId(v));
+            CardGrid.cardBg(cv, cx, cy, cw, ch, hover, rc, fav && !sold, sold);
+
+            float starCx = cx + 7.5F;
+            float starCy = cy + 7.0F;
+            boolean starHover = f.mouseX() >= cx + 1 && f.mouseX() < cx + 14 && f.mouseY() >= cy + 1 && f.mouseY() < cy + 13;
+            CardGrid.star(cv, starCx, starCy, starHover ? 3.8F : 3.2F, fav, fav ? IOStyle.ORANGE : (starHover ? IOStyle.TEXT : IOStyle.TEXT_3));
+            GRID.hitZone(card, "star", cx + 1, cy + 1, 13, 13);
+
+            String stockStr = sold ? tr("gui.module_shop.v2.sold_out") : (v.unlimited() ? "∞" : V2.money(v.stock));
+            V2.text(cv, stockStr, V2.FS_XS, sold ? IOStyle.RED : IOStyle.TEXT_3,
+                    cx + 15.0F, cy + 7.0F, cw - 19.0F, Text.Align.RIGHT);
+
+            float iconSize = 16.0F;
+            f.host().items().add(v.stack, cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
+
+            V2.text(cv, v.stack.getHoverName().getString(), V2.FS_S, sold ? IOStyle.TEXT_3 : IOStyle.TEXT,
+                    cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
+            V2.bold(cv, sold ? tr("gui.module_shop.v2.sold_out") : V2.money(v.price), V2.FS,
+                    sold ? IOStyle.TEXT_3 : IOStyle.ORANGE, cx + 3, cy + 45.0F, cw - 6, Text.Align.CENTER);
+        });
+    }
+
     private void drawRecent(Canvas c, PageFrame f, float x, float y, float w, float h) {
         List<ClientShopData.MallPurchaseView> list = ClientShopData.mallRecent;
         float[][] cols = V2.columns(x, w, 8, 6, 70, 90, 14, 0, 48, 64, 72);
@@ -294,9 +347,56 @@ public final class MallPage implements ShopPage {
                     return true;
                 }
             }
-            if (TABLE.pressBar(mx, my)) {
+            if (UIViewMode.isGrid() ? GRID.pressBar(mx, my) : TABLE.pressBar(mx, my)) {
                 return true;
             }
+            if (UIViewMode.isGrid()) {
+                for (int i = 0; i < sortPillRects.size(); i++) {
+                    float[] r = sortPillRects.get(i);
+                    if (mx >= r[0] && mx < r[0] + r[2] && my >= r[1] && my < r[1] + r[3]) {
+                        int cur = ClientShopData.mallSort;
+                        int next = switch (i) {
+                            case 1 -> cur == 1 ? 2 : 1;
+                            case 2 -> cur == 3 ? 4 : 3;
+                            default -> 0;
+                        };
+                        CompoundTag extra = new CompoundTag();
+                        extra.putInt("sort", next);
+                        ClickSound.play();
+                        f.host().action("mall_sort_pick", extra);
+                        GRID.scrollToTop();
+                        return true;
+                    }
+                }
+            }
+        }
+        if (UIViewMode.isGrid()) {
+            CardGrid.Hit hit = GRID.click(mx, my);
+            if (hit == null || hit.index() < 0 || hit.index() >= shown.size()) {
+                return hit != null;
+            }
+            ClientShopData.MallView v = shown.get(hit.index());
+            CompoundTag extra = new CompoundTag();
+            extra.putInt("index", v.shelf);
+            if ("star".equals(hit.button())) {
+                if (button == 0) {
+                    f.host().action("mall_star", extra);
+                }
+                return true;
+            }
+            if (button == 1) {
+                if (!v.soldOut()) {
+                    ClickSound.play();
+                    f.host().action("mall_buy_many", extra);
+                }
+                return true;
+            }
+            if (button == 0 && !v.soldOut() && ("buy".equals(hit.button()) || hit.button() == null)) {
+                ClickSound.play();
+                f.host().action("mall_buy", extra);
+                return true;
+            }
+            return hit.button() != null;
         }
         ListTable.Hit hit = TABLE.click(mx, my);
         if (hit == null) {
@@ -367,6 +467,7 @@ public final class MallPage implements ShopPage {
             }
         }
         TABLE.scrollToTop();
+        GRID.scrollToTop();
     }
 
     private void clickFilter(PageFrame f, String key) {
@@ -381,6 +482,7 @@ public final class MallPage implements ShopPage {
             affordable = !affordable;
         }
         TABLE.scrollToTop();
+        GRID.scrollToTop();
     }
 
     @Override
@@ -395,7 +497,7 @@ public final class MallPage implements ShopPage {
         if (search != null) {
             search.mouseReleased(mx, my, button);
         }
-        return TABLE.releaseBar() | RECENT.releaseBar();
+        return RECENT.releaseBar() | (UIViewMode.isGrid() ? GRID.releaseBar() : TABLE.releaseBar());
     }
 
     @Override
@@ -403,13 +505,14 @@ public final class MallPage implements ShopPage {
         if (search != null && search.mouseDragged(mx, my, button, dx, dy)) {
             return true;
         }
-        return ClientShopData.mallViewRecent ? RECENT.dragBar(my) : TABLE.dragBar(my);
+        return ClientShopData.mallViewRecent ? RECENT.dragBar(my) : (UIViewMode.isGrid() ? GRID.dragBar(my) : TABLE.dragBar(my));
     }
 
     @Override
     public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
         boolean page = net.minecraft.client.gui.screens.Screen.hasShiftDown();
-        return ClientShopData.mallViewRecent ? RECENT.wheel(mx, my, scrollY, page) : TABLE.wheel(mx, my, scrollY, page);
+        return ClientShopData.mallViewRecent ? RECENT.wheel(mx, my, scrollY, page)
+                : (UIViewMode.isGrid() ? GRID.wheel(mx, my, scrollY, page) : TABLE.wheel(mx, my, scrollY, page));
     }
 
     @Override
@@ -418,6 +521,7 @@ public final class MallPage implements ShopPage {
             search.visible(false);
         }
         TABLE.releaseBar();
+        GRID.releaseBar();
         RECENT.releaseBar();
     }
 }

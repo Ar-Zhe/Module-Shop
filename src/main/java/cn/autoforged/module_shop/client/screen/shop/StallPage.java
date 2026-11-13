@@ -3,12 +3,14 @@ package cn.autoforged.module_shop.client.screen.shop;
 import cn.autoforged.module_shop.client.ClickSound;
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.StallClient;
+import cn.autoforged.module_shop.client.UIViewMode;
 import cn.autoforged.module_shop.client.screen.BillScreen;
 import cn.autoforged.module_shop.client.screen.IOStyle;
 import cn.autoforged.module_shop.client.screen.Nav;
 import cn.autoforged.module_shop.client.screen.stall.StallListScreen;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.CardGrid;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
 import cn.autoforged.module_shop.client.ui.v2.V2;
 import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
@@ -36,6 +38,8 @@ public final class StallPage implements ShopPage {
     private static final float FILTER_W = 86.0F;
     private static final ListTable HALL = new ListTable();
     private static final ListTable MINE = new ListTable();
+    private static final CardGrid HALL_GRID = new CardGrid();
+    private static final CardGrid MINE_GRID = new CardGrid();
 
     private SkiaTextField search;
     private List<StallClient.Item> hallShown = List.of();
@@ -44,6 +48,7 @@ public final class StallPage implements ShopPage {
     private float segY;
     private final List<float[]> btnRects = new ArrayList<>();
     private final List<Runnable> btnRuns = new ArrayList<>();
+    private final List<float[]> sortPillRects = new ArrayList<>();
 
     @Override
     public String id() {
@@ -61,6 +66,7 @@ public final class StallPage implements ShopPage {
                 .onChange(t -> {
                     StallClient.search = t == null ? "" : t;
                     HALL.scrollToTop();
+                    HALL_GRID.scrollToTop();
                 });
         search.setValue(StallClient.search);
         host.registerInput(search.editBox());
@@ -130,6 +136,12 @@ public final class StallPage implements ShopPage {
         }
         float tx = x + FILTER_W;
         float tw = f.w() - FILTER_W;
+        if (UIViewMode.isGrid()) {
+            drawHallGrid(c, f, tx, top, tw, bottom - top);
+            V2.foot(c, tx, bottom, tw, tr("gui.module_shop.v2.showing", HALL_GRID.firstVisible(), HALL_GRID.lastVisible(), hallShown.size()),
+                    tr("gui.module_shop.v2.stall.hall_hint"));
+            return;
+        }
         float[][] cols = V2.columns(tx, tw, 10, 6, 14, 0, 76, 56, 56, 50, 44, 50, 52);
         String[] heads = {"", tr("gui.module_shop.v2.col.item"), tr("gui.module_shop.v2.col.seller"), tr("gui.module_shop.v2.col.price"),
                 tr("gui.module_shop.v2.col.compare"), tr("gui.module_shop.v2.col.stock"), tr("gui.module_shop.v2.col.sold"),
@@ -202,6 +214,46 @@ public final class StallPage implements ShopPage {
         }
     }
 
+    private void drawHallGrid(Canvas c, PageFrame f, float tx, float top, float tw, float th) {
+        int sort = StallClient.sort;
+        String priceLabel = tr("gui.module_shop.v2.col.price") + (sort == 1 ? " ↑" : sort == 2 ? " ↓" : "");
+        String[] sortLabels = {tr("gui.module_shop.v2.sort.default"), priceLabel};
+        CardGrid.drawSortBar(c, tx, top, tw, f.mouseX(), f.mouseY(), sortLabels, sort == 0 ? 0 : 1, null, sortPillRects);
+
+        HALL_GRID.layoutUnified(tx, top + V2.HEAD, tw, th - V2.HEAD);
+        if (hallShown.isEmpty()) {
+            V2.empty(c, tr(StallClient.market.isEmpty() ? "gui.module_shop.stall.hall_empty" : "gui.module_shop.v2.no_match"),
+                    tx, top + V2.HEAD, tw, th - V2.HEAD);
+            return;
+        }
+        HALL_GRID.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), hallShown.size(), (cv, card, cx, cy, cw, ch, hover) -> {
+            StallClient.Item it = hallShown.get(card);
+            boolean sold = it.stock <= 0;
+            CardGrid.cardBg(cv, cx, cy, cw, ch, hover, it.own ? IOStyle.BLUE : 0, it.own, sold);
+
+            Long low = lowest.get(it.stack.getItem().toString() + "|" + it.stack.getHoverName().getString());
+            if (!sold && low != null && low > 0 && it.price <= low) {
+                V2.bold(cv, tr("gui.module_shop.v2.stall.lowest"), V2.FS_XS, IOStyle.GREEN, cx + 4, cy + 7.0F, cw * 0.48F, Text.Align.LEFT);
+            } else if (!sold && low != null && low > 0) {
+                long pct = Math.round((it.price - low) * 100.0 / low);
+                V2.text(cv, "+" + pct + "%", V2.FS_XS, IOStyle.RED, cx + 4, cy + 7.0F, cw * 0.48F, Text.Align.LEFT);
+            } else {
+                V2.text(cv, it.ownerName, V2.FS_XS, it.own ? IOStyle.BLUE : IOStyle.TEXT_3,
+                        cx + 4, cy + 7.0F, cw * 0.52F, Text.Align.LEFT);
+            }
+            V2.text(cv, sold ? tr("gui.module_shop.v2.sold_out") : V2.money(it.stock), V2.FS_XS,
+                    sold ? IOStyle.RED : IOStyle.TEXT_3, cx + cw * 0.48F, cy + 7.0F, cw * 0.52F - 4, Text.Align.RIGHT);
+
+            float iconSize = 16.0F;
+            f.host().items().add(it.stack, cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
+
+            V2.text(cv, it.stack.getHoverName().getString(), V2.FS_S, sold ? IOStyle.TEXT_3 : IOStyle.TEXT,
+                    cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
+            V2.bold(cv, V2.money(it.price), V2.FS, sold ? IOStyle.TEXT_3 : IOStyle.ORANGE,
+                    cx + 3, cy + 45.0F, cw - 6, Text.Align.CENTER);
+        });
+    }
+
     // ------------------------------------------------------------------ 我的商店
 
     private void renderMine(Canvas c, PageFrame f, float by) {
@@ -225,6 +277,12 @@ public final class StallPage implements ShopPage {
 
         float top = f.y() + V2.BAR;
         float bottom = f.y() + f.h() - V2.FOOT;
+        if (UIViewMode.isGrid()) {
+            drawMineGrid(c, f, x, top, f.w(), bottom - top, stall);
+            V2.foot(c, x, bottom, f.w(), tr("gui.module_shop.stall.mine_summary", stall.size(), StallClient.slots, totalSold),
+                    tr("gui.module_shop.v2.stall.mine_hint"));
+            return;
+        }
         float[][] cols = V2.columns(x, f.w(), 10, 6, 14, 0, 60, 74, 50, 68, 74, 130);
         String[] heads = {"", tr("gui.module_shop.v2.col.item"), tr("gui.module_shop.v2.col.price"), tr("gui.module_shop.v2.col.stock"),
                 tr("gui.module_shop.v2.col.sold"), tr("gui.module_shop.v2.col.revenue"), tr("gui.module_shop.v2.col.remain"), ""};
@@ -263,6 +321,64 @@ public final class StallPage implements ShopPage {
         });
         V2.foot(c, x, bottom, f.w(), tr("gui.module_shop.stall.mine_summary", stall.size(), StallClient.slots, totalSold),
                 tr("gui.module_shop.v2.stall.mine_hint"));
+    }
+
+    private void drawMineGrid(Canvas c, PageFrame f, float x, float top, float w, float h, List<StallEntry> stall) {
+        int count = Math.max(stall.size(), StallClient.slots);
+        MINE_GRID.layoutUnified(x, top, w, h);
+        if (count <= 0) {
+            V2.empty(c, tr("gui.module_shop.stall.mine_empty"), x, top, w, h);
+            return;
+        }
+        MINE_GRID.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), count, (cv, card, cx, cy, cw, ch, hover) -> {
+            if (card >= stall.size()) {
+                CardGrid.cardBg(cv, cx, cy, cw, ch, hover, 0, false, true);
+                float box = 16.0F;
+                float bx = cx + (cw - box) * 0.5F;
+                float by = cy + 13.0F;
+                Draw.stroke(cv, bx, by, box, box, 3.0F, 0.55F, hover > 0.4F ? IOStyle.BLUE : IOStyle.BORDER);
+                V2.bold(cv, "+", V2.FS_T, hover > 0.4F ? IOStyle.BLUE : IOStyle.TEXT_3, bx, by + box * 0.5F, box, Text.Align.CENTER);
+                V2.text(cv, tr("gui.module_shop.v2.stall.empty_slot"), V2.FS_XS, IOStyle.TEXT_3,
+                        cx + 3, cy + 37.5F, cw - 6, Text.Align.CENTER);
+                return;
+            }
+            StallEntry e = stall.get(card);
+            boolean sold = e.stock <= 0;
+            CardGrid.cardBg(cv, cx, cy, cw, ch, hover, sold ? IOStyle.RED : IOStyle.BLUE, !sold, sold);
+
+            long rev = e.sold * e.price;
+            String remain = PageKit.remainText(ClientShopData.stallExpireMode, ClientShopData.stallExpireAmount, e.listedGame, e.listedReal);
+            String topLeft = rev > 0 ? "+" + V2.money(rev) : (remain == null ? "" : remain);
+            V2.text(cv, topLeft, V2.FS_XS, rev > 0 ? IOStyle.GREEN : IOStyle.ORANGE,
+                    cx + 4, cy + 7.0F, cw * 0.52F, Text.Align.LEFT);
+
+            if (hover > 0.2F) {
+                float rx = cx + cw - 23.0F;
+                float dx = cx + cw - 12.0F;
+                float ay = cy + 2.0F;
+                boolean overR = f.mouseX() >= rx && f.mouseX() < rx + 10.0F && f.mouseY() >= ay && f.mouseY() < ay + 10.0F;
+                boolean overD = f.mouseX() >= dx && f.mouseX() < dx + 10.0F && f.mouseY() >= ay && f.mouseY() < ay + 10.0F;
+                Draw.fill(cv, rx, ay, 10.0F, 10.0F, 2.0F, Draw.alpha(overR ? IOStyle.BLUE : IOStyle.SLOT_INNER, 0.9F));
+                V2.bold(cv, "+", V2.FS_S, IOStyle.TEXT, rx, ay + 5.0F, 10.0F, Text.Align.CENTER);
+                MINE_GRID.hitZone(card, "restock", rx, ay, 10.0F, 10.0F);
+                Draw.fill(cv, dx, ay, 10.0F, 10.0F, 2.0F, Draw.alpha(overD ? IOStyle.RED : IOStyle.SLOT_INNER, 0.9F));
+                V2.bold(cv, "×", V2.FS_S, overD ? IOStyle.TEXT : IOStyle.RED, dx, ay + 5.0F, 10.0F, Text.Align.CENTER);
+                MINE_GRID.hitZone(card, "remove", dx, ay, 10.0F, 10.0F);
+            } else {
+                V2.text(cv, sold ? tr("gui.module_shop.v2.sold_out") : V2.money(e.stock), V2.FS_XS,
+                        sold ? IOStyle.RED : IOStyle.TEXT_3, cx + cw * 0.50F, cy + 7.0F, cw * 0.50F - 4, Text.Align.RIGHT);
+            }
+
+            float iconSize = 16.0F;
+            f.host().items().add(e.stack, cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
+
+            V2.text(cv, e.stack.getHoverName().getString(), V2.FS_S, IOStyle.TEXT,
+                    cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
+            V2.bold(cv, V2.money(e.price), V2.FS, IOStyle.ORANGE,
+                    cx + 3, cy + 44.5F, cw - 6, Text.Align.CENTER);
+            float pct = e.stock / (float) Math.max(1, StallClient.maxStock);
+            V2.bar(cv, cx + 5, cy + 50.5F, cw - 10, pct, V2.levelColor(pct));
+        });
     }
 
     private static CompoundTag entryTag(int i, StallEntry e) {
@@ -343,8 +459,37 @@ public final class StallPage implements ShopPage {
                     StallClient.category = catKeys.get(i);
                     StallClient.page = 0;
                     HALL.scrollToTop();
+                    HALL_GRID.scrollToTop();
                     return true;
                 }
+            }
+            if (UIViewMode.isGrid()) {
+                for (int i = 0; i < sortPillRects.size(); i++) {
+                    float[] r = sortPillRects.get(i);
+                    if (mx >= r[0] && mx < r[0] + r[2] && my >= r[1] && my < r[1] + r[3]) {
+                        ClickSound.play();
+                        StallClient.sort = i == 1 ? (StallClient.sort == 1 ? 2 : 1) : 0;
+                        HALL_GRID.scrollToTop();
+                        return true;
+                    }
+                }
+                if (HALL_GRID.pressBar(mx, my)) {
+                    return true;
+                }
+                CardGrid.Hit hit = HALL_GRID.click(mx, my);
+                if (hit == null) {
+                    return false;
+                }
+                if (hit.index() >= 0 && hit.index() < hallShown.size()) {
+                    ClickSound.play();
+                    StallClient.Item it = hallShown.get(hit.index());
+                    if (it.own) {
+                        StallClient.hallView = false;
+                    } else {
+                        openSeller(it);
+                    }
+                }
+                return true;
             }
             if (HALL.pressBar(mx, my)) {
                 return true;
@@ -367,6 +512,31 @@ public final class StallPage implements ShopPage {
                 } else {
                     openSeller(it);
                 }
+            }
+            return true;
+        }
+        if (UIViewMode.isGrid()) {
+            if (MINE_GRID.pressBar(mx, my)) {
+                return true;
+            }
+            CardGrid.Hit hit = MINE_GRID.click(mx, my);
+            List<StallEntry> stall = ClientShopData.stall;
+            if (hit == null || hit.index() < 0) {
+                return hit != null;
+            }
+            if (hit.index() >= stall.size()) {
+                ClickSound.play();
+                Nav.open(new StallListScreen());
+                return true;
+            }
+            StallEntry e = stall.get(hit.index());
+            ClickSound.play();
+            if ("remove".equals(hit.button())) {
+                f.host().action("remove_stall", entryTag(hit.index(), e));
+            } else if ("restock".equals(hit.button())) {
+                f.host().action("stall_restock_gui", restockTag(hit.index(), e));
+            } else {
+                f.host().action("stall_edit_gui", entryTag(hit.index(), e));
             }
             return true;
         }
@@ -407,7 +577,7 @@ public final class StallPage implements ShopPage {
         if (search != null) {
             search.mouseReleased(mx, my, button);
         }
-        return HALL.releaseBar() | MINE.releaseBar();
+        return UIViewMode.isGrid() ? (HALL_GRID.releaseBar() | MINE_GRID.releaseBar()) : (HALL.releaseBar() | MINE.releaseBar());
     }
 
     @Override
@@ -415,12 +585,18 @@ public final class StallPage implements ShopPage {
         if (search != null && search.mouseDragged(mx, my, button, dx, dy)) {
             return true;
         }
+        if (UIViewMode.isGrid()) {
+            return StallClient.hallView ? HALL_GRID.dragBar(my) : MINE_GRID.dragBar(my);
+        }
         return StallClient.hallView ? HALL.dragBar(my) : MINE.dragBar(my);
     }
 
     @Override
     public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
         boolean page = net.minecraft.client.gui.screens.Screen.hasShiftDown();
+        if (UIViewMode.isGrid()) {
+            return StallClient.hallView ? HALL_GRID.wheel(mx, my, scrollY, page) : MINE_GRID.wheel(mx, my, scrollY, page);
+        }
         return StallClient.hallView ? HALL.wheel(mx, my, scrollY, page) : MINE.wheel(mx, my, scrollY, page);
     }
 
@@ -431,5 +607,7 @@ public final class StallPage implements ShopPage {
         }
         HALL.releaseBar();
         MINE.releaseBar();
+        HALL_GRID.releaseBar();
+        MINE_GRID.releaseBar();
     }
 }

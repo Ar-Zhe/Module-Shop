@@ -1419,5 +1419,14 @@
   "gui.module_shop.v2.trade.hint": "The trade window opens once they accept",
   "gui.module_shop.v2.trade.transfer_hint": "Click Transfer and enter an amount; it arrives instantly",
   "gui.module_shop.v2.admin.count": "%s entries · Edit to change · right-click or Remove to delete",
-  "gui.module_shop.v2.col.amount": "Amount"
+  "gui.module_shop.v2.col.amount": "Amount",
+  "gui.module_shop.view.to_grid": "View: List (Click for Grid)",
+  "gui.module_shop.view.to_list": "View: Grid (Click for List)",
+  "gui.module_shop.v2.sort.default": "Default",
+  "gui.module_shop.v2.daily.tap_flip": "Click to flip",
+  "gui.module_shop.v2.card.bag": "Bag %s",
+  "gui.module_shop.v2.card.gain": "Gain %s",
+  "gui.module_shop.v2.card.sold_rev": "Sold %s · %s",
+  "gui.module_shop.v2.card.bidders": "%sb/%s bids",
+  "gui.module_shop.v2.demand.click_detail": "Click card for item list"
 }

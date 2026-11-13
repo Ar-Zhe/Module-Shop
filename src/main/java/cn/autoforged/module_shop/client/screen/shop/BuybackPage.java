@@ -2,11 +2,13 @@ package cn.autoforged.module_shop.client.screen.shop;
 
 import cn.autoforged.module_shop.client.ClickSound;
 import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.UIViewMode;
 import cn.autoforged.module_shop.client.screen.IOStyle;
 import cn.autoforged.module_shop.client.screen.Nav;
 import cn.autoforged.module_shop.client.screen.ShopConfirmScreen;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.CardGrid;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
 import cn.autoforged.module_shop.client.ui.v2.V2;
 import cn.autoforged.module_shop.data.DailyBuybackEntry;
@@ -30,6 +32,7 @@ import net.minecraft.world.item.ItemStack;
  */
 public final class BuybackPage implements ShopPage {
     private static final ListTable TABLE = new ListTable();
+    private static final CardGrid GRID = new CardGrid();
     /** 0 = 全部，1 = 背包里有，2 = 已收满。 */
     private static int filter;
 
@@ -104,9 +107,15 @@ public final class BuybackPage implements ShopPage {
         drawToolbar(c, f, list.size(), haveCount, fullCount, sumKinds, sumGain);
         float top = f.y() + V2.BAR;
         float bottom = f.y() + f.h() - V2.FOOT;
-        drawTable(c, f, f.x(), top, f.w(), bottom - top);
-        String left = tr("gui.module_shop.v2.showing", TABLE.firstVisible(), TABLE.lastVisible(), shown.size());
-        V2.foot(c, f.x(), bottom, f.w(), left, tr("gui.module_shop.v2.buyback.hint"));
+        if (UIViewMode.isGrid()) {
+            drawGrid(c, f, f.x(), top, f.w(), bottom - top);
+            String left = tr("gui.module_shop.v2.showing", GRID.firstVisible(), GRID.lastVisible(), shown.size());
+            V2.foot(c, f.x(), bottom, f.w(), left, tr("gui.module_shop.v2.buyback.hint"));
+        } else {
+            drawTable(c, f, f.x(), top, f.w(), bottom - top);
+            String left = tr("gui.module_shop.v2.showing", TABLE.firstVisible(), TABLE.lastVisible(), shown.size());
+            V2.foot(c, f.x(), bottom, f.w(), left, tr("gui.module_shop.v2.buyback.hint"));
+        }
     }
 
     private void drawToolbar(Canvas c, PageFrame f, int all, int have, int full, int kinds, long gain) {
@@ -233,6 +242,43 @@ public final class BuybackPage implements ShopPage {
         });
     }
 
+    private void drawGrid(Canvas c, PageFrame f, float x, float y, float w, float h) {
+        List<DailyBuybackEntry> list = ClientShopData.dailyBuyback;
+        GRID.layoutUnified(x, y, w, h);
+        if (shown.isEmpty()) {
+            V2.empty(c, tr(list.isEmpty() ? "gui.module_shop.empty" : "gui.module_shop.v2.no_match"), x, y, w, h);
+            return;
+        }
+        GRID.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), shown.size(), (cv, card, cx, cy, cw, ch, hover) -> {
+            DailyBuybackEntry e = list.get(shown.get(card));
+            int have = countInBag(e.stack);
+            int sell = sellable(e);
+            boolean full = e.remaining() <= 0;
+            int rc = IOStyle.rarity(e.rarity);
+            CardGrid.cardBg(cv, cx, cy, cw, ch, hover, rc, have > 0 && !full, full);
+
+            if (sell > 0) {
+                V2.bold(cv, "×" + V2.money(sell), V2.FS_XS, IOStyle.GREEN, cx + 4, cy + 7.0F, cw * 0.48F, Text.Align.LEFT);
+            } else {
+                V2.text(cv, have > 0 ? "×" + V2.money(have) : "—", V2.FS_XS,
+                        have > 0 ? IOStyle.TEXT_2 : IOStyle.TEXT_3, cx + 4, cy + 7.0F, cw * 0.48F, Text.Align.LEFT);
+            }
+            V2.text(cv, full ? tr("gui.module_shop.v2.buyback.full") : (e.sold + "/" + e.limit),
+                    V2.FS_XS, full ? IOStyle.RED : IOStyle.TEXT_3,
+                    cx + cw * 0.46F, cy + 7.0F, cw * 0.54F - 4, Text.Align.RIGHT);
+
+            float iconSize = 16.0F;
+            f.host().items().add(e.stack, cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
+
+            V2.text(cv, e.stack.getHoverName().getString(), V2.FS_S, full ? IOStyle.TEXT_3 : IOStyle.TEXT,
+                    cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
+            V2.bold(cv, V2.money(e.price), V2.FS, full ? IOStyle.TEXT_3 : IOStyle.ORANGE,
+                    cx + 3, cy + 44.5F, cw - 6, Text.Align.CENTER);
+            float pct = e.limit <= 0 ? 1.0F : e.sold / (float) e.limit;
+            V2.bar(cv, cx + 5, cy + 50.5F, cw - 10, pct, full ? IOStyle.TEXT_3 : (have > 0 ? IOStyle.GREEN : IOStyle.BLUE));
+        });
+    }
+
     // ------------------------------------------------------------------ 输入
 
     private static boolean in(float[] r, double x, double y) {
@@ -247,6 +293,7 @@ public final class BuybackPage implements ShopPage {
                     ClickSound.play();
                     filter = i;
                     TABLE.scrollToTop();
+                    GRID.scrollToTop();
                     return true;
                 }
             }
@@ -270,9 +317,36 @@ public final class BuybackPage implements ShopPage {
                 f.host().action("admin_buyback_bonus_toggle", null);
                 return true;
             }
-            if (TABLE.pressBar(mx, my)) {
+            if (UIViewMode.isGrid() ? GRID.pressBar(mx, my) : TABLE.pressBar(mx, my)) {
                 return true;
             }
+        }
+        if (UIViewMode.isGrid()) {
+            CardGrid.Hit hit = GRID.click(mx, my);
+            if (hit == null || hit.index() < 0 || hit.index() >= shown.size()) {
+                return hit != null;
+            }
+            int index = shown.get(hit.index());
+            DailyBuybackEntry e = ClientShopData.dailyBuyback.get(index);
+            if (e.remaining() <= 0) {
+                return true;
+            }
+            if (button == 0 && Net.shift()) {
+                int sell = sellable(e);
+                if (sell > 0) {
+                    ClickSound.play();
+                    sendSell(f, index, sell);
+                }
+                return true;
+            }
+            if (button == 0 && ("sell".equals(hit.button()) || hit.button() == null)) {
+                ClickSound.play();
+                CompoundTag tag = new CompoundTag();
+                tag.putInt("index", index);
+                f.host().action("sell_buyback_gui", tag);
+                return true;
+            }
+            return hit.button() != null;
         }
         ListTable.Hit hit = TABLE.click(mx, my);
         if (hit == null || hit.row() < 0 || hit.row() >= shown.size()) {
@@ -350,22 +424,23 @@ public final class BuybackPage implements ShopPage {
 
     @Override
     public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
-        return TABLE.releaseBar();
+        return UIViewMode.isGrid() ? GRID.releaseBar() : TABLE.releaseBar();
     }
 
     @Override
     public boolean mouseDragged(PageFrame f, double mx, double my, int button, double dx, double dy) {
-        return TABLE.dragBar(my);
+        return UIViewMode.isGrid() ? GRID.dragBar(my) : TABLE.dragBar(my);
     }
 
     @Override
     public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
-        return TABLE.wheel(mx, my, scrollY, Net.shift());
+        return UIViewMode.isGrid() ? GRID.wheel(mx, my, scrollY, Net.shift()) : TABLE.wheel(mx, my, scrollY, Net.shift());
     }
 
     @Override
     public void cancelInput() {
         TABLE.releaseBar();
+        GRID.releaseBar();
     }
 
     /** 小工具：Shift 是否按下。 */

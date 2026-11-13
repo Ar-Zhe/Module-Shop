@@ -3,10 +3,12 @@ package cn.autoforged.module_shop.client.screen.shop;
 import cn.autoforged.module_shop.client.AuctionClient;
 import cn.autoforged.module_shop.client.ClickSound;
 import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.UIViewMode;
 import cn.autoforged.module_shop.client.screen.IOStyle;
 import cn.autoforged.module_shop.client.screen.auction.AuctionUi;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.CardGrid;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
 import cn.autoforged.module_shop.client.ui.v2.V2;
 import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
@@ -27,6 +29,7 @@ import net.minecraft.network.chat.Component;
 public final class AuctionPage implements ShopPage {
     private static final float FILTER_W = 86.0F;
     private static final ListTable TABLE = new ListTable();
+    private static final CardGrid GRID = new CardGrid();
 
     private SkiaTextField search;
     private List<ClientShopData.AuctionView> shown = List.of();
@@ -34,6 +37,7 @@ public final class AuctionPage implements ShopPage {
     private final List<AuctionCategory> catKeys = new ArrayList<>();
     private final List<float[]> btnRects = new ArrayList<>();
     private final List<Runnable> btnRuns = new ArrayList<>();
+    private final List<float[]> sortPillRects = new ArrayList<>();
 
     @Override
     public String id() {
@@ -51,6 +55,7 @@ public final class AuctionPage implements ShopPage {
                 .onChange(t -> {
                     AuctionClient.search = t == null ? "" : t;
                     TABLE.scrollToTop();
+                    GRID.scrollToTop();
                 });
         search.setValue(AuctionClient.search);
         host.registerInput(search.editBox());
@@ -103,11 +108,17 @@ public final class AuctionPage implements ShopPage {
         float bottom = f.y() + f.h() - V2.FOOT;
         drawFilter(c, f, x, top, bottom - top);
         shown = AuctionClient.filtered();
-        drawTable(c, f, x + FILTER_W, top, f.w() - FILTER_W, bottom - top);
         String rules = tr("gui.module_shop.v2.auction.rules", AuctionUi.money(st.feeFixed),
                 String.format("%.1f", st.feePercent), String.format("%.1f", st.saleFeePercent));
-        V2.foot(c, x + FILTER_W, bottom, f.w() - FILTER_W,
-                tr("gui.module_shop.v2.showing", TABLE.firstVisible(), TABLE.lastVisible(), shown.size()), rules);
+        if (UIViewMode.isGrid()) {
+            drawGrid(c, f, x + FILTER_W, top, f.w() - FILTER_W, bottom - top);
+            V2.foot(c, x + FILTER_W, bottom, f.w() - FILTER_W,
+                    tr("gui.module_shop.v2.showing", GRID.firstVisible(), GRID.lastVisible(), shown.size()), rules);
+        } else {
+            drawTable(c, f, x + FILTER_W, top, f.w() - FILTER_W, bottom - top);
+            V2.foot(c, x + FILTER_W, bottom, f.w() - FILTER_W,
+                    tr("gui.module_shop.v2.showing", TABLE.firstVisible(), TABLE.lastVisible(), shown.size()), rules);
+        }
     }
 
     private void drawFilter(Canvas c, PageFrame f, float x, float y, float h) {
@@ -212,6 +223,50 @@ public final class AuctionPage implements ShopPage {
         });
     }
 
+    private void drawGrid(Canvas c, PageFrame f, float x, float y, float w, float h) {
+        int sort = AuctionClient.sort;
+        String curLabel = tr("gui.module_shop.v2.col.current") + (sort == 2 ? " ↑" : sort == 3 ? " ↓" : "");
+        String[] sortLabels = {tr("gui.module_shop.v2.sort.default"), curLabel,
+                tr("gui.module_shop.v2.col.bidders"), tr("gui.module_shop.v2.col.remain")};
+        int activeSort = (sort == 2 || sort == 3) ? 1 : sort == 6 ? 2 : sort == 1 ? 3 : 0;
+        CardGrid.drawSortBar(c, x, y, w, f.mouseX(), f.mouseY(), sortLabels, activeSort, null, sortPillRects);
+
+        GRID.layoutUnified(x, y + V2.HEAD, w, h - V2.HEAD);
+        if (shown.isEmpty()) {
+            V2.empty(c, tr(ClientShopData.auctions.isEmpty() ? "gui.module_shop.auction_empty" : "gui.module_shop.v2.no_match"),
+                    x, y + V2.HEAD, w, h - V2.HEAD);
+            return;
+        }
+        GRID.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), shown.size(), (cv, card, cx, cy, cw, ch, hover) -> {
+            ClientShopData.AuctionView v = shown.get(card);
+            int mark = v.own ? IOStyle.ORANGE : v.topMe ? IOStyle.GREEN : v.iBid ? IOStyle.RED : 0;
+            CardGrid.cardBg(cv, cx, cy, cw, ch, hover, mark, mark != 0, false);
+
+            long remain = v.remainingNow();
+            String leftTag = v.own ? tr("gui.module_shop.v2.auction.st_mine")
+                    : v.topMe ? tr("gui.module_shop.v2.auction.me")
+                    : !v.allowBid ? tr("gui.module_shop.v2.auction.buyout_only")
+                    : v.bidders + "/" + v.bidCount;
+            V2.bold(cv, leftTag, V2.FS_XS, mark != 0 ? mark : IOStyle.TEXT_3,
+                    cx + 4, cy + 7.0F, cw * 0.52F, Text.Align.LEFT);
+            V2.bold(cv, AuctionUi.remain(remain), V2.FS_XS, AuctionUi.remainColor(remain),
+                    cx + cw * 0.48F, cy + 7.0F, cw * 0.52F - 4, Text.Align.RIGHT);
+
+            float iconSize = 16.0F;
+            f.host().items().add(v.stack, cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
+
+            V2.text(cv, v.stack.getHoverName().getString(), V2.FS_S, IOStyle.TEXT,
+                    cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
+
+            boolean hasBid = v.currentBid > 0;
+            String priceText = !v.allowBid
+                    ? (v.buyout > 0 ? AuctionUi.money(v.buyout) : "—")
+                    : AuctionUi.money(hasBid ? v.currentBid : v.startPrice);
+            int priceCol = !v.allowBid ? IOStyle.GREEN : (hasBid ? IOStyle.ORANGE : IOStyle.TEXT_2);
+            V2.bold(cv, priceText, V2.FS, priceCol, cx + 3, cy + 45.0F, cw - 6, Text.Align.CENTER);
+        });
+    }
+
     @Override
     public boolean mouseClicked(PageFrame f, double mx, double my, int button) {
         if (search != null && search.isVisible() && search.mouseClicked(mx, my, button)) {
@@ -238,8 +293,37 @@ public final class AuctionPage implements ShopPage {
                 AuctionClient.category = catKeys.get(i);
                 AuctionClient.page = 0;
                 TABLE.scrollToTop();
+                GRID.scrollToTop();
                 return true;
             }
+        }
+        if (UIViewMode.isGrid()) {
+            for (int i = 0; i < sortPillRects.size(); i++) {
+                float[] r = sortPillRects.get(i);
+                if (mx >= r[0] && mx < r[0] + r[2] && my >= r[1] && my < r[1] + r[3]) {
+                    ClickSound.play();
+                    AuctionClient.sort = switch (i) {
+                        case 1 -> AuctionClient.sort == 2 ? 3 : 2;
+                        case 2 -> 6;
+                        case 3 -> 1;
+                        default -> 0;
+                    };
+                    GRID.scrollToTop();
+                    return true;
+                }
+            }
+            if (GRID.pressBar(mx, my)) {
+                return true;
+            }
+            CardGrid.Hit hit = GRID.click(mx, my);
+            if (hit == null) {
+                return false;
+            }
+            if (hit.index() >= 0 && hit.index() < shown.size()) {
+                ClickSound.play();
+                AuctionUi.openDetail(shown.get(hit.index()).id);
+            }
+            return true;
         }
         if (TABLE.pressBar(mx, my)) {
             return true;
@@ -279,7 +363,7 @@ public final class AuctionPage implements ShopPage {
         if (search != null) {
             search.mouseReleased(mx, my, button);
         }
-        return TABLE.releaseBar();
+        return UIViewMode.isGrid() ? GRID.releaseBar() : TABLE.releaseBar();
     }
 
     @Override
@@ -287,12 +371,13 @@ public final class AuctionPage implements ShopPage {
         if (search != null && search.mouseDragged(mx, my, button, dx, dy)) {
             return true;
         }
-        return TABLE.dragBar(my);
+        return UIViewMode.isGrid() ? GRID.dragBar(my) : TABLE.dragBar(my);
     }
 
     @Override
     public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
-        return TABLE.wheel(mx, my, scrollY, net.minecraft.client.gui.screens.Screen.hasShiftDown());
+        boolean page = net.minecraft.client.gui.screens.Screen.hasShiftDown();
+        return UIViewMode.isGrid() ? GRID.wheel(mx, my, scrollY, page) : TABLE.wheel(mx, my, scrollY, page);
     }
 
     @Override
@@ -301,5 +386,6 @@ public final class AuctionPage implements ShopPage {
             search.visible(false);
         }
         TABLE.releaseBar();
+        GRID.releaseBar();
     }
 }
