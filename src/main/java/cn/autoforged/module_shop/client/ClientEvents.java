@@ -49,6 +49,12 @@ public final class ClientEvents {
         event.register(OPEN_SHOP.get());
     }
 
+    @SubscribeEvent
+    public static void registerReloadListeners(
+            net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent event) {
+        event.registerReloadListener((net.minecraft.server.packs.resources.ResourceManagerReloadListener) ModNames::reload);
+    }
+
     /**
      * JEI 联动：鼠标悬停在商店界面里的物品图标上时，按 JEI 的「查看配方 / 查看用途」键
      * （默认 R / U，认玩家自己的按键绑定）直接打开 JEI 对应的界面。

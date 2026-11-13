@@ -169,17 +169,12 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu>
             set.add(entry.namespace());
         }
         List<String> list = new ArrayList<>(set);
-        list.sort(Comparator.comparing(ns -> modName(ns).toLowerCase()));
+        list.sort(cn.autoforged.module_shop.client.ModNames.namespaceComparator());
         return list;
     }
 
     public static String modName(String namespace) {
-        try {
-            return net.neoforged.fml.ModList.get().getModContainerById(namespace)
-                    .map(c -> c.getModInfo().getDisplayName()).orElse(namespace);
-        } catch (Throwable ignored) {
-            return namespace;
-        }
+        return cn.autoforged.module_shop.client.ModNames.displayName(namespace);
     }
 
     /** 背包里有多少个该物品（只看已有 / 悬停提示用）。 */
@@ -218,8 +213,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu>
             }
             if (!query.isEmpty()) {
                 String name = entry.stack().getHoverName().getString().toLowerCase();
-                if (!name.contains(query) && !entry.namespace().contains(query)
-                        && !modName(entry.namespace()).toLowerCase().contains(query)) {
+                if (!name.contains(query) && !cn.autoforged.module_shop.client.ModNames.matchesQuery(entry.namespace(), query)) {
                     continue;
                 }
             }

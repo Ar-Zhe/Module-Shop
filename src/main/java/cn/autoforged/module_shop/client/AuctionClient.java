@@ -413,6 +413,7 @@ public final class AuctionClient {
                 var id = BuiltInRegistries.ITEM.getKey(v.stack.getItem());
                 sb.append(id).append(' ').append(id.getPath().replace('_', ' ')).append(' ');
                 sb.append(ShopScreen.mallModName(id.getNamespace())).append(' ');
+                sb.append(ModNames.rawDisplayName(id.getNamespace())).append(' ');
                 // 附魔书 / 带附魔的物品：附魔名也能搜到（例如「经验修补」「mending」）
                 v.stack.getEnchantments().keySet().forEach(h -> sb.append(
                         net.minecraft.world.item.enchantment.Enchantment.getFullname(h, 1).getString()).append(' '));
