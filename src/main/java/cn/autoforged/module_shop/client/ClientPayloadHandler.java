@@ -91,6 +91,10 @@ public final class ClientPayloadHandler {
         } else if ("redeem_claimed".equals(kind)) {
             // 兑换码领取名单（列表界面「查看」弹窗）。
             ClientShopData.applyRedeemClaimed(data);
+        } else if ("cfg_open_ui".equals(kind)) {
+            // 服务端下发的「打开配置管理界面」：走 push 版（带界面栈，关闭能回到商店）。
+            cn.autoforged.module_shop.client.screen.Nav.openPushed(
+                    new cn.autoforged.module_shop.client.screen.ConfigManagerScreen());
         } else if ("cfg_export".equals(kind)) {
             // 服务端下发的导出用模板：写进客户端 config/moduleshop/exports/ 并提示路径。
             ClientTemplateIO.notifyExported(data.getString("json"), data.getString("name"));
