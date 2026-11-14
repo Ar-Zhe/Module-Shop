@@ -214,9 +214,16 @@ tasks.withType(ProcessResources).configureEach {
     filteringCharset = 'UTF-8'
 }
 
+// 主包名对齐 1.20.1 格式：Module-Shop-<mod_version>-for-NeoForge-<mc_version>.jar
+tasks.named('jar', Jar).configure {
+    archiveFileName = "Module-Shop-${mod_version}-for-NeoForge-${minecraft_version}.jar"
+}
+
 // 公共 API 单独打一个 jar（只含 cn.autoforged.module_shop.api.**）：附属模组只对它编译，
 // 从构建层面保证附属碰不到 ShopManager / ShopSavedData 等内部实现。运行时仍由完整的 module_shop jar 提供。
 def apiJar = tasks.register('apiJar', Jar) {
+    archiveBaseName = 'module_shop'
+    archiveVersion = mod_version
     archiveClassifier = 'api'
     from(sourceSets.main.output) {
         include 'cn/autoforged/module_shop/api/**'
