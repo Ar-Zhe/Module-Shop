@@ -303,10 +303,25 @@ public final class V2 {
 
     // ------------------------------------------------------------------ 图标（线条绘制，不依赖字体字形）
 
-    public enum Icon { CLOSE, BELL, BILL, SKIN, MAIL, GEAR, SEARCH, LAYOUT }
+    public enum Icon { CLOSE, BELL, BILL, SKIN, MAIL, GEAR, SEARCH, LAYOUT, VIEW_LIST, VIEW_GRID }
 
     public static void icon(Canvas c, Icon icon, float cx, float cy, int color) {
         switch (icon) {
+            case VIEW_LIST -> {
+                for (int i = -1; i <= 1; i++) {
+                    float ry = cy + i * 2.4F;
+                    Draw.fill(c, cx - 3.4F, ry - 0.55F, 1.1F, 1.1F, 0.4F, color);
+                    Draw.line(c, cx - 1.4F, ry, cx + 3.4F, ry, 0.9F, color);
+                }
+            }
+            case VIEW_GRID -> {
+                float s = 2.8F;
+                float g = 0.8F;
+                Draw.fill(c, cx - g / 2 - s, cy - g / 2 - s, s, s, 0.6F, color);
+                Draw.fill(c, cx + g / 2, cy - g / 2 - s, s, s, 0.6F, color);
+                Draw.fill(c, cx - g / 2 - s, cy + g / 2, s, s, 0.6F, color);
+                Draw.fill(c, cx + g / 2, cy + g / 2, s, s, 0.6F, color);
+            }
             case CLOSE -> Draw.cross(c, cx, cy, 2.6F, 1.0F, color);
             case BELL -> {
                 Draw.stroke(c, cx - 2.6F, cy - 3.2F, 5.2F, 5.4F, 2.4F, 0.9F, color);

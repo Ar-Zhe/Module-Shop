@@ -2,9 +2,11 @@ package cn.autoforged.module_shop.client.screen.shop;
 
 import cn.autoforged.module_shop.client.ClickSound;
 import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.UIViewMode;
 import cn.autoforged.module_shop.client.screen.IOStyle;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.CardGrid;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
 import cn.autoforged.module_shop.client.ui.v2.V2;
 import cn.autoforged.module_shop.data.DailyShopEntry;
@@ -15,7 +17,7 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 
 /**
- * 每日商店（UI v2 列表视图）。
+ * 每日商店（UI v2：支持列表视图与方块视图）。
  *
  * <p>翻牌仍是服务端状态：未翻开的行只显示稀有度与「？？？」，操作是「翻开」（{@code flip_shop}）；
  * 翻开后显示物品、单价、剩余与限购，操作是「购买」（{@code buy_shop}，弹数量输入）。
@@ -23,6 +25,8 @@ import net.minecraft.network.chat.Component;
  */
 public final class DailyPage implements ShopPage {
     private static final ListTable TABLE = new ListTable();
+    private static final CardGrid GRID = new CardGrid();
+    private static float[] flipAnim = new float[0];
     private static int filter;
 
     private List<Integer> shown = new ArrayList<>();
@@ -61,9 +65,15 @@ public final class DailyPage implements ShopPage {
         drawToolbar(c, f, list.size(), open);
         float top = f.y() + V2.BAR;
         float bottom = f.y() + f.h() - V2.FOOT;
-        drawTable(c, f, f.x(), top, f.w(), bottom - top);
-        V2.foot(c, f.x(), bottom, f.w(), tr("gui.module_shop.v2.showing", TABLE.firstVisible(), TABLE.lastVisible(), shown.size()),
-                tr("gui.module_shop.v2.daily.hint"));
+        if (UIViewMode.isGrid()) {
+            drawGrid(c, f, f.x(), top, f.w(), bottom - top);
+            V2.foot(c, f.x(), bottom, f.w(), tr("gui.module_shop.v2.showing", GRID.firstVisible(), GRID.lastVisible(), shown.size()),
+                    tr("gui.module_shop.v2.daily.hint"));
+        } else {
+            drawTable(c, f, f.x(), top, f.w(), bottom - top);
+            V2.foot(c, f.x(), bottom, f.w(), tr("gui.module_shop.v2.showing", TABLE.firstVisible(), TABLE.lastVisible(), shown.size()),
+                    tr("gui.module_shop.v2.daily.hint"));
+        }
     }
 
     private static boolean over(PageFrame f, float x, float y, float w, float h) {
@@ -167,6 +177,80 @@ public final class DailyPage implements ShopPage {
         });
     }
 
+    private void drawGrid(Canvas c, PageFrame f, float x, float y, float w, float h) {
+        List<DailyShopEntry> list = ClientShopData.dailyShop;
+        if (flipAnim.length != list.size()) {
+            float[] next = new float[list.size()];
+            for (int i = 0; i < next.length; i++) {
+                next[i] = i < flipAnim.length ? flipAnim[i] : (flipped(i) ? 1.0F : 0.0F);
+            }
+            flipAnim = next;
+        }
+        for (int i = 0; i < list.size(); i++) {
+            if (flipped(i)) {
+                flipAnim[i] = Math.min(1.0F, flipAnim[i] + f.dtMs() / 240.0F);
+            } else {
+                flipAnim[i] = 0.0F;
+            }
+        }
+        GRID.layoutUnified(x, y, w, h);
+        if (shown.isEmpty()) {
+            V2.empty(c, tr(list.isEmpty() ? "gui.module_shop.empty" : "gui.module_shop.v2.no_match"), x, y, w, h);
+            return;
+        }
+        GRID.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), shown.size(), (cv, card, cx, cy, cw, ch, hover) -> {
+            int index = shown.get(card);
+            DailyShopEntry e = list.get(index);
+            int rc = IOStyle.rarity(e.rarity);
+            String rarity = Component.translatable(e.rarity.translationKey()).getString();
+            float t = index >= 0 && index < flipAnim.length ? flipAnim[index] : (flipped(index) ? 1.0F : 0.0F);
+            boolean mid = t > 0.0F && t < 1.0F;
+            float sx = mid ? Math.max(0.08F, Math.abs(1.0F - 2.0F * t)) : 1.0F;
+            int saved = cv.save();
+            if (mid) {
+                float midX = cx + cw * 0.5F;
+                float midY = cy + ch * 0.5F;
+                cv.translate(midX, midY);
+                cv.scale(sx, 1.0F);
+                cv.translate(-midX, -midY);
+            }
+            try {
+                if (!flipped(index) || t < 0.5F) {
+                    CardGrid.cardBg(cv, cx, cy, cw, ch, hover, rc, true, false);
+                    V2.bold(cv, rarity, V2.FS_XS, rc, cx + 4, cy + 7.0F, cw - 8, Text.Align.LEFT);
+                    float box = 16.0F;
+                    float bx = cx + (cw - box) * 0.5F;
+                    float by = cy + 13.0F;
+                    Draw.fill(cv, bx, by, box, box, 3.0F, Draw.alpha(rc, 0.16F));
+                    Draw.stroke(cv, bx, by, box, box, 3.0F, 0.5F, Draw.alpha(rc, 0.45F));
+                    V2.bold(cv, "?", V2.FS_T, rc, bx, by + box * 0.5F, box, Text.Align.CENTER);
+                    V2.text(cv, "???", V2.FS_S, IOStyle.TEXT_2, cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
+                    V2.bold(cv, tr("gui.module_shop.v2.daily.flip"), V2.FS_XS, hover > 0.4F ? IOStyle.BLUE : IOStyle.TEXT_3,
+                            cx + 3, cy + 45.0F, cw - 6, Text.Align.CENTER);
+                    return;
+                }
+                int left = e.remaining();
+                CardGrid.cardBg(cv, cx, cy, cw, ch, hover, rc, left > 0, left <= 0);
+                V2.bold(cv, rarity, V2.FS_XS, left > 0 ? rc : Draw.alpha(rc, 0.55F), cx + 4, cy + 7.0F, cw * 0.52F, Text.Align.LEFT);
+                V2.text(cv, e.bought + "/" + e.limit, V2.FS_XS, left > 0 ? IOStyle.TEXT_3 : IOStyle.RED,
+                        cx + cw * 0.50F, cy + 7.0F, cw * 0.50F - 4, Text.Align.RIGHT);
+
+                float iconSize = 16.0F;
+                f.host().items().add(e.stack, cx + (cw - iconSize * sx) * 0.5F, cy + 13.0F, iconSize, sx, true);
+
+                V2.text(cv, e.stack.getHoverName().getString(), V2.FS_S, left > 0 ? IOStyle.TEXT : IOStyle.TEXT_3,
+                        cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
+                String priceStr = left > 0 ? V2.money(e.price) : tr("gui.module_shop.v2.daily.done");
+                V2.bold(cv, priceStr, V2.FS, left > 0 ? IOStyle.ORANGE : IOStyle.TEXT_3,
+                        cx + 3, cy + 44.5F, cw - 6, Text.Align.CENTER);
+                float pct = e.limit <= 0 ? 1.0F : e.bought / (float) e.limit;
+                V2.bar(cv, cx + 5, cy + 50.5F, cw - 10, pct, left > 0 ? IOStyle.BLUE : IOStyle.TEXT_3);
+            } finally {
+                cv.restoreToCount(saved);
+            }
+        });
+    }
+
     private static boolean in(float[] r, double x, double y) {
         return r != null && x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3];
     }
@@ -179,6 +263,7 @@ public final class DailyPage implements ShopPage {
                     ClickSound.play();
                     filter = i;
                     TABLE.scrollToTop();
+                    GRID.scrollToTop();
                     return true;
                 }
             }
@@ -198,9 +283,29 @@ public final class DailyPage implements ShopPage {
                 }
                 return true;
             }
-            if (TABLE.pressBar(mx, my)) {
+            if (UIViewMode.isGrid() ? GRID.pressBar(mx, my) : TABLE.pressBar(mx, my)) {
                 return true;
             }
+        }
+        if (UIViewMode.isGrid()) {
+            CardGrid.Hit hit = GRID.click(mx, my);
+            if (hit == null || hit.index() < 0 || hit.index() >= shown.size()) {
+                return hit != null;
+            }
+            if (button != 0 || "none".equals(hit.button())) {
+                return true;
+            }
+            int index = shown.get(hit.index());
+            if (!flipped(index) || "buy".equals(hit.button()) || "flip".equals(hit.button()) || hit.button() == null) {
+                if (flipped(index) && ClientShopData.dailyShop.get(index).remaining() <= 0) {
+                    return true;
+                }
+                ClickSound.play();
+                CompoundTag extra = new CompoundTag();
+                extra.putInt("index", index);
+                f.host().action(flipped(index) ? "buy_shop" : "flip_shop", extra);
+            }
+            return true;
         }
         ListTable.Hit hit = TABLE.click(mx, my);
         if (hit == null || hit.row() < 0 || hit.row() >= shown.size()) {
@@ -219,21 +324,23 @@ public final class DailyPage implements ShopPage {
 
     @Override
     public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
-        return TABLE.releaseBar();
+        return UIViewMode.isGrid() ? GRID.releaseBar() : TABLE.releaseBar();
     }
 
     @Override
     public boolean mouseDragged(PageFrame f, double mx, double my, int button, double dx, double dy) {
-        return TABLE.dragBar(my);
+        return UIViewMode.isGrid() ? GRID.dragBar(my) : TABLE.dragBar(my);
     }
 
     @Override
     public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
-        return TABLE.wheel(mx, my, scrollY, net.minecraft.client.gui.screens.Screen.hasShiftDown());
+        boolean page = net.minecraft.client.gui.screens.Screen.hasShiftDown();
+        return UIViewMode.isGrid() ? GRID.wheel(mx, my, scrollY, page) : TABLE.wheel(mx, my, scrollY, page);
     }
 
     @Override
     public void cancelInput() {
         TABLE.releaseBar();
+        GRID.releaseBar();
     }
 }

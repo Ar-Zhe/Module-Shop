@@ -64,6 +64,9 @@ public final class UiV2Tour {
             seeded = true;
             seedFakeData();
         }
+        if (System.getProperty("moduleshop.tourgrid") != null) {
+            cn.autoforged.module_shop.client.UIViewMode.setGrid(Boolean.getBoolean("moduleshop.tourgrid"));
+        }
         if (pendingShot != null) {
             capture(mc, pendingShot);
             pendingShot = null;
@@ -119,6 +122,16 @@ public final class UiV2Tour {
             }
             add(tab, () -> mc.setScreen(new ShopScreen(tab)));
         }
+        if (Boolean.getBoolean("moduleshop.tourfake") && (only.isEmpty() || List.of(only.split(",")).contains("stall"))) {
+            add("stall-hall", () -> {
+                cn.autoforged.module_shop.client.StallClient.hallView = true;
+                mc.setScreen(new ShopScreen("stall"));
+            });
+            add("stall-mine", () -> {
+                cn.autoforged.module_shop.client.StallClient.hallView = false;
+                mc.setScreen(new ShopScreen("stall"));
+            });
+        }
         // 附属页面（ShopModules 注册的内容区页面）
         for (var entry : cn.autoforged.module_shop.api.client.ShopModules.entries()) {
             String id = entry.id();
@@ -144,27 +157,112 @@ public final class UiV2Tour {
         }
     }
 
-    /** 测试世界里购物城是空的：在客户端塞一批演示商品（只用于截图，购买会被服务端拒绝）。 */
+    /** 测试世界里商店为空时：在客户端塞一批演示商品（只在 tourfake=true 下用于截图）。 */
     private static void seedFakeData() {
-        if (!cn.autoforged.module_shop.client.ClientShopData.mall.isEmpty()) {
-            return;
-        }
+        var data = new java.util.ArrayList<net.minecraft.world.item.ItemStack>();
         int i = 0;
         for (net.minecraft.world.item.Item item : net.minecraft.core.registries.BuiltInRegistries.ITEM) {
             if (item == net.minecraft.world.item.Items.AIR || (i++ % 9) != 4) {
                 continue;
             }
-            var v = new cn.autoforged.module_shop.client.ClientShopData.MallView();
-            int h = Math.abs(net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(item).hashCode());
-            v.shelf = cn.autoforged.module_shop.client.ClientShopData.mall.size();
-            v.stack = new net.minecraft.world.item.ItemStack(item);
-            v.rarity = cn.autoforged.module_shop.data.Rarity.values()[h % 4];
-            v.price = 1 + h % (v.rarity.ordinal() == 0 ? 9000 : 400);
-            v.stock = h % 13 == 0 ? 0 : h % 4 == 0 ? -1 : 1 + h % 300;
-            v.sort = v.shelf;
-            cn.autoforged.module_shop.client.ClientShopData.mall.add(v);
-            if (cn.autoforged.module_shop.client.ClientShopData.mall.size() >= 120) {
+            data.add(new net.minecraft.world.item.ItemStack(item));
+            if (data.size() >= 120) {
                 break;
+            }
+        }
+        if (cn.autoforged.module_shop.client.ClientShopData.mall.isEmpty()) {
+            for (int j = 0; j < data.size(); j++) {
+                var st = data.get(j);
+                var v = new cn.autoforged.module_shop.client.ClientShopData.MallView();
+                int h = Math.abs(net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(st.getItem()).hashCode());
+                v.shelf = j;
+                v.stack = st;
+                v.rarity = cn.autoforged.module_shop.data.Rarity.values()[h % 4];
+                v.price = 1 + h % (v.rarity.ordinal() == 0 ? 9000 : 400);
+                v.stock = h % 13 == 0 ? 0 : h % 4 == 0 ? -1 : 1 + h % 300;
+                v.sort = v.shelf;
+                cn.autoforged.module_shop.client.ClientShopData.mall.add(v);
+            }
+        }
+        if (cn.autoforged.module_shop.client.ClientShopData.dailyShop.isEmpty()) {
+            for (int j = 0; j < Math.min(10, data.size()); j++) {
+                var e = new cn.autoforged.module_shop.data.DailyShopEntry(
+                        data.get(j), 40L + j * 35L, cn.autoforged.module_shop.data.Rarity.values()[j % 4]);
+                e.limit = 5;
+                e.bought = j == 3 ? 5 : j % 3;
+                cn.autoforged.module_shop.client.ClientShopData.dailyShop.add(e);
+                if (j < 6) {
+                    cn.autoforged.module_shop.client.ClientShopData.dailyFlipped.add(j);
+                }
+            }
+        }
+        if (cn.autoforged.module_shop.client.ClientShopData.dailyBuyback.isEmpty()) {
+            for (int j = 0; j < Math.min(10, data.size()); j++) {
+                var e = new cn.autoforged.module_shop.data.DailyBuybackEntry(data.get(j), 25L + j * 15L);
+                e.rarity = cn.autoforged.module_shop.data.Rarity.values()[j % 4];
+                e.limit = 32;
+                e.sold = j == 2 ? 32 : j * 3;
+                cn.autoforged.module_shop.client.ClientShopData.dailyBuyback.add(e);
+            }
+        }
+        if (cn.autoforged.module_shop.client.ClientShopData.auctions.isEmpty()) {
+            long now = System.currentTimeMillis();
+            for (int j = 0; j < Math.min(8, data.size()); j++) {
+                var a = new cn.autoforged.module_shop.client.ClientShopData.AuctionView();
+                a.id = j + 1L;
+                a.stack = data.get(j);
+                a.seller = j == 0 ? "Me" : "Player" + j;
+                a.startPrice = 100L + j * 50L;
+                a.currentBid = j % 2 == 0 ? 150L + j * 60L : 0L;
+                a.minNext = (a.currentBid > 0 ? a.currentBid : a.startPrice) + 20L;
+                a.buyout = j % 3 == 0 ? 0L : 600L + j * 100L;
+                a.bidders = j % 3;
+                a.bidCount = j % 5;
+                a.topBidder = a.currentBid > 0 ? (j == 2 ? "Me" : "Bidder" + j) : "";
+                a.own = j == 0;
+                a.topMe = j == 2;
+                a.iBid = j == 4;
+                a.remaining = (20L + j * 15L) * 60_000L;
+                a.receivedAt = now;
+                cn.autoforged.module_shop.client.ClientShopData.auctions.add(a);
+            }
+        }
+        if (cn.autoforged.module_shop.client.StallClient.market.isEmpty()) {
+            for (int j = 0; j < Math.min(10, data.size()); j++) {
+                var it = new cn.autoforged.module_shop.client.StallClient.Item();
+                it.id = j + 1L;
+                it.owner = java.util.UUID.nameUUIDFromBytes(("stall" + j).getBytes());
+                it.ownerName = "Vendor" + j;
+                it.stack = data.get(j);
+                it.price = 50L + j * 20L;
+                it.stock = j == 4 ? 0 : 12 + j;
+                it.sold = j * 2;
+                it.own = j == 0;
+                cn.autoforged.module_shop.client.StallClient.market.add(it);
+            }
+        }
+        if (cn.autoforged.module_shop.client.ClientShopData.stall.isEmpty()) {
+            cn.autoforged.module_shop.client.StallClient.slots = 12;
+            cn.autoforged.module_shop.client.StallClient.maxStock = 64;
+            for (int j = 0; j < Math.min(4, data.size()); j++) {
+                var se = new cn.autoforged.module_shop.data.StallEntry(data.get(j), 80L + j * 25L, j + 1L, j == 2 ? 0 : 16 + j * 8);
+                se.sold = j * 5;
+                cn.autoforged.module_shop.client.ClientShopData.stall.add(se);
+            }
+        }
+        if (cn.autoforged.module_shop.client.ClientShopData.demands.isEmpty()) {
+            cn.autoforged.module_shop.client.ClientShopData.demandEnabled = true;
+            for (int j = 0; j < Math.min(6, data.size()); j++) {
+                var d = new cn.autoforged.module_shop.data.DemandEntry();
+                d.id = "dem" + j;
+                d.requester = java.util.UUID.nameUUIDFromBytes(("req" + j).getBytes());
+                d.requesterName = "Buyer" + j;
+                d.wants.add(new cn.autoforged.module_shop.data.DemandEntry.WantLine(data.get(j), 4 + j));
+                if (j % 2 == 0 && j + 1 < data.size()) {
+                    d.wants.add(new cn.autoforged.module_shop.data.DemandEntry.WantLine(data.get(j + 1), 2));
+                }
+                d.rewardMoney = 200L + j * 80L;
+                cn.autoforged.module_shop.client.ClientShopData.demands.add(d);
             }
         }
         LOG.append("seeded mall=").append(cn.autoforged.module_shop.client.ClientShopData.mall.size()).append("\n");

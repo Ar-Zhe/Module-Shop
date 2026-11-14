@@ -259,7 +259,7 @@ final class ShellV2 {
         float tw = V2.text(c, title + "  ›  ", V2.FS, IOStyle.TEXT_3, tx, cy, 220, Text.Align.LEFT);
         V2.bold(c, currentLabel(), V2.FS, IOStyle.TEXT, tx + tw, cy, 160, Text.Align.LEFT);
 
-        // 右侧：关闭 / 皮肤 / 提醒设置 / 账单，再往左是管理员按钮与指标
+        // 右侧：关闭 / 皮肤 / 视图切换 / 提醒设置 / 账单，再往左是管理员按钮与指标
         float bx = x + this.pw - 7 - V2.CTRL;
         float by = cy - V2.CTRL / 2;
         bx = iconBtn(c, "close", V2.Icon.CLOSE, bx, by, () -> this.screen.onAction("close_ui", null), null, false);
@@ -268,6 +268,10 @@ final class ShellV2 {
         if (this.skinOpen) {
             this.skinMenu = new float[]{bx + 4 + V2.CTRL, by + V2.CTRL + 3};
         }
+        boolean grid = cn.autoforged.module_shop.client.UIViewMode.isGrid();
+        bx = iconBtn(c, "view_mode", grid ? V2.Icon.VIEW_GRID : V2.Icon.VIEW_LIST, bx, by,
+                cn.autoforged.module_shop.client.UIViewMode::toggle,
+                Component.translatable(grid ? "gui.module_shop.view.to_list" : "gui.module_shop.view.to_grid"), grid);
         bx = iconBtn(c, "bell", V2.Icon.BELL, bx, by, () -> this.screen.onAction("notif_settings", null),
                 Component.translatable("gui.module_shop.notify.settings_title"), false);
         bx = iconBtn(c, "bill", V2.Icon.BILL, bx, by, () -> this.screen.onAction("open_bill", null),
