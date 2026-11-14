@@ -2,9 +2,11 @@ package cn.autoforged.module_shop.client.screen.shop;
 
 import cn.autoforged.module_shop.client.ClickSound;
 import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.UIViewMode;
 import cn.autoforged.module_shop.client.screen.IOStyle;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.CardGrid;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
 import cn.autoforged.module_shop.client.ui.v2.V2;
 import cn.autoforged.module_shop.data.DemandEntry;
@@ -23,6 +25,7 @@ import net.minecraft.world.item.ItemStack;
  */
 public final class DemandPage implements ShopPage {
     private static final ListTable TABLE = new ListTable();
+    private static final CardGrid GRID = new CardGrid();
     private static boolean onlyMine;
     private static String expandedId;
 
@@ -31,9 +34,13 @@ public final class DemandPage implements ShopPage {
     }
 
     private List<Row> rows = new ArrayList<>();
+    private List<DemandEntry> cards = new ArrayList<>();
     private float[][] segRects = new float[0][2];
     private float segY;
     private float[] createRect;
+    private float[] closeDrawerRect;
+    private float[] drawerActionRect;
+    private String drawerActionCmd;
 
     @Override
     public String id() {
@@ -101,6 +108,8 @@ public final class DemandPage implements ShopPage {
         UUID me = self();
         int mineCount = 0;
         rows = new ArrayList<>();
+        cards = new ArrayList<>();
+        DemandEntry expandedEntry = null;
         for (DemandEntry e : ClientShopData.demands) {
             boolean mine = me != null && me.equals(e.requester);
             if (mine) {
@@ -109,8 +118,10 @@ public final class DemandPage implements ShopPage {
             if (onlyMine && !mine) {
                 continue;
             }
+            cards.add(e);
             rows.add(new Row(e, -1));
             if (e.id != null && e.id.equals(expandedId)) {
+                expandedEntry = e;
                 for (int i = 0; i < e.wants.size(); i++) {
                     rows.add(new Row(e, i));
                 }
@@ -134,6 +145,13 @@ public final class DemandPage implements ShopPage {
 
         float top = f.y() + V2.BAR;
         float bottom = f.y() + f.h() - V2.FOOT;
+        if (UIViewMode.isGrid()) {
+            drawGrid(c, f, x, top, f.w(), bottom - top, me, expandedEntry);
+            V2.foot(c, x, bottom, f.w(), tr("gui.module_shop.v2.showing", GRID.firstVisible(), GRID.lastVisible(), cards.size()),
+                    tr("gui.module_shop.v2.demand.hint"));
+            return;
+        }
+        closeDrawerRect = null;
         float[][] cols = V2.columns(x, f.w(), 10, 6, 14, 0, 76, 44, 104, 60, 66, 50);
         String[] heads = {"", tr("gui.module_shop.v2.col.wants"), tr("gui.module_shop.v2.col.requester"), tr("gui.module_shop.v2.col.total_count"),
                 tr("gui.module_shop.v2.col.reward"), tr("gui.module_shop.v2.col.remain"), tr("gui.module_shop.v2.col.can_deliver"), ""};
@@ -198,6 +216,104 @@ public final class DemandPage implements ShopPage {
                 tr("gui.module_shop.v2.demand.hint"));
     }
 
+    private void drawGrid(Canvas c, PageFrame f, float x, float top, float w, float h, UUID me, DemandEntry expanded) {
+        closeDrawerRect = null;
+        drawerActionRect = null;
+        drawerActionCmd = null;
+        float drawerH = expanded == null ? 0.0F : Math.min(Math.max(46.0F, h * 0.42F), 20.0F + Math.max(1, expanded.wants.size()) * 14.0F);
+        float gridH = h - drawerH;
+        GRID.layoutUnified(x, top, w, gridH);
+        if (cards.isEmpty()) {
+            V2.empty(c, tr(onlyMine ? "gui.module_shop.demand.empty_mine" : "gui.module_shop.demand.empty"), x, top, w, gridH);
+        } else {
+            GRID.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), cards.size(), (cv, card, cx, cy, cw, ch, hover) -> {
+                DemandEntry e = cards.get(card);
+                boolean mine = me != null && me.equals(e.requester);
+                boolean selected = e.id != null && e.id.equals(expandedId);
+                int miss = mine ? 0 : missing(e);
+                int accent = selected ? IOStyle.BLUE : (mine ? IOStyle.BLUE : (miss == 0 ? IOStyle.GREEN : 0));
+                CardGrid.cardBg(cv, cx, cy, cw, ch, hover, accent, selected || miss == 0 || mine, false);
+
+                String leftStr = mine ? tr("gui.module_shop.v2.demand.own")
+                        : (miss == 0 ? tr("gui.module_shop.v2.demand.ready") : tr("gui.module_shop.v2.demand.missing", miss));
+                int leftCol = mine ? IOStyle.BLUE : (miss == 0 ? IOStyle.GREEN : IOStyle.TEXT_3);
+                V2.bold(cv, leftStr, V2.FS_XS, leftCol, cx + 4, cy + 7.0F, cw * 0.56F, Text.Align.LEFT);
+
+                String rightStr = e.wants.size() > 1 ? "+" + (e.wants.size() - 1) : "×" + e.totalCount();
+                V2.text(cv, rightStr, V2.FS_XS, IOStyle.TEXT_2, cx + cw * 0.56F, cy + 7.0F, cw * 0.44F - 4, Text.Align.RIGHT);
+
+                float iconSize = 16.0F;
+                if (!e.wants.isEmpty()) {
+                    DemandEntry.WantLine first = e.wants.get(0);
+                    f.host().items().add(first.display(), cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
+                    V2.text(cv, first.stack.getHoverName().getString(), V2.FS_S, IOStyle.TEXT,
+                            cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
+                }
+
+                String moneyStr = e.rewardMoney > 0L ? V2.money(e.rewardMoney) : rewardLine(e);
+                V2.bold(cv, moneyStr, V2.FS, IOStyle.ORANGE, cx + 3, cy + 45.0F, cw - 6, Text.Align.CENTER);
+            });
+        }
+        if (expanded != null && drawerH > 0.0F) {
+            drawDrawer(c, f, x, top + gridH, w, drawerH, me, expanded);
+        }
+    }
+
+    private void drawDrawer(Canvas c, PageFrame f, float x, float y, float w, float h, UUID me, DemandEntry e) {
+        Draw.fill(c, x, y, w, h, 0, IOStyle.SIDEBAR);
+        Draw.hairline(c, x, y, w, IOStyle.BORDER);
+        boolean mine = me != null && me.equals(e.requester);
+        int miss = mine ? 0 : missing(e);
+
+        float closeX = x + w - 18;
+        float closeY = y + 3;
+        boolean ch = over(f, closeX, closeY, 12, 12);
+        Draw.cross(c, closeX + 6, closeY + 6, 2.5F, 0.9F, ch ? IOStyle.RED : IOStyle.TEXT_3);
+        closeDrawerRect = new float[]{closeX, closeY, 12, 12};
+
+        String actLabel = tr(mine ? "gui.module_shop.demand.cancel_action" : "gui.module_shop.demand.fulfill_action");
+        float abw = Math.max(36.0F, V2.buttonWidth(actLabel));
+        float abx = closeX - abw - 6;
+        float aby = y + 2.0F;
+        boolean canAct = mine || miss == 0;
+        V2.Btn kind = mine ? V2.Btn.DANGER : (canAct ? V2.Btn.PRIMARY : V2.Btn.DISABLED);
+        V2.button(c, actLabel, kind, abx, aby, abw, 12.0F, canAct && over(f, abx, aby, abw, 12.0F) ? 1.0F : 0.0F);
+        if (canAct) {
+            drawerActionRect = new float[]{abx, aby, abw, 12.0F};
+            drawerActionCmd = mine ? "demand_cancel_go" : "demand_fulfill_go";
+        }
+
+        V2.bold(c, e.requesterName + " · " + tr("gui.module_shop.v2.col.wants") + " (" + e.wants.size() + ") · " + rewardLine(e),
+                V2.FS_S, IOStyle.TEXT, x + 10, y + 9, Math.max(40.0F, abx - x - 16), Text.Align.LEFT);
+
+        int saved = c.save();
+        Draw.clip(c, x, y + 16, w, h - 18);
+        f.host().items().pushClip(x, y + 16, w, h - 18);
+        try {
+            float ry = y + 16;
+            for (DemandEntry.WantLine wl : e.wants) {
+                if (ry + 13 > y + h) {
+                    break;
+                }
+                float rcy = ry + 6.5F;
+                f.host().items().add(wl.display(), x + 10, ry + 0.5F, 12, false);
+                V2.text(c, wl.stack.getHoverName().getString(), V2.FS_S, IOStyle.TEXT_2, x + 26, rcy, w * 0.45F, Text.Align.LEFT);
+                int have = countInBag(wl.stack);
+                boolean ok = have >= wl.count;
+                V2.text(c, tr("gui.module_shop.v2.demand.need", wl.count), V2.FS_XS, IOStyle.TEXT_2,
+                        x + w * 0.50F, rcy, 58, Text.Align.RIGHT);
+                V2.text(c, tr("gui.module_shop.v2.demand.have", have), V2.FS_XS, ok ? IOStyle.GREEN : IOStyle.TEXT_3,
+                        x + w * 0.50F + 64, rcy, 58, Text.Align.RIGHT);
+                V2.bold(c, ok ? tr("gui.module_shop.v2.demand.ready") : tr("gui.module_shop.v2.demand.short", wl.count - have),
+                        V2.FS_XS, ok ? IOStyle.GREEN : IOStyle.RED, x + w - 76, rcy, 66, Text.Align.RIGHT);
+                ry += 14.0F;
+            }
+        } finally {
+            f.host().items().popClip();
+            c.restoreToCount(saved);
+        }
+    }
+
     private void drawLine(Canvas c, PageFrame f, float[][] cols, DemandEntry.WantLine w, float ry, float cy) {
         Draw.fill(c, cols[0][0] - 6, ry, cols[7][0] + cols[7][1] - cols[0][0] + 12, V2.ROW, 0, Draw.alpha(IOStyle.SLOT_INNER, 0.5F));
         Draw.fill(c, cols[1][0] - 2, ry + 3, 1, V2.ROW - 6, 0, IOStyle.BORDER);
@@ -222,6 +338,7 @@ public final class DemandPage implements ShopPage {
                 ClickSound.play();
                 onlyMine = i == 1;
                 TABLE.scrollToTop();
+                GRID.scrollToTop();
                 return true;
             }
         }
@@ -229,6 +346,40 @@ public final class DemandPage implements ShopPage {
                 && my < createRect[1] + createRect[3]) {
             ClickSound.play();
             f.host().action("demand_create", null);
+            return true;
+        }
+        if (UIViewMode.isGrid()) {
+            if (closeDrawerRect != null && mx >= closeDrawerRect[0] && mx < closeDrawerRect[0] + closeDrawerRect[2]
+                    && my >= closeDrawerRect[1] && my < closeDrawerRect[1] + closeDrawerRect[3]) {
+                ClickSound.play();
+                expandedId = null;
+                return true;
+            }
+            if (drawerActionRect != null && drawerActionCmd != null && expandedId != null
+                    && mx >= drawerActionRect[0] && mx < drawerActionRect[0] + drawerActionRect[2]
+                    && my >= drawerActionRect[1] && my < drawerActionRect[1] + drawerActionRect[3]) {
+                ClickSound.play();
+                CompoundTag tag = new CompoundTag();
+                tag.putString("id", expandedId);
+                f.host().action(drawerActionCmd, tag);
+                return true;
+            }
+            if (GRID.pressBar(mx, my)) {
+                return true;
+            }
+            CardGrid.Hit hit = GRID.click(mx, my);
+            if (hit == null || hit.index() < 0 || hit.index() >= cards.size()) {
+                return hit != null;
+            }
+            DemandEntry e = cards.get(hit.index());
+            ClickSound.play();
+            if ("fulfill".equals(hit.button()) || "cancel".equals(hit.button())) {
+                CompoundTag tag = new CompoundTag();
+                tag.putString("id", e.id);
+                f.host().action("cancel".equals(hit.button()) ? "demand_cancel_go" : "demand_fulfill_go", tag);
+                return true;
+            }
+            expandedId = e.id != null && e.id.equals(expandedId) ? null : e.id;
             return true;
         }
         if (TABLE.pressBar(mx, my)) {
@@ -253,21 +404,22 @@ public final class DemandPage implements ShopPage {
 
     @Override
     public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
-        return TABLE.releaseBar();
+        return UIViewMode.isGrid() ? GRID.releaseBar() : TABLE.releaseBar();
     }
 
     @Override
     public boolean mouseDragged(PageFrame f, double mx, double my, int button, double dx, double dy) {
-        return TABLE.dragBar(my);
+        return UIViewMode.isGrid() ? GRID.dragBar(my) : TABLE.dragBar(my);
     }
 
     @Override
     public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
-        return TABLE.wheel(mx, my, scrollY, false);
+        return UIViewMode.isGrid() ? GRID.wheel(mx, my, scrollY, false) : TABLE.wheel(mx, my, scrollY, false);
     }
 
     @Override
     public void cancelInput() {
         TABLE.releaseBar();
+        GRID.releaseBar();
     }
 }
