@@ -115,9 +115,8 @@ public final class AdminPage implements ShopPage {
         historyBtn.onClick(() -> host.action("admin_history_gui", null)).bounds(historyX, cy + 2.0F, topBtnW, 14.0F);
         historyBtn.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
         float cfgX = historyX - topBtnW - 4.0F;
-        cfgBtn.onClick(() -> net.minecraft.client.Minecraft.getInstance().execute(
-                () -> cn.autoforged.module_shop.client.screen.Nav.open(
-                        new cn.autoforged.module_shop.client.screen.ConfigManagerScreen())))
+        // 走和底部按钮一致的客户端 action 链路（ShopScreen 里 case "cfg_open" 负责弹界面），最稳。
+        cfgBtn.onClick(() -> host.action("cfg_open", null))
                 .bounds(cfgX, cy + 2.0F, topBtnW, 14.0F);
         cfgBtn.render(canvas, f.mouseX(), f.mouseY(), f.dtMs());
         float grantX = cfgX - topBtnW - 4.0F;
@@ -197,8 +196,6 @@ public final class AdminPage implements ShopPage {
     private void configureActions(ShopHost host, String mode, boolean mall, boolean ship, boolean stalls,
             boolean demands, boolean signin) {
         List<Object[]> specs = new ArrayList<>();
-        // 配置管理：底部按钮行走的是已验证的 action 链路（客户端自己弹界面），比右上角独立按钮稳。
-        specs.add(new Object[]{"gui.module_shop.cfg.button", "cfg_open", false});
         if (signin) {
             specs.add(new Object[]{"gui.module_shop.signin.setting_short", "admin_signin_set", false});
             specs.add(new Object[]{"gui.module_shop.signin.cumulative", "admin_signin_cumulative_toggle",
