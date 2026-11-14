@@ -5878,7 +5878,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             // 日夜主题切换（原版太阳 / 月亮按钮）：写入客户端主题文件，所有界面立即跟随。
             // 打开每日签到界面（需求 7）。
             case "open_signin" -> Nav.open(new SignInScreen());
-            // 配置管理（纯客户端界面：导出/导入/预览都在客户端侧读文件）
+            // 配置管理：右上角按钮 → 客户端直接弹界面（界面栈由 Nav 维护）
             case "cfg_open" -> Nav.open(new cn.autoforged.module_shop.client.screen.ConfigManagerScreen());
             // 签到/交易/转账 现在是左侧模块，页内按钮打开原界面;)
             case "open_signin_screen" -> Nav.open(new SignInScreen());

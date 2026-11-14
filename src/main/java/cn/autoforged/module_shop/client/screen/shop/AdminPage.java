@@ -452,6 +452,7 @@ public final class AdminPage implements ShopPage {
         List<Button> all = new ArrayList<>(actions);
         all.add(moduleBtn);
         all.add(grantBtn);
+        all.add(cfgBtn);
         all.add(historyBtn);
         all.add(prevBtn);
         all.add(nextBtn);

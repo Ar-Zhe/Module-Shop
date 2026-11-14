@@ -1383,6 +1383,7 @@ public final class ShopManager {
             // 左上角主标题改名（空 = 恢复默认「模块商店」）—— 现在**唯一**的改名入口
             case "admin_shop_title_set" -> adminShopTitleSet(player, tag);
             // ---- 商店模板（导出 / 导入 / 保存为默认 / 手动初始化）----
+            case "cfg_open" -> cfgOpenUi(player);
             case "cfg_export" -> cfgExport(player, tag);
             case "cfg_save_default" -> cfgSaveDefault(player, tag);
             case "cfg_import_preview" -> cfgImportPreview(player, tag);
@@ -6421,6 +6422,16 @@ public final class ShopManager {
     }
 
     /** 导出当前世界模板：服务端生成 JSON，交给**客户端**写进 config/moduleshop/exports/。 */
+    /** 打开「配置管理」界面：客户端自己 setScreen 在某些绘制路径下会被覆盖，改由服务端下发指令。 */
+    private static void cfgOpenUi(ServerPlayer player) {
+        if (!requireAdmin(player)) {
+            return;
+        }
+        CompoundTag out = new CompoundTag();
+        out.putString("kind", "cfg_open_ui");
+        cn.autoforged.module_shop.network.payload.ClientboundShopSyncPayload.send(player, out);
+    }
+
     private static void cfgExport(ServerPlayer player, CompoundTag tag) {
         if (!requireAdmin(player)) {
             return;
