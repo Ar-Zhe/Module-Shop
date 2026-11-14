@@ -28,8 +28,9 @@ public class MallImportScreen extends SkiaDialog {
     /** 位掩码最多支持多少件（再多就不做过滤，交给服务端按数量上限处理）。 */
     private static final int MASK_LIMIT = 8192;
 
-    /** 全部模组（命名空间 → 显示名），按显示名排序；客户端注册表不会变，所以只建一次。 */
+    /** 全部模组（命名空间 → 显示名），按显示名排序；语言或中文名包重载时自动刷新。 */
     private static List<String[]> modCache;
+    private static String modCacheToken = "";
 
     private final List<int[]> rowRects = new ArrayList<>();
     private boolean listOpen = true;
@@ -48,9 +49,10 @@ public class MallImportScreen extends SkiaDialog {
         super(Component.translatable("gui.module_shop.mall.import_title"));
     }
 
-    /** 模组清单：{命名空间, 显示名}，按显示名（忽略大小写）排序。 */
+    /** 模组清单：{命名空间, 显示名}，按显示名排序。 */
     private static List<String[]> mods() {
-        if (modCache != null) {
+        String token = cn.autoforged.module_shop.client.ModNames.cacheToken();
+        if (modCache != null && token.equals(modCacheToken)) {
             return modCache;
         }
         Map<String, String> names = new TreeMap<>();
@@ -62,19 +64,15 @@ public class MallImportScreen extends SkiaDialog {
         for (Map.Entry<String, String> entry : names.entrySet()) {
             list.add(new String[]{entry.getKey(), entry.getValue()});
         }
-        list.sort(Comparator.comparing(m -> m[1].toLowerCase()));
+        Comparator<String> nsCmp = cn.autoforged.module_shop.client.ModNames.namespaceComparator();
+        list.sort((a, b) -> nsCmp.compare(a[0], b[0]));
         modCache = list;
+        modCacheToken = token;
         return list;
     }
 
     private static String displayName(String namespace) {
-        try {
-            return net.neoforged.fml.ModList.get().getModContainerById(namespace)
-                    .map(c -> c.getModInfo().getDisplayName())
-                    .orElse(namespace);
-        } catch (Throwable ignored) {
-            return namespace;
-        }
+        return cn.autoforged.module_shop.client.ModNames.displayName(namespace);
     }
 
     @Override

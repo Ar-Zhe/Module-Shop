@@ -484,6 +484,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     /** 分类缓存：货架上出现过的模组命名空间（按显示名首字母排序）。 */
     private static List<String> mallModCache = List.of();
     private static int mallModCacheSize = -1;
+    private static String mallModCacheToken = "";
     /** 过滤结果缓存（避免每帧对上千件商品重排）。 */
     private static List<ClientShopData.MallView> mallFilterCache = List.of();
     private static String mallFilterKey = "";
@@ -5030,23 +5031,15 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         return id == null ? "" : id.toString();
     }
 
-    /** 模组的显示名（拿不到就退回命名空间）。 */
+    /** 模组的显示名（自动翻译 / 热门模组中文名包，拿不到就退回命名空间）。 */
     public static String mallModName(String namespace) {
-        if (namespace == null || namespace.isEmpty()) {
-            return "";
-        }
-        try {
-            return net.neoforged.fml.ModList.get().getModContainerById(namespace)
-                    .map(c -> c.getModInfo().getDisplayName())
-                    .orElse(namespace);
-        } catch (Throwable ignored) {
-            return namespace;
-        }
+        return cn.autoforged.module_shop.client.ModNames.displayName(namespace);
     }
 
-    /** 货架上出现过的模组（按显示名排序，缓存；货架变化时重建）。 */
+    /** 货架上出现过的模组（按显示名排序，缓存；货架或语言包变化时重建）。 */
     public static List<String> mallCategories() {
-        if (mallModCacheSize == ClientShopData.mall.size()) {
+        String token = cn.autoforged.module_shop.client.ModNames.cacheToken();
+        if (mallModCacheSize == ClientShopData.mall.size() && token.equals(mallModCacheToken)) {
             return mallModCache;
         }
         java.util.TreeSet<String> set = new java.util.TreeSet<>();
@@ -5054,9 +5047,10 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             set.add(view.namespace());
         }
         List<String> list = new ArrayList<>(set);
-        list.sort(Comparator.comparing(ns -> mallModName(ns).toLowerCase()));
+        list.sort(cn.autoforged.module_shop.client.ModNames.namespaceComparator());
         mallModCache = list;
         mallModCacheSize = ClientShopData.mall.size();
+        mallModCacheToken = token;
         return list;
     }
 
@@ -5064,7 +5058,8 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     public static List<ClientShopData.MallView> mallFiltered() {
         String key = ClientShopData.mallVersion + "|" + ClientShopData.mall.size() + "|" + ClientShopData.mallSearch + "|"
                 + ClientShopData.mallCategory + "|" + ClientShopData.mallFavOnly + "|"
-                + ClientShopData.mallSort + "|" + MallFavorites.size();
+                + ClientShopData.mallSort + "|" + MallFavorites.size() + "|"
+                + cn.autoforged.module_shop.client.ModNames.cacheToken();
         if (key.equals(mallFilterKey)) {
             return mallFilterCache;
         }
@@ -5083,8 +5078,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             }
             if (!query.isEmpty()) {
                 String name = view.stack.getHoverName().getString().toLowerCase();
-                if (!name.contains(query) && !view.namespace().toLowerCase().contains(query)
-                        && !mallModName(view.namespace()).toLowerCase().contains(query)) {
+                if (!name.contains(query) && !cn.autoforged.module_shop.client.ModNames.matchesQuery(view.namespace(), query)) {
                     continue;
                 }
             }

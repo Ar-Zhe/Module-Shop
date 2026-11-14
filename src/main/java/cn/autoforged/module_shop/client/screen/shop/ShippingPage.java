@@ -73,7 +73,8 @@ public final class ShippingPage implements ShopPage {
         List<ShippingBinScreen.Entry> out = new ArrayList<>();
         for (ShippingBinScreen.Entry e : ShippingBinScreen.allEntries()) {
             if (!query.isEmpty() && !e.stack().getHoverName().getString().toLowerCase(Locale.ROOT).contains(query)
-                    && !e.id().contains(query)) {
+                    && !e.id().contains(query)
+                    && !cn.autoforged.module_shop.client.ModNames.matchesQuery(e.namespace(), query)) {
                 continue;
             }
             if (onlyOwned && owned(e.stack()) <= 0) {
