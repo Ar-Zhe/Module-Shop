@@ -3055,7 +3055,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             Bricks.slot(g, cx + 8, y + 5);
             g.renderItem(view.stack, cx + 8, y + 5);
             g.renderItemDecorations(this.font, view.stack, cx + 8, y + 5);
-            g.drawString(this.font, view.stack.getHoverName(), cx + 32, y + 4, IOStyle.TEXT, false);
+            g.drawString(this.font, net.minecraft.network.chat.Component.literal(cn.autoforged.module_shop.client.ui.ItemNames.display(view.stack)), cx + 32, y + 4, IOStyle.TEXT, false);
             String sellerText = Component.translatable("gui.module_shop.auction_seller", view.seller).getString();
             if (view.own) {
                 sellerText = sellerText + " " + Component.translatable("gui.module_shop.auction_mine").getString();
@@ -4510,7 +4510,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             Bricks.slot(g, cx + 16, y);
             g.renderItem(offer.stack, cx + 16, y);
             g.renderItemDecorations(this.font, offer.stack, cx + 16, y);
-            g.drawString(this.font, offer.stack.getHoverName(), cx + 40, y + 1, IOStyle.TEXT, false);
+            g.drawString(this.font, net.minecraft.network.chat.Component.literal(cn.autoforged.module_shop.client.ui.ItemNames.display(offer.stack)), cx + 40, y + 1, IOStyle.TEXT, false);
             if (!ship) {
                 // 出货箱的"条目"是兑换规则，没有品质可言，这一列留空。
                 g.drawString(this.font, Component.translatable(offer.rarity.translationKey()), cx + 130, y + 1,
@@ -4960,7 +4960,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         g.renderItem(entry.stack, cx + 8, y + 3);
         g.renderItemDecorations(this.font, entry.stack, cx + 8, y + 3);
         // 名称过长时截断，避免压到右侧汇率。
-        String name = this.font.plainSubstrByWidth(entry.stack.getHoverName().getString(), open ? 120 : 96);
+        String name = this.font.plainSubstrByWidth(cn.autoforged.module_shop.client.ui.ItemNames.display(entry.stack), open ? 120 : 96);
         g.drawString(this.font, name, cx + 30, y + 7, IOStyle.TEXT, false);
         // “该货币 = 多少星币”
         String rate = Component.translatable("gui.module_shop.exchange.rate",
@@ -5350,7 +5350,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         g.renderItem(view.stack, x + w / 2 - 8, y + 4);
         g.renderItemDecorations(this.font, view.stack, x + w / 2 - 8, y + 4);
         mallCenter(g, x + w / 2, y + 23,
-                IOStyle.ellipsize(this.font, view.stack.getHoverName(), (int) ((w - 4) / MALL_TEXT)),
+                IOStyle.ellipsize(this.font, net.minecraft.network.chat.Component.literal(cn.autoforged.module_shop.client.ui.ItemNames.display(view.stack)), (int) ((w - 4) / MALL_TEXT)),
                 view.soldOut() ? IOStyle.TEXT_3 : IOStyle.TEXT);
         mallCenter(g, x + w / 2, y + 33, Component.literal(ClientShopData.money(view.price)), IOStyle.ORANGE);
         mallCenter(g, x + w / 2, y + 43, mallStockText(view),
@@ -5397,7 +5397,7 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
             Bricks.slot(g, cx + 3, y + 3);
             g.renderItem(record.stack, cx + 3, y + 3);
             g.renderItemDecorations(this.font, record.stack, cx + 3, y + 3);
-            Component name = IOStyle.ellipsize(this.font, record.stack.getHoverName(), 120)
+            Component name = IOStyle.ellipsize(this.font, net.minecraft.network.chat.Component.literal(cn.autoforged.module_shop.client.ui.ItemNames.display(record.stack)), 120)
                     .copy().append(" ×" + record.count);
             drawSmallLabel(g, cx + 24, y + 3, name, IOStyle.TEXT);
             drawSmallLabelRight(g, cx + cw - 6, y + 3,

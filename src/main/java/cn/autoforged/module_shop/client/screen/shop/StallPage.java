@@ -161,7 +161,7 @@ public final class StallPage implements ShopPage {
                 float cy = ry + V2.ROW / 2;
                 boolean sold = it.stock <= 0;
                 f.host().items().add(it.stack, cols[0][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, true);
-                float nw = V2.text(cv, it.stack.getHoverName().getString(), V2.FS, sold ? IOStyle.TEXT_3 : IOStyle.TEXT, cols[1][0],
+                float nw = V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(it.stack), V2.FS, sold ? IOStyle.TEXT_3 : IOStyle.TEXT, cols[1][0],
                         cy, cols[1][1] - 30, Text.Align.LEFT);
                 if (it.own) {
                     V2.tag(cv, tr("gui.module_shop.stall.mine_tag"), IOStyle.BLUE, cols[1][0] + nw + 4, cy);
@@ -247,7 +247,7 @@ public final class StallPage implements ShopPage {
             float iconSize = 16.0F;
             f.host().items().add(it.stack, cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
 
-            V2.text(cv, it.stack.getHoverName().getString(), V2.FS_S, sold ? IOStyle.TEXT_3 : IOStyle.TEXT,
+            V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(it.stack), V2.FS_S, sold ? IOStyle.TEXT_3 : IOStyle.TEXT,
                     cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
             V2.bold(cv, V2.money(it.price), V2.FS, sold ? IOStyle.TEXT_3 : IOStyle.ORANGE,
                     cx + 3, cy + 45.0F, cw - 6, Text.Align.CENTER);
@@ -300,7 +300,7 @@ public final class StallPage implements ShopPage {
             StallEntry e = stall.get(row);
             boolean sold = e.stock <= 0;
             f.host().items().add(e.stack, cols[0][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, true);
-            V2.text(cv, e.stack.getHoverName().getString(), V2.FS, IOStyle.TEXT, cols[1][0], cy, cols[1][1], Text.Align.LEFT);
+            V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(e.stack), V2.FS, IOStyle.TEXT, cols[1][0], cy, cols[1][1], Text.Align.LEFT);
             V2.bold(cv, V2.money(e.price), V2.FS, IOStyle.ORANGE, cols[2][0], cy, cols[2][1], Text.Align.RIGHT);
             float bw = 26;
             V2.bar(cv, cols[3][0] + cols[3][1] - bw, cy, bw, e.stock / (float) Math.max(1, StallClient.maxStock), V2.levelColor(
@@ -372,7 +372,7 @@ public final class StallPage implements ShopPage {
             float iconSize = 16.0F;
             f.host().items().add(e.stack, cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
 
-            V2.text(cv, e.stack.getHoverName().getString(), V2.FS_S, IOStyle.TEXT,
+            V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(e.stack), V2.FS_S, IOStyle.TEXT,
                     cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
             V2.bold(cv, V2.money(e.price), V2.FS, IOStyle.ORANGE,
                     cx + 3, cy + 44.5F, cw - 6, Text.Align.CENTER);

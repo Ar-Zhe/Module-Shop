@@ -281,7 +281,7 @@ public class DemandCreateScreen extends SkiaDialog {
             Bricks.slot(g, rx, ry);
             g.renderItem(entry.stack, rx, ry);
             drawSmallLabel(g, rx + 20, ry + 5,
-                    Component.literal(this.font.plainSubstrByWidth(entry.stack.getHoverName().getString(), 74)),
+                    Component.literal(this.font.plainSubstrByWidth(cn.autoforged.module_shop.client.ui.ItemNames.display(entry.stack), 74)),
                     IOStyle.TEXT);
             drawSmallLabel(g, rx + 104, ry + 5, Component.literal("x" + entry.count), IOStyle.TEXT_2);
             IOStyle.button(g, rx + 120, ry + 2, 12, 12, Component.literal("-"), this.font, mouseX, mouseY,
@@ -419,7 +419,7 @@ public class DemandCreateScreen extends SkiaDialog {
                 }
                 item(entry.stack, rx + 4, ry + 2);
                 float bx = rx + rw - 4 - 8 - 14 * 3;
-                text(c, entry.stack.getHoverName().getString(), rx + 24, ry + 7, bx - rx - 46, IOStyle.TEXT);
+                text(c, cn.autoforged.module_shop.client.ui.ItemNames.display(entry.stack), rx + 24, ry + 7, bx - rx - 46, IOStyle.TEXT);
                 small(c, "×" + entry.count, rx + 24, ry + 15, 40, IOStyle.TEXT_2);
                 cn.autoforged.module_shop.client.ui.widget.Button.Kind n =
                         cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL;

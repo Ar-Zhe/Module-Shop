@@ -111,6 +111,12 @@ public final class Text {
             if (Character.isISOControl(cp)) {
                 continue;
             }
+            // 私有使用区（PUA）等「图标字符」：不少食物 / 营养模组会往物品名里塞自己字体的图标
+            // （饥饿值、饱食度之类）。我们的字体没有这些字形，画出来就是一串「□」，
+            // 所以在这里统一丢掉，只保留真正的文字。
+            if (isIconGlyph(cp)) {
+                continue;
+            }
             if (len == 1 && Character.isSurrogate(c)) { // 孤立代理项
                 out.append('?');
                 continue;
@@ -125,5 +131,23 @@ public final class Text {
             out.appendCodePoint(cp);
         }
         return out.toString();
+    }
+
+    /** 是否是「图标字符」（私有使用区 / 变体选择符 / 零宽字符）——这些在我们的字体里没有字形。 */
+    private static boolean isIconGlyph(int cp) {
+        if (cp >= 0xE000 && cp <= 0xF8FF) {
+            return true;
+        }
+        if (cp >= 0xF0000 && cp <= 0xFFFFD) {
+            return true;
+        }
+        if (cp >= 0x100000 && cp <= 0x10FFFD) {
+            return true;
+        }
+        if (cp >= 0xFE00 && cp <= 0xFE0F) {
+            return true;
+        }
+        return cp == 0x200B || cp == 0x200C || cp == 0x200D || cp == 0x200E || cp == 0x200F
+                || cp == 0x2060 || cp == 0xFEFF;
     }
 }

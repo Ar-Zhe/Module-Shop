@@ -246,7 +246,7 @@ public final class DemandPage implements ShopPage {
                 if (!e.wants.isEmpty()) {
                     DemandEntry.WantLine first = e.wants.get(0);
                     f.host().items().add(first.display(), cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
-                    V2.text(cv, first.stack.getHoverName().getString(), V2.FS_S, IOStyle.TEXT,
+                    V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(first.stack), V2.FS_S, IOStyle.TEXT,
                             cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
                 }
 
@@ -297,7 +297,7 @@ public final class DemandPage implements ShopPage {
                 }
                 float rcy = ry + 6.5F;
                 f.host().items().add(wl.display(), x + 10, ry + 0.5F, 12, false);
-                V2.text(c, wl.stack.getHoverName().getString(), V2.FS_S, IOStyle.TEXT_2, x + 26, rcy, w * 0.45F, Text.Align.LEFT);
+                V2.text(c, cn.autoforged.module_shop.client.ui.ItemNames.display(wl.stack), V2.FS_S, IOStyle.TEXT_2, x + 26, rcy, w * 0.45F, Text.Align.LEFT);
                 int have = countInBag(wl.stack);
                 boolean ok = have >= wl.count;
                 V2.text(c, tr("gui.module_shop.v2.demand.need", wl.count), V2.FS_XS, IOStyle.TEXT_2,
@@ -318,7 +318,7 @@ public final class DemandPage implements ShopPage {
         Draw.fill(c, cols[0][0] - 6, ry, cols[7][0] + cols[7][1] - cols[0][0] + 12, V2.ROW, 0, Draw.alpha(IOStyle.SLOT_INNER, 0.5F));
         Draw.fill(c, cols[1][0] - 2, ry + 3, 1, V2.ROW - 6, 0, IOStyle.BORDER);
         f.host().items().add(w.display(), cols[1][0] + 4, ry + (V2.ROW - V2.ICON) / 2, V2.ICON, false);
-        V2.text(c, w.stack.getHoverName().getString(), V2.FS_S, IOStyle.TEXT_2, cols[1][0] + 20, cy, cols[1][1] - 20, Text.Align.LEFT);
+        V2.text(c, cn.autoforged.module_shop.client.ui.ItemNames.display(w.stack), V2.FS_S, IOStyle.TEXT_2, cols[1][0] + 20, cy, cols[1][1] - 20, Text.Align.LEFT);
         int have = countInBag(w.stack);
         boolean ok = have >= w.count;
         V2.text(c, tr("gui.module_shop.v2.demand.need", w.count), V2.FS_S, IOStyle.TEXT_2, cols[3][0], cy, cols[3][1], Text.Align.RIGHT);

@@ -283,7 +283,7 @@ public final class MallPage implements ShopPage {
             float iconSize = 16.0F;
             f.host().items().add(v.stack, cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
 
-            V2.text(cv, v.stack.getHoverName().getString(), V2.FS_S, sold ? IOStyle.TEXT_3 : IOStyle.TEXT,
+            V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(v.stack), V2.FS_S, sold ? IOStyle.TEXT_3 : IOStyle.TEXT,
                     cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
             V2.bold(cv, sold ? tr("gui.module_shop.v2.sold_out") : V2.money(v.price), V2.FS,
                     sold ? IOStyle.TEXT_3 : IOStyle.ORANGE, cx + 3, cy + 45.0F, cw - 6, Text.Align.CENTER);
@@ -309,7 +309,7 @@ public final class MallPage implements ShopPage {
                 V2.text(cv, ShopScreen.mallTimeText(r.time), V2.FS_S, IOStyle.TEXT_2, cols[0][0], cy, cols[0][1], Text.Align.LEFT);
                 V2.text(cv, r.playerName, V2.FS_S, IOStyle.TEXT, cols[1][0], cy, cols[1][1], Text.Align.LEFT);
                 f.host().items().add(r.stack, cols[2][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, false);
-                V2.text(cv, r.stack.getHoverName().getString(), V2.FS, IOStyle.TEXT, cols[3][0], cy, cols[3][1], Text.Align.LEFT);
+                V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(r.stack), V2.FS, IOStyle.TEXT, cols[3][0], cy, cols[3][1], Text.Align.LEFT);
                 V2.text(cv, "×" + r.count, V2.FS_S, IOStyle.TEXT_2, cols[4][0], cy, cols[4][1], Text.Align.RIGHT);
                 V2.text(cv, V2.money(r.unitPrice), V2.FS_S, IOStyle.TEXT_2, cols[5][0], cy, cols[5][1], Text.Align.RIGHT);
                 V2.bold(cv, V2.money(r.total), V2.FS, IOStyle.ORANGE, cols[6][0], cy, cols[6][1], Text.Align.RIGHT);

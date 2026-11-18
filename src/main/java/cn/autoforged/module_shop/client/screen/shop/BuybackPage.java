@@ -211,7 +211,7 @@ public final class BuybackPage implements ShopPage {
             Draw.fill(cv, cols[0][0] - 5, ry + 3, 1.5F, V2.ROW - 6, 0.75F, IOStyle.rarity(e.rarity));
             f.host().items().add(e.stack, cols[0][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, true);
             float nx = cols[1][0];
-            float nw = V2.text(cv, e.stack.getHoverName().getString(), V2.FS, full ? IOStyle.TEXT_3 : IOStyle.TEXT,
+            float nw = V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(e.stack), V2.FS, full ? IOStyle.TEXT_3 : IOStyle.TEXT,
                     nx, cy, cols[1][1] - 60, Text.Align.LEFT);
             if (full) {
                 V2.tag(cv, tr("gui.module_shop.v2.buyback.full"), IOStyle.TEXT_3, nx + nw + 5, cy);
@@ -270,7 +270,7 @@ public final class BuybackPage implements ShopPage {
             float iconSize = 16.0F;
             f.host().items().add(e.stack, cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
 
-            V2.text(cv, e.stack.getHoverName().getString(), V2.FS_S, full ? IOStyle.TEXT_3 : IOStyle.TEXT,
+            V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(e.stack), V2.FS_S, full ? IOStyle.TEXT_3 : IOStyle.TEXT,
                     cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
             V2.bold(cv, V2.money(e.price), V2.FS, full ? IOStyle.TEXT_3 : IOStyle.ORANGE,
                     cx + 3, cy + 44.5F, cw - 6, Text.Align.CENTER);

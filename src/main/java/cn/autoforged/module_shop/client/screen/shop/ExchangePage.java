@@ -73,7 +73,7 @@ public final class ExchangePage implements ShopPage {
                 ClientShopData.ExchangeView v = list.get(row);
                 float ry2 = ry + V2.ROW / 2;
                 f.host().items().add(v.stack, cols[0][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, false);
-                V2.text(cv, v.stack.getHoverName().getString(), V2.FS, IOStyle.TEXT, cols[1][0], ry2, cols[1][1], Text.Align.LEFT);
+                V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(v.stack), V2.FS, IOStyle.TEXT, cols[1][0], ry2, cols[1][1], Text.Align.LEFT);
                 V2.bold(cv, tr("gui.module_shop.v2.exchange.rate", V2.money(v.value)), V2.FS_S, IOStyle.ORANGE, cols[2][0], ry2,
                         cols[2][1], Text.Align.RIGHT);
                 if (v.owned > 0) {
