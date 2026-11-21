@@ -247,7 +247,7 @@ public final class AuctionPage implements ShopPage {
                     : (v.own ? tr("gui.module_shop.v2.auction.st_mine") : null);
             float tagReserve = badgeText == null ? 0.0F : (V2.tagWidth(badgeText) + 4.0F);
             float nameMaxW = Math.max(16.0F, cols[2][1] - tagReserve);
-            float nw = V2.text(cv, v.stack.getHoverName().getString(), V2.FS, IOStyle.TEXT, cols[2][0], cy, nameMaxW,
+            float nw = V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(v.stack), V2.FS, IOStyle.TEXT, cols[2][0], cy, nameMaxW,
                     Text.Align.LEFT);
             if (badgeText != null) {
                 V2.tag(cv, badgeText, !v.allowBid ? IOStyle.EPIC : IOStyle.ORANGE,
@@ -311,7 +311,7 @@ public final class AuctionPage implements ShopPage {
             float iconSize = 16.0F;
             f.host().items().add(v.stack, cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
 
-            V2.text(cv, v.stack.getHoverName().getString(), V2.FS_S, IOStyle.TEXT,
+            V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(v.stack), V2.FS_S, IOStyle.TEXT,
                     cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
 
             boolean hasBid = v.currentBid > 0;

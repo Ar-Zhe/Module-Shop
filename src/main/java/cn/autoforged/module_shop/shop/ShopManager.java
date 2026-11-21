@@ -1903,6 +1903,7 @@ public final class ShopManager {
             case "admin_shop_title_set" -> adminShopTitleSet(player, tag);
             case "admin_shop_icon_set" -> adminShopIconSet(player, tag);
             case "admin_media_upload" -> adminMediaUpload(player, tag);
+            case "cfg_open" -> cfgOpenUi(player);
             // 编辑布局里右键余额 → 改货币名称（空 = 恢复配置默认）
             case "admin_currency_set" -> adminCurrencySet(player, tag);
             // 商店设置 → 摊位：自动下架时间（永久 / 游戏时间 / 现实时间）
@@ -8161,6 +8162,16 @@ public final class ShopManager {
     /** 只有已解锁的管理员能碰模板。 */
     private static boolean requireAdmin(ServerPlayer player) {
         return requireUnlockedAdmin(player);
+    }
+
+    /** 打开「配置管理」界面：客户端自己 setScreen 在某些绘制路径下会被覆盖，保留服务端下发指令兜底。 */
+    private static void cfgOpenUi(ServerPlayer player) {
+        if (!requireAdmin(player)) {
+            return;
+        }
+        CompoundTag out = new CompoundTag();
+        out.putString("kind", "cfg_open_ui");
+        cn.autoforged.module_shop.network.payload.ClientboundShopSyncPayload.send(player, out);
     }
 
     private static void adminShopTitleSet(ServerPlayer player, CompoundTag tag) {

@@ -134,7 +134,7 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
             Bricks.slot(g, x + 15, rowY + 3);
             g.renderItem(entry.stack, x + 15, rowY + 3);
             g.renderItemDecorations(this.font, entry.stack, x + 15, rowY + 3);
-            g.drawString(this.font, entry.stack.getHoverName(), x + 38, rowY + 3, IOStyle.TEXT, false);
+            g.drawString(this.font, net.minecraft.network.chat.Component.literal(cn.autoforged.module_shop.client.ui.ItemNames.display(entry.stack)), x + 38, rowY + 3, IOStyle.TEXT, false);
             // 需求 4/5：单价按单件计算。
             String priceText = Component.translatable("gui.module_shop.stall_unit_price",
                     PriceDisplay.formatPlain(entry.resolvePriceSpec())).getString();

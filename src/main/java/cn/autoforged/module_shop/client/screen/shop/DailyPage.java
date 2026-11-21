@@ -215,7 +215,7 @@ public final class DailyPage implements ShopPage {
             }
             int left = e.remaining();
             f.host().items().add(e.stack, cols[0][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, true);
-            V2.text(cv, e.stack.getHoverName().getString(), V2.FS, left > 0 ? IOStyle.TEXT : IOStyle.TEXT_3,
+            V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(e.stack), V2.FS, left > 0 ? IOStyle.TEXT : IOStyle.TEXT_3,
                     cols[1][0], cy, cols[1][1], Text.Align.LEFT);
             V2.bold(cv, rarity, V2.FS_S, rc, cols[2][0], cy, cols[2][1], Text.Align.LEFT);
             PriceSpec spec = e.resolvePriceSpec();
@@ -298,7 +298,7 @@ public final class DailyPage implements ShopPage {
                 float iconSize = 16.0F;
                 f.host().items().add(e.stack, cx + (cw - iconSize * sx) * 0.5F, cy + 13.0F, iconSize, sx, true);
 
-                V2.text(cv, e.stack.getHoverName().getString(), V2.FS_S, left > 0 ? IOStyle.TEXT : IOStyle.TEXT_3,
+                V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(e.stack), V2.FS_S, left > 0 ? IOStyle.TEXT : IOStyle.TEXT_3,
                         cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
                 if (left > 0) {
                     PriceSpec spec = e.resolvePriceSpec();

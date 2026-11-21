@@ -208,7 +208,7 @@ public class AuctionBidScreen extends SkiaDialog {
             g.renderItem(this.stack, iconX, iconY);
             g.renderItemDecorations(this.font, this.stack, iconX, iconY);
         }
-        IOStyle.centerAt(g, this.font, this.stack.isEmpty() ? Component.literal("-") : this.stack.getHoverName(),
+        IOStyle.centerAt(g, this.font, this.stack.isEmpty() ? Component.literal("-") : net.minecraft.network.chat.Component.literal(cn.autoforged.module_shop.client.ui.ItemNames.display(this.stack)),
                 cx, this.top + 48, IOStyle.TEXT);
         // 需求三：居中显示当前最高出价，并在下方用划掉效果展示上一轮出价。
         if (this.currentBid > 0L) {

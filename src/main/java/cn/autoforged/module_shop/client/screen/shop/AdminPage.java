@@ -162,8 +162,7 @@ public final class AdminPage implements ShopPage {
         Button[] topButtons = {historyBtn, cfgBtn, securityBtn, brandBtn, physBtn, annBtn, grantBtn};
         Runnable[] topActions = {
                 () -> ClientAdminAuth.guard(() -> host.action("admin_history_gui", null)),
-                () -> ClientAdminAuth.guard(() -> net.minecraft.client.Minecraft.getInstance().execute(
-                        () -> Nav.open(new cn.autoforged.module_shop.client.screen.ConfigManagerScreen()))),
+                () -> ClientAdminAuth.guard(() -> host.action("cfg_open", null)),
                 () -> ClientAdminAuth.guard(() -> net.minecraft.client.Minecraft.getInstance().execute(
                         () -> Nav.open(new AdminSecurityScreen(host.screen())))),
                 () -> ClientAdminAuth.guard(() -> net.minecraft.client.Minecraft.getInstance().execute(
@@ -371,8 +370,6 @@ public final class AdminPage implements ShopPage {
     private void configureActions(ShopHost host, String mode, boolean mall, boolean ship, boolean stalls,
             boolean demands, boolean signin) {
         List<Object[]> specs = new ArrayList<>();
-        // 配置管理：底部按钮行走的是已验证的 action 链路（客户端自己弹界面），比右上角独立按钮稳。
-        specs.add(new Object[]{"gui.module_shop.cfg.button", "cfg_open", false});
         if (signin) {
             specs.add(new Object[]{"gui.module_shop.signin.setting_short", "admin_signin_set", false});
             specs.add(new Object[]{"gui.module_shop.signin.cumulative", "admin_signin_cumulative_toggle",

@@ -271,7 +271,7 @@ public final class BuybackPage implements ShopPage {
             float nx = cols[1][0];
             float tagReserve = full ? (V2.tagWidth(fullLabel) + 5.0F) : 0.0F;
             float nameMaxW = Math.max(16.0F, cols[1][1] - tagReserve);
-            float nw = V2.text(cv, e.stack.getHoverName().getString(), V2.FS, full ? IOStyle.TEXT_3 : IOStyle.TEXT,
+            float nw = V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(e.stack), V2.FS, full ? IOStyle.TEXT_3 : IOStyle.TEXT,
                     nx, cy, nameMaxW, Text.Align.LEFT);
             if (full) {
                 V2.tag(cv, fullLabel, IOStyle.TEXT_3, nx + Math.min(nw, nameMaxW) + 5, cy);
@@ -334,7 +334,7 @@ public final class BuybackPage implements ShopPage {
             float iconSize = 16.0F;
             f.host().items().add(e.stack, cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
 
-            V2.text(cv, e.stack.getHoverName().getString(), V2.FS_S, full ? IOStyle.TEXT_3 : IOStyle.TEXT,
+            V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(e.stack), V2.FS_S, full ? IOStyle.TEXT_3 : IOStyle.TEXT,
                     cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
             PriceDisplay.drawCard(cv, f.host().items(), e.resolvePriceSpec(), cx + 3, cy + 44.5F, cx + cw * 0.5F,
                     cw - 6, 1.0F, full ? IOStyle.TEXT_3 : IOStyle.ORANGE, full);
@@ -501,7 +501,7 @@ public final class BuybackPage implements ShopPage {
                 }
             }
             if (plan.size() <= 8) {
-                lines.append("\n").append(e.stack.getHoverName().getString()).append(" ×").append(sell)
+                lines.append("\n").append(cn.autoforged.module_shop.client.ui.ItemNames.display(e.stack)).append(" ×").append(sell)
                         .append("  +").append(PriceDisplay.formatPlain(rowSpec));
             }
         }
