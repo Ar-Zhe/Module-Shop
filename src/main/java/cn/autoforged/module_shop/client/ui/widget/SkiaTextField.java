@@ -1,5 +1,6 @@
 package cn.autoforged.module_shop.client.ui.widget;
 
+import cn.autoforged.module_shop.client.ClickSound;
 import cn.autoforged.module_shop.client.screen.IOStyle;
 import cn.autoforged.module_shop.client.ui.AtomUi;
 import cn.autoforged.module_shop.client.ui.input.ImePosition;
@@ -14,6 +15,7 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import org.lwjgl.glfw.GLFW;
 
 /**
  * Skija 绘制的单行输入框（思路参考 AtomChat 的 ComposerInput / ComposerPointer，MIT）。
@@ -31,23 +33,47 @@ import net.minecraft.network.chat.Component;
  */
 public final class SkiaTextField extends UiComponent {
     private static final float PAD_X = 5.0F;
+    private static final float CLEAR_BTN_W = 12.0F;
     private static final long BLINK_MS = 530L;
 
     private final Screen screen;
     private final EditBox box;
     private String placeholder = "";
     private float fontSize = Text.BODY;
+    private boolean passwordMode;
+    private boolean clearable;
 
     private float scrollX;
     private float focusT;
     private float hoverT;
+    private float clearHoverT;
     private boolean selecting;
     private long caretReset = System.currentTimeMillis();
     private int lastCursor = -1;
 
     public SkiaTextField(Screen screen, Font font, int maxLength) {
         this.screen = screen;
-        this.box = new EditBox(font, 0, 0, 10, 10, Component.empty());
+        this.box = new EditBox(font, 0, 0, 10, 10, Component.empty()) {
+            @Override
+            public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+                if (SkiaTextField.this.passwordMode
+                        && (Screen.hasControlDown() || (modifiers & GLFW.GLFW_MOD_CONTROL) != 0)
+                        && (keyCode == GLFW.GLFW_KEY_C || keyCode == GLFW.GLFW_KEY_X)) {
+                    return true;
+                }
+                if (SkiaTextField.this.clearable
+                        && keyCode == GLFW.GLFW_KEY_ESCAPE
+                        && SkiaTextField.this.enabled
+                        && this.isVisible()
+                        && this.isFocused()
+                        && this.canConsumeInput()
+                        && !this.getValue().isEmpty()) {
+                    SkiaTextField.this.clearText(true);
+                    return true;
+                }
+                return super.keyPressed(keyCode, scanCode, modifiers);
+            }
+        };
         box.setBordered(false);
         box.setMaxLength(maxLength);
         box.setCanLoseFocus(true);
@@ -87,6 +113,75 @@ public final class SkiaTextField extends UiComponent {
     public SkiaTextField fontSize(float size) {
         this.fontSize = size;
         return this;
+    }
+
+    public SkiaTextField setPasswordMode(boolean passwordMode) {
+        this.passwordMode = passwordMode;
+        return this;
+    }
+
+    public boolean isPasswordMode() {
+        return this.passwordMode;
+    }
+
+    /** 启用或关闭右侧一键清空按钮（×）以及聚焦按 ESC 先清空文本。 */
+    public SkiaTextField setClearable(boolean clearable) {
+        this.clearable = clearable;
+        return this;
+    }
+
+    /** {@link #setClearable(boolean)} 的链式别名。 */
+    public SkiaTextField clearable(boolean clearable) {
+        return setClearable(clearable);
+    }
+
+    public boolean isClearable() {
+        return this.clearable;
+    }
+
+    /** 若本输入框启用清空且当前聚焦并有内容，消费 ESC 并先清空文本。 */
+    public boolean handleEscapeKey() {
+        if (visible && enabled && clearable && box.isFocused() && !box.getValue().isEmpty()) {
+            clearText(true);
+            return true;
+        }
+        return false;
+    }
+
+    private void clearText(boolean focusAfter) {
+        selecting = false;
+        scrollX = 0.0F;
+        box.setValue("");
+        box.moveCursorTo(0, false);
+        caretReset = System.currentTimeMillis();
+        if (focusAfter) {
+            focus();
+        }
+    }
+
+    private boolean showClearButton() {
+        return visible && enabled && clearable && !box.getValue().isEmpty()
+                && width >= PAD_X * 2.0F + CLEAR_BTN_W + 4.0F;
+    }
+
+    private float clearBtnX() {
+        return x + width - CLEAR_BTN_W - 2.0F;
+    }
+
+    private boolean overClear(double mx, double my) {
+        return showClearButton() && mx >= clearBtnX() && mx < x + width && my >= y && my < y + height;
+    }
+
+    private float innerTextW() {
+        float reserve = showClearButton() ? (CLEAR_BTN_W + 2.0F) : 0.0F;
+        return Math.max(4.0F, width - PAD_X * 2.0F - reserve);
+    }
+
+    private String displayValue(String value) {
+        if (!this.passwordMode || value == null || value.isEmpty()) {
+            return value == null ? "" : value;
+        }
+        return "\u2022".repeat(value.length());
     }
 
     public SkiaTextField onChange(Consumer<String> responder) {
@@ -144,9 +239,10 @@ public final class SkiaTextField extends UiComponent {
         Draw.stroke(canvas, x, y, width, height, 3.0F, 1.0F, border);
 
         float innerX = x + PAD_X;
-        float innerW = width - PAD_X * 2.0F;
+        float innerW = innerTextW();
         String value = box.getValue();
-        TextLayout layout = Text.line(value, AtomUi.REGULAR, fontSize, IOStyle.TEXT, 0);
+        String shown = displayValue(value);
+        TextLayout layout = Text.line(shown, AtomUi.REGULAR, fontSize, IOStyle.TEXT, 0);
         float textH = layout.size().height();
         float textY = y + (height - textH) / 2.0F;
 
@@ -164,7 +260,7 @@ public final class SkiaTextField extends UiComponent {
             lastCursor = cursor;
             caretReset = System.currentTimeMillis(); // 光标移动时重新开始闪烁，保证可见
         }
-        float caretX = caretX(layout, cursor, value);
+        float caretX = caretX(layout, cursor, shown);
         // 水平滚动：保证光标始终在可见范围内
         float textW = layout.size().width();
         if (caretX - scrollX > innerW - 1.0F) {
@@ -181,14 +277,14 @@ public final class SkiaTextField extends UiComponent {
 
             // 选区高亮
             int anchor = clampOffset(box.highlightPos, value);
-            if (focused && anchor != cursor && !value.isEmpty()) {
+            if (focused && anchor != cursor && !shown.isEmpty()) {
                 List<Rect> rects = layout.selection(Math.min(anchor, cursor), Math.max(anchor, cursor));
                 for (Rect r : rects) {
                     Draw.fill(canvas, originX + r.x(), textY + r.y(), r.width(), r.height(), 1.0F,
                             Draw.alpha(IOStyle.BLUE, 0.45F));
                 }
             }
-            if (!value.isEmpty()) {
+            if (!shown.isEmpty()) {
                 Text.draw(canvas, layout, originX, textY);
             }
             if (focused) {
@@ -205,6 +301,19 @@ public final class SkiaTextField extends UiComponent {
         } finally {
             canvas.restoreToCount(saved);
         }
+
+        if (showClearButton()) {
+            boolean ch = overClear(mouseX, mouseY);
+            clearHoverT = Motion.approach(clearHoverT, ch ? 1.0F : 0.0F, dtMs, Motion.HOVER_MS);
+            float ccx = clearBtnX() + CLEAR_BTN_W * 0.5F;
+            float ccy = y + height * 0.5F;
+            if (clearHoverT > 0.01F) {
+                Draw.fill(canvas, ccx - 4.5F, ccy - 4.5F, 9.0F, 9.0F, 4.5F, Draw.alpha(IOStyle.ROW_HOVER, clearHoverT));
+            }
+            Draw.cross(canvas, ccx, ccy, 2.2F, 1.0F, Draw.lerp(IOStyle.TEXT_3, IOStyle.TEXT, clearHoverT));
+        } else {
+            clearHoverT = 0.0F;
+        }
     }
 
     /** 把隐藏 EditBox 的位置与本组件对齐（输入法候选窗据此定位）。 */
@@ -213,7 +322,7 @@ public final class SkiaTextField extends UiComponent {
         float k = cn.autoforged.module_shop.client.ui.render.SkiaFrame.unitsToGui();
         box.setX(Math.round((x + PAD_X) * k));
         box.setY(Math.round((y + (height - 8.0F) / 2.0F) * k));
-        box.setWidth(Math.max(1, Math.round((width - PAD_X * 2.0F) * k)));
+        box.setWidth(Math.max(1, Math.round(innerTextW() * k)));
         box.setHeight(Math.max(1, Math.round(height * k)));
         box.setVisible(visible && enabled);
         box.setEditable(enabled);
@@ -254,6 +363,11 @@ public final class SkiaTextField extends UiComponent {
         if (button != 0) {
             return true;
         }
+        if (overClear(mouseX, mouseY)) {
+            ClickSound.play();
+            clearText(true);
+            return true;
+        }
         boolean extend = box.isFocused() && Screen.hasShiftDown();
         focus();
         box.moveCursorTo(offsetAt(mouseX), extend);
@@ -284,7 +398,7 @@ public final class SkiaTextField extends UiComponent {
         if (value.isEmpty()) {
             return 0;
         }
-        TextLayout layout = Text.line(value, AtomUi.REGULAR, fontSize, IOStyle.TEXT, 0);
+        TextLayout layout = Text.line(displayValue(value), AtomUi.REGULAR, fontSize, IOStyle.TEXT, 0);
         float localX = (float) (mouseX - (x + PAD_X - scrollX));
         return clampOffset(layout.hitTest(localX, 0.0F), value);
     }

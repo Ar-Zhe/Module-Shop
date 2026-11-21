@@ -173,7 +173,8 @@ public final class SignInCalendar {
                     tip = activityTip(acts);
                 } else if (allowMakeup && canMakeup) {
                     tip = Component.translatable("gui.module_shop.signin.makeup_tip",
-                            ClientShopData.money(ClientShopData.signInMakeupCost), date.toString());
+                            cn.autoforged.module_shop.client.ui.v2.PriceDisplay.formatPlain(ClientShopData.signInMakeupSpec),
+                            date.toString());
                 } else if (isToday) {
                     tip = Component.translatable(signed ? "gui.module_shop.signin.done" : "gui.module_shop.signin.do");
                 }
@@ -214,6 +215,11 @@ public final class SignInCalendar {
             if (hit.day != 0L || hit.action.startsWith("signin_activity") || "signin_makeup".equals(hit.action)) {
                 extra = new CompoundTag();
                 extra.putLong("day", hit.day);
+                if ("signin_makeup".equals(hit.action)) {
+                    extra.putString("pay_channel",
+                            cn.autoforged.module_shop.client.ui.v2.PriceDisplay.resolveBuyChannel(
+                                    ClientShopData.signInMakeupSpec, 1));
+                }
             }
             f.host().action(hit.action, extra);
             return true;
@@ -245,9 +251,11 @@ public final class SignInCalendar {
             if (act.note != null && !act.note.isEmpty()) {
                 out.append("\n").append(Component.literal(act.note).withStyle(ChatFormatting.GRAY));
             }
-            if (act.money > 0L) {
+            cn.autoforged.module_shop.data.PriceSpec actSpec = act.resolveMoneySpec();
+            if (actSpec.isValid()) {
                 out.append("\n").append(Component.translatable("gui.module_shop.signin.activity_money",
-                        ClientShopData.money(act.money)).withStyle(ChatFormatting.GOLD));
+                        cn.autoforged.module_shop.client.ui.v2.PriceDisplay.formatPlain(actSpec))
+                        .withStyle(ChatFormatting.GOLD));
             }
             String items = itemNames(act.itemText);
             if (!items.isEmpty()) {

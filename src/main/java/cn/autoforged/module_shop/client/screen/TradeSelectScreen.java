@@ -62,13 +62,13 @@ public class TradeSelectScreen extends SkiaDialog {
 
     private List<ClientShopData.OnlinePlayer> filtered() {
         String self = ClientShopData.playerName;
-        String query = this.searchBox == null ? "" : this.searchBox.getValue().trim().toLowerCase();
+        String query = this.searchBox == null ? "" : this.searchBox.getValue().trim();
         List<ClientShopData.OnlinePlayer> result = new ArrayList<>();
         for (ClientShopData.OnlinePlayer player : ClientShopData.onlinePlayers) {
             if (player.name.equals(self)) {
                 continue;
             }
-            if (!query.isEmpty() && !player.name.toLowerCase().contains(query)) {
+            if (!cn.autoforged.module_shop.client.screen.shop.PageKit.matchesQuery(query, player.name)) {
                 continue;
             }
             result.add(player);
@@ -248,7 +248,7 @@ public class TradeSelectScreen extends SkiaDialog {
     protected void initSkia() {
         String keep = this.searchBox == null ? "" : this.searchBox.getValue();
         this.skSearch = field(32, Component.translatable(transferMode ? "gui.module_shop.transfer.search_hint"
-                : "gui.module_shop.trade.search_hint").getString());
+                : "gui.module_shop.trade.search_hint").getString()).clearable(true);
         this.searchBox = this.skSearch.editBox();
         this.searchBox.setValue(keep);
         this.skSearch.onChange(v -> this.skScroll.scrollTo(0, false));
@@ -282,7 +282,7 @@ public class TradeSelectScreen extends SkiaDialog {
                     continue;
                 }
                 ClientShopData.OnlinePlayer p = players.get(i);
-                float rw = innerW - 8;
+                float rw = innerW - 10;
                 float hv = hover("p:" + p.name, innerX, ry, rw, rowH - 3);
                 cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX, ry, rw, rowH - 3, 3,
                         cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.CARD, IOStyle.GRAY_BTN_HOVER, hv));
@@ -294,12 +294,12 @@ public class TradeSelectScreen extends SkiaDialog {
                     final int hy = (int) (ry + (rowH - 3 - 16) / 2);
                     this.items.addCustom(hx, hy, 16, 16, (g, font) -> Skins.drawHead(g, uuid, hx, hy, 16));
                 }
-                text(c, p.name, innerX + 28, ry + (rowH - 3) / 2, rw * 0.5F, IOStyle.TEXT);
+                text(c, p.name, innerX + 28, ry + (rowH - 3) / 2, rw * 0.5F + 0.5F, IOStyle.TEXT);
                 cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, hint + " ›",
                         cn.autoforged.module_shop.client.ui.AtomUi.REGULAR,
                         cn.autoforged.module_shop.client.ui.render.Text.SMALL,
                         cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.TEXT_3, IOStyle.BLUE, hv), innerX,
-                        ry + (rowH - 3) / 2, rw - 8, cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
+                        ry + (rowH - 3) / 2, rw - 7.5F, cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
                 hit(innerX, ry, rw, rowH - 3, () -> pick(p), null);
             }
             endList(c);

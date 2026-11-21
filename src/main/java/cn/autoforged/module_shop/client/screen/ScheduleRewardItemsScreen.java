@@ -1,27 +1,28 @@
 package cn.autoforged.module_shop.client.screen;
 
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState;
 import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.ui.AtomUi;
+import cn.autoforged.module_shop.client.ui.render.ItemOverlay;
+import cn.autoforged.module_shop.client.ui.render.SkiaFrame;
+import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
+import cn.autoforged.module_shop.client.ui.widget.Button;
+import cn.autoforged.module_shop.client.ui.widget.PriceSpecEditor;
+import cn.autoforged.module_shop.data.PriceSpec;
 import cn.autoforged.module_shop.menu.GrantMenu;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
 import java.time.LocalDate;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
-import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * 日程奖励（第八轮）：**直接沿用「物品发放」的逻辑与版式** ——
- * 左侧 3×9 真实物品槽（从自己背包放入，服务端权威、关闭时原样退还），
- * 右侧显示该日程「当前奖励」并可填金额，底部「保存 / 取消」。
- * <p>
- * 与发放界面的区别只有两点：右侧不勾选玩家（日程奖励发放给所有签到/在线玩家），
- * 以及「发送」改成「保存」（写进该日程的奖励配置）。保存时服务端会先清空槽位再落库，
- * 所以既不会复制物品，也不会把已发放的物品退回管理员背包。
+ * 日程奖励配置：左侧 3×9 物品槽 + 右侧双独立账本配价组件（星币 / 实体货币 / 组合同发）。
  */
 public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu>
         implements SkiaContainerBackground.Painter {
@@ -36,14 +37,22 @@ public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu
         skBg(g, this.leftPos, this.topPos, mouseX, mouseY);
     }
 
-    private static final int PANEL_W = 336;
+    private static final int PANEL_W = 378;
     private static final int PANEL_H = 236;
     private static final int LIST_X = 182;
-    private static final int LIST_W = 146;
+    private static final int LIST_W = 188;
 
-    /** 关闭本界面后要回去的界面（由日程奖励设置界面在打开前设置）。 */
     private static Screen returnTo;
     private EditBox moneyBox;
+    private String fallbackError = "";
+
+    private final ItemOverlay currencyItems = new ItemOverlay();
+    private PriceSpecEditor moneyEditor;
+    private float edX;
+    private float edY;
+    private float edW;
+    private float edH;
+    private long lastFrameNs;
 
     public static void setReturnTo(Screen screen) {
         returnTo = screen;
@@ -61,22 +70,30 @@ public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu
         return ClientShopData.scheduleDay;
     }
 
-    private long currentMoney() {
+    private static ClientShopData.ActivityView findDay(long targetDay) {
+        ClientShopData.ActivityView draft = ClientShopData.activityDraft;
+        if (draft != null && draft.day == targetDay) {
+            return draft;
+        }
         for (ClientShopData.ActivityView view : ClientShopData.activityDays) {
-            if (view.day == day()) {
-                return view.money;
+            if (view.day == targetDay) {
+                return view;
             }
         }
-        return 0L;
+        return null;
+    }
+
+    private PriceSpec currentMoneySpec() {
+        ClientShopData.ActivityView act = findDay(day());
+        return act == null ? PriceSpec.ZERO : act.resolveMoneySpec();
     }
 
     private String currentItemsText() {
-        for (ClientShopData.ActivityView view : ClientShopData.activityDays) {
-            if (view.day == day()) {
-                return view.itemText == null || view.itemText.isEmpty() ? "-" : view.itemText;
-            }
+        ClientShopData.ActivityView act = findDay(day());
+        if (act == null || act.itemText == null || act.itemText.isEmpty()) {
+            return "-";
         }
-        return "-";
+        return act.itemText;
     }
 
     @Override
@@ -84,40 +101,29 @@ public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu
         super.init();
         int x = this.leftPos;
         int y = this.topPos;
-        this.skia = cn.autoforged.module_shop.client.ui.AtomUi.available();
+        this.skia = AtomUi.available();
         if (this.skia) {
-            String keep = this.moneyBox == null ? Long.toString(Math.max(0L, currentMoney()))
-                    : this.moneyBox.getValue();
-            this.moneyBox = new EditBox(this.font, x + LIST_X + 5, y + 126, LIST_W - 10, 10,
-                    Component.translatable("gui.module_shop.grant.amount"));
-            this.moneyBox.setBordered(false);
-            this.moneyBox.setMaxLength(12);
-            this.moneyBox.setFilter(text -> text.isEmpty() || text.matches("\\d{1,12}"));
-            this.moneyBox.setValue(keep);
-            this.addRenderableWidget(this.moneyBox);
+            PriceSpec preserved = this.moneyEditor != null ? this.moneyEditor.buildSpec() : null;
+            this.moneyEditor = new PriceSpecEditor(this, this.font, PriceSpecEditor.Scope.OP)
+                    .allowZero(true)
+                    .items(this.currencyItems);
+            this.moneyEditor.setInitial(preserved != null ? preserved : currentMoneySpec());
+            this.moneyEditor.registerInputs(this::addWidget);
             return;
         }
+        this.moneyEditor = null;
         this.moneyBox = new EditBox(this.font, x + LIST_X + 1, y + 122, LIST_W - 2, 16,
                 Component.translatable("gui.module_shop.grant.amount"));
-        this.moneyBox.setMaxLength(12);
-        this.moneyBox.setFilter(text -> text.isEmpty() || text.matches("\\d{1,12}"));
+        this.moneyBox.setMaxLength(64);
         this.moneyBox.setHint(Component.translatable("gui.module_shop.grant.amount_hint"));
-        this.moneyBox.setValue(Long.toString(Math.max(0L, currentMoney())));
+        this.moneyBox.setValue(currentMoneySpec().toRuleText());
         this.addRenderableWidget(this.moneyBox);
 
-        int btnY = y + 178;
-        this.addRenderableWidget(new ShopButton(x + LIST_X, btnY, 86, 20,
+        int btnY = y + 194;
+        this.addRenderableWidget(new ShopButton(x + LIST_X, btnY, 106, 20,
                 Component.translatable("gui.module_shop.schedule.save"), b -> save()));
-        this.addRenderableWidget(new ShopButton(x + LIST_X + 90, btnY, 56, 20,
+        this.addRenderableWidget(new ShopButton(x + LIST_X + 112, btnY, 76, 20,
                 Component.translatable("gui.module_shop.schedule.cancel"), b -> finish(false)));
-    }
-
-    private long amount() {
-        try {
-            return Math.max(0L, Long.parseLong(this.moneyBox.getValue().trim()));
-        } catch (NumberFormatException ex) {
-            return 0L;
-        }
     }
 
     @Override
@@ -125,17 +131,41 @@ public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu
         return false;
     }
 
-    /** 保存：把槽内物品 + 金额写进该日程（服务端读取权威槽位，客户端只传日期与金额）。 */
+    private PriceSpec resolveSaveSpec() {
+        if (this.skia && this.moneyEditor != null) {
+            if (this.moneyEditor.mode() == PriceSpec.CurrencyMode.STAR_ONLY
+                    && this.moneyEditor.starField().value().isBlank()) {
+                return PriceSpec.ZERO;
+            }
+            return this.moneyEditor.buildSpec();
+        }
+        String raw = this.moneyBox == null ? "" : this.moneyBox.getValue().trim();
+        if (raw.isEmpty()) {
+            return PriceSpec.ZERO;
+        }
+        return PriceSpec.parseRuleText(raw);
+    }
+
+    /** 保存：把槽内物品 + 双账本金额规格写进该日程草稿。 */
     private void save() {
+        PriceSpec spec = resolveSaveSpec();
+        if (spec == null) {
+            if (!this.skia) {
+                this.fallbackError = ClientHomeCurrencyState.tr("gui.module_shop.sys_costs.parse_err",
+                        "格式无效：%s", this.moneyBox == null ? "" : this.moneyBox.getValue());
+            }
+            return;
+        }
+        this.fallbackError = "";
         CompoundTag tag = new CompoundTag();
         tag.putLong("day", day());
-        tag.putString("money", Long.toString(amount()));
+        tag.put("moneySpec", spec.toTag());
+        tag.putString("money", spec.toRuleText());
         tag.putString("action", "admin_signin_reward_save");
         ServerboundShopActionPayload.send(tag);
         finish(true);
     }
 
-    /** 关闭界面：先通知服务端关闭容器（槽内物品原样退还），再回到上一级界面。 */
     private void finish(boolean saved) {
         if (!saved) {
             CompoundTag tag = new CompoundTag();
@@ -162,74 +192,100 @@ public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu
         int x = this.leftPos;
         int y = this.topPos;
         if (this.skia) {
-            return;   // Skija 底板在 paintSkiaBackground 里画（见 SkiaContainerBackground）
+            return;
         }
         Bricks.panel(g, x, y, PANEL_W, PANEL_H);
-        // 左侧：3×9 发放槽（与物品发放完全一致）
         for (int row = 0; row < 3; row++) {
             for (int col = 0; col < 9; col++) {
                 Bricks.slot(g, x + 8 + col * 18, y + 18 + row * 18);
             }
         }
         g.blit(Bricks.PLAYER_SLOTS, x + 7, y + GrantMenu.INVENTORY_Y - 1, 0, 0, 162, 76, 162, 76);
-        // 左侧提示：这里是「要发放的物品」
         small(g, x + 8, y + 80, Component.translatable("gui.module_shop.schedule.reward_items_hint"));
-        // 右侧栏（沿用发放界面右侧深色面板）
-        g.fill(x + LIST_X - 3, y + 15, x + LIST_X + LIST_W + 3, y + 205, 0x30101114);
+        g.fill(x + LIST_X - 3, y + 15, x + LIST_X + LIST_W + 3, y + 220, 0x30101114);
         IOStyle.text(g, this.font, Component.translatable("gui.module_shop.schedule.reward_items_title",
                 LocalDate.ofEpochDay(day()).toString()), x + 8, y + 6, IOStyle.TEXT);
         small(g, x + LIST_X, y + 22, Component.translatable("gui.module_shop.schedule.reward_current"));
         drawWrapped(g, x + LIST_X, y + 34, LIST_W,
                 Component.translatable("gui.module_shop.schedule.reward_money_line",
-                        ClientShopData.money(currentMoney())).getString(), IOStyle.ORANGE);
-        drawWrapped(g, x + LIST_X, y + 46, LIST_W, currentItemsText(), IOStyle.TEXT_2);
+                        PriceDisplay.formatPlain(currentMoneySpec())).getString(), IOStyle.ORANGE);
+        drawWrapped(g, x + LIST_X, y + 54, LIST_W, currentItemsText(), IOStyle.TEXT_2);
         small(g, x + LIST_X, y + 112, Component.translatable("gui.module_shop.grant.amount_label"));
-        small(g, x + LIST_X, y + 140, Component.translatable("gui.module_shop.schedule.reward_save_hint"));
+        if (!this.fallbackError.isEmpty()) {
+            drawWrapped(g, x + LIST_X, y + 144, LIST_W, this.fallbackError, IOStyle.RED);
+        } else {
+            drawWrapped(g, x + LIST_X, y + 144, LIST_W,
+                    Component.translatable("gui.module_shop.schedule.reward_save_hint").getString(), IOStyle.TEXT_2);
+        }
     }
 
-    // ------------------------------------------------------------------ Skija（只换绘制）
+    // ------------------------------------------------------------------ Skija
 
     private boolean skia;
 
     private void skBg(GuiGraphics g, int x, int y, int mouseX, int mouseY) {
-        cn.autoforged.module_shop.client.ui.render.SkiaFrame.draw(g, c -> {
+        long now = System.nanoTime();
+        float dt = this.lastFrameNs == 0L ? 16.0F : Math.min(100.0F, (now - this.lastFrameNs) / 1_000_000.0F);
+        this.lastFrameNs = now;
+
+        this.currencyItems.begin(mouseX, mouseY, true);
+        SkiaFrame.draw(g, c -> {
             SkiaDialog.bare(c, x, y, PANEL_W, PANEL_H);
-            cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, Component.translatable(
+            Text.drawLine(c, Component.translatable(
                             "gui.module_shop.schedule.reward_items_title", LocalDate.ofEpochDay(day()).toString())
-                            .getString(), cn.autoforged.module_shop.client.ui.AtomUi.BOLD,
-                    cn.autoforged.module_shop.client.ui.render.Text.BODY, IOStyle.TEXT, x + 8, y + 9, PANEL_W - 16,
-                    cn.autoforged.module_shop.client.ui.render.Text.Align.LEFT);
+                            .getString(), AtomUi.BOLD, Text.BODY, IOStyle.TEXT, x + 8, y + 9, 166, Text.Align.LEFT);
             for (int i = 0; i < 27; i++) {
                 SkiaDialog.slotFrame(c, x + 8 + (i % 9) * 18, y + 18 + (i / 9) * 18);
             }
             SkiaDialog.paragraph(c, Component.translatable("gui.module_shop.schedule.reward_items_hint").getString(),
-                    x + 8, y + 78, 164, cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_2, 3,
-                    false);
+                    x + 8, y + 78, 164, Text.SMALL, IOStyle.TEXT_2, 3, false);
             SkiaDialog.small(c, this.playerInventoryTitle.getString(), x + 8, y + GrantMenu.INVENTORY_Y - 6, 160,
                     IOStyle.TEXT_3);
             SkiaDialog.playerSlots(c, x + 8, y + GrantMenu.INVENTORY_Y);
+
             float rx = x + LIST_X;
-            SkiaDialog.card(c, rx - 4, y + 14, LIST_W + 8, 192);
-            SkiaDialog.small(c, Component.translatable("gui.module_shop.schedule.reward_current").getString(), rx,
-                    y + 24, LIST_W, IOStyle.TEXT_2);
+            SkiaDialog.card(c, rx - 4, y + 14, LIST_W + 8, 210);
+            SkiaDialog.small(c, Component.translatable("gui.module_shop.schedule.reward_current").getString(),
+                    rx, y + 23, LIST_W, IOStyle.TEXT_2);
             float ty = y + 32;
             ty += SkiaDialog.paragraph(c, Component.translatable("gui.module_shop.schedule.reward_money_line",
-                            ClientShopData.money(currentMoney())).getString(), rx, ty, LIST_W,
-                    cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.ORANGE, 2, false) + 2;
-            SkiaDialog.paragraph(c, currentItemsText(), rx, ty, LIST_W,
-                    cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_2, 6, false);
-            SkiaDialog.small(c, Component.translatable("gui.module_shop.grant.amount_label").getString(), rx, y + 114,
-                    LIST_W, IOStyle.TEXT_2);
-            SkiaDialog.fieldFrame(c, rx, y + 122, LIST_W, 16, this.moneyBox.isFocused()); SkiaDialog.themeBox(this.moneyBox);
-            SkiaDialog.paragraph(c, Component.translatable("gui.module_shop.schedule.reward_save_hint").getString(),
-                    rx, y + 142, LIST_W, cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_3, 3,
-                    false);
-            SkiaDialog.flatButton(c, rx, y + 178, 86, 20, Component.translatable("gui.module_shop.schedule.save")
-                    .getString(), cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, true, mouseX, mouseY);
-            SkiaDialog.flatButton(c, rx + 90, y + 178, 56, 20,
+                            PriceDisplay.formatPlain(currentMoneySpec())).getString(),
+                    rx, ty, LIST_W, Text.SMALL, IOStyle.ORANGE, 2, false) + 2;
+            ty += SkiaDialog.paragraph(c, currentItemsText(), rx, ty, LIST_W,
+                    Text.SMALL, IOStyle.TEXT_2, 2, false) + 4;
+
+            float labelY = Math.max(y + 66.0F, ty);
+            SkiaDialog.small(c, Component.translatable("gui.module_shop.grant.amount_label").getString(),
+                    rx, labelY, LIST_W, IOStyle.TEXT_2);
+            this.edX = rx;
+            this.edY = labelY + 8.0F;
+            this.edW = LIST_W;
+            this.moneyEditor.visible(true);
+            this.moneyEditor.bounds(this.edX, this.edY, this.edW);
+            this.edH = this.moneyEditor.preferredHeight();
+            this.moneyEditor.render(c, this.currencyItems, mouseX, mouseY, dt);
+
+            String edErr = (this.moneyEditor.mode() == PriceSpec.CurrencyMode.STAR_ONLY
+                    && this.moneyEditor.starField().value().isBlank()) ? null : this.moneyEditor.validateError();
+            float hintY = this.edY + this.edH + 5.0F;
+            int hintLines = Math.max(1, (int) ((y + 194.0F - hintY) / 9.0F));
+            if (y + 194.0F - hintY >= 8.0F) {
+                if (edErr != null) {
+                    SkiaDialog.paragraph(c, edErr, rx, hintY, LIST_W,
+                            Text.SMALL, IOStyle.RED, Math.min(2, hintLines), false);
+                } else {
+                    SkiaDialog.paragraph(c, Component.translatable("gui.module_shop.schedule.reward_save_hint").getString(),
+                            rx, hintY, LIST_W, Text.SMALL, IOStyle.TEXT_3, Math.min(3, hintLines), false);
+                }
+            }
+
+            SkiaDialog.flatButton(c, rx, y + 196, 106, 20, Component.translatable("gui.module_shop.schedule.save")
+                    .getString(), Button.Kind.ACCENT, edErr == null, mouseX, mouseY);
+            SkiaDialog.flatButton(c, rx + 112, y + 196, 76, 20,
                     Component.translatable("gui.module_shop.schedule.cancel").getString(),
-                    cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, mouseX, mouseY);
+                    Button.Kind.NORMAL, true, mouseX, mouseY);
         });
+        this.currencyItems.flush(g, this.font);
     }
 
     @Override
@@ -243,30 +299,68 @@ public class ScheduleRewardItemsScreen extends AbstractContainerScreen<GrantMenu
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         super.render(g, mouseX, mouseY, partialTick);
         if (this.skia) {
+            if (this.hoveredSlot != null && this.hoveredSlot.hasItem()) {
+                this.renderTooltip(g, mouseX, mouseY);
+            } else if (!this.currencyItems.renderTooltip(g, this.font, mouseX, mouseY)
+                    && this.moneyEditor != null && this.moneyEditor.hoveredTooltip() != null) {
+                g.renderTooltip(this.font, this.moneyEditor.hoveredTooltip(), mouseX, mouseY);
+            }
+        } else if (this.hoveredSlot != null && this.hoveredSlot.hasItem()) {
             this.renderTooltip(g, mouseX, mouseY);
         }
     }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (this.skia && button == 0) {
-            int x = this.leftPos;
-            int y = this.topPos;
-            if (IOStyle.inside(x + LIST_X, y + 178, 86, 20, mouseX, mouseY)) {
-                Bricks.click();
-                save();
+        if (this.skia) {
+            if (this.moneyEditor != null && this.moneyEditor.mouseClicked(mouseX, mouseY, button)) {
                 return true;
             }
-            if (IOStyle.inside(x + LIST_X + 90, y + 178, 56, 20, mouseX, mouseY)) {
-                Bricks.click();
-                finish(false);
-                return true;
+            if (button == 0) {
+                int x = this.leftPos;
+                int y = this.topPos;
+                if (IOStyle.inside(x + LIST_X, y + 196, 106, 20, mouseX, mouseY)) {
+                    Bricks.click();
+                    save();
+                    return true;
+                }
+                if (IOStyle.inside(x + LIST_X + 112, y + 196, 76, 20, mouseX, mouseY)) {
+                    Bricks.click();
+                    finish(false);
+                    return true;
+                }
             }
         }
         return super.mouseClicked(mouseX, mouseY, button);
     }
 
-    /** 0.8 倍小字号，带自动换行（右侧栏只有 146px 宽）。 */
+    @Override
+    public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+        if (this.skia && this.moneyEditor != null
+                && this.moneyEditor.mouseDragged(mouseX, mouseY, button, dragX, dragY)) {
+            return true;
+        }
+        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (this.skia && this.moneyEditor != null
+                && this.moneyEditor.mouseReleased(mouseX, mouseY, button)) {
+            return true;
+        }
+        return super.mouseReleased(mouseX, mouseY, button);
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (this.skia && this.moneyEditor != null
+                && this.moneyEditor.mouseScrolled(mouseX, mouseY, scrollY)) {
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+    }
+
     private void drawWrapped(GuiGraphics g, int x, int y, int width, String text, int color) {
         if (text == null || text.isEmpty()) {
             return;

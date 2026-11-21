@@ -23,6 +23,7 @@ public final class Text {
     public static final float TITLE = 10.0F;
 
     private static final int MAX_LENGTH = 32768;
+    private static final float WIDTH_EPS = 0.05F;
 
     private Text() {
     }
@@ -31,7 +32,7 @@ public final class Text {
 
     /** 单行布局（超宽时省略号截断）。maxWidth ≤ 0 表示不限宽。 */
     public static TextLayout line(String text, FontId font, float size, int color, float maxWidth) {
-        Constraints.Axis width = maxWidth > 0 ? Constraints.Axis.atMost(maxWidth) : Constraints.Axis.undefined();
+        Constraints.Axis width = maxWidth > 0 ? Constraints.Axis.atMost(maxWidth + WIDTH_EPS) : Constraints.Axis.undefined();
         return AtomUi.text().layout(new TextRequest(sanitize(text), font, size, color, 1, maxWidth > 0),
                 new Constraints(width, Constraints.Axis.undefined()));
     }

@@ -1,13 +1,17 @@
 package cn.autoforged.module_shop.client;
 
 import cn.autoforged.module_shop.client.screen.ShopScreen;
+import cn.autoforged.module_shop.client.screen.shop.PageKit;
+import cn.autoforged.module_shop.data.PriceSpec;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
 import cn.autoforged.module_shop.shop.auction.AuctionCategory;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import net.minecraft.core.HolderLookup;
@@ -113,6 +117,16 @@ public final class AuctionClient {
         public int duration;
         public int bidCount;
         public String operator = "";
+        public String physTierKey = "";
+
+        public boolean isPhysCurrency() {
+            return physTierKey != null && !physTierKey.isBlank();
+        }
+
+        public PriceSpec specOf(long amount) {
+            long safe = Math.max(0L, amount);
+            return isPhysCurrency() ? PriceSpec.phys(physTierKey, safe) : PriceSpec.star(safe);
+        }
     }
 
     public static List<ClientShopData.AuctionView> mineSelling = new ArrayList<>();
@@ -289,6 +303,8 @@ public final class AuctionClient {
                     h.duration = c.getInt("duration");
                     h.bidCount = c.getInt("bidCount");
                     h.operator = c.getString("operator");
+                    String pt = c.getString("physTier");
+                    h.physTierKey = pt.isEmpty() ? c.getString("physTierKey") : pt;
                     history.add(h);
                 }
                 mineHistory = history;
@@ -383,6 +399,8 @@ public final class AuctionClient {
         view.bidCount = c.getInt("bidCount");
         view.extensions = c.getInt("extensions");
         view.createdAt = view.receivedAt - c.getLong("createdAgo");
+        String pt = c.getString("physTier");
+        view.physTierKey = pt.isEmpty() ? c.getString("physTierKey") : pt;
         return view;
     }
 
@@ -434,11 +452,29 @@ public final class AuctionClient {
         }
         String hay = searchText(v);
         for (String word : query.toLowerCase(Locale.ROOT).trim().split("\\s+")) {
-            if (!word.isEmpty() && !hay.contains(word)) {
+            if (word.isEmpty()) {
+                continue;
+            }
+            if (!hay.contains(word) && (v.stack.isEmpty() || !PageKit.matchesItemQuery(v.stack, word))) {
                 return false;
             }
         }
         return true;
+    }
+
+    /** 按当前搜索词统计各分类匹配条数（忽略当前分类筛选），供左侧分类栏实时收敛。 */
+    public static Map<AuctionCategory, Integer> searchCategoryCounts() {
+        Map<AuctionCategory, Integer> counts = new EnumMap<>(AuctionCategory.class);
+        int total = 0;
+        for (ClientShopData.AuctionView v : ClientShopData.auctions) {
+            if (!matches(v, search)) {
+                continue;
+            }
+            total++;
+            counts.merge(categoryOf(v), 1, Integer::sum);
+        }
+        counts.put(AuctionCategory.ALL, total);
+        return counts;
     }
 
     public static String sortKey(int sort) {

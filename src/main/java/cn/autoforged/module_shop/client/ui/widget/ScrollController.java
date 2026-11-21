@@ -24,8 +24,9 @@ public final class ScrollController {
     private static final float BAR_WIDTH = 3.0F;
     private static final float BAR_WIDTH_HOVER = 5.0F;
     private static final float BAR_INSET = 2.0F;
-    private static final float THUMB_MIN = 14.0F;
-    private static final float HOT_ZONE = 8.0F;
+    private static final float THUMB_MIN = 18.0F;
+    private static final float HOT_ZONE = 10.0F;
+    private static final float IDLE_ALPHA = 0.38F;
 
     private final boolean bottomAnchor;
 
@@ -152,29 +153,34 @@ public final class ScrollController {
 
     /** 鼠标是否在滚动条的可拖拽区域（列表矩形为 x,y,w,h）。 */
     public boolean overBar(double mouseX, double mouseY, float x, float y, float w, float h) {
-        if (maxScroll <= 0.0F) {
+        if (maxScroll <= 0.0F || w <= 0.0F || h <= 0.0F) {
             return false;
         }
         float trackX = x + w - BAR_WIDTH_HOVER - BAR_INSET;
-        return mouseX >= trackX - HOT_ZONE / 2 && mouseX <= x + w && mouseY >= y && mouseY <= y + h;
+        float hitLeft = Math.max(x, trackX - HOT_ZONE * 0.5F);
+        return mouseX >= hitLeft && mouseX <= x + w && mouseY >= y && mouseY <= y + h;
     }
 
-    /** 在滚动条上按下：点在滑块上则开始拖拽，点在轨道上则跳页。返回是否消费。 */
+    /** 在滚动条上按下：点在滑块上直接抓取，点在轨道上按比例跳转并支持立即续拖。返回是否消费。 */
     public boolean pressBar(double mouseX, double mouseY, float x, float y, float w, float h) {
         if (!overBar(mouseX, mouseY, x, y, w, h)) {
             return false;
         }
         float thumbH = thumbHeight(h);
-        float thumbY = y + (h - thumbH) * (maxScroll <= 0 ? 0 : scrollY / maxScroll);
-        if (mouseY < thumbY) {
-            scrollTo(scrollTarget - h * 0.9F, true);
-        } else if (mouseY > thumbY + thumbH) {
-            scrollTo(scrollTarget + h * 0.9F, true);
-        } else {
-            dragging = true;
-            dragStartY = (float) mouseY;
-            dragStartScroll = scrollY;
+        float travel = Math.max(0.0F, h - thumbH);
+        float thumbY = y + (travel > 0.0F && maxScroll > 0.0F ? travel * (scrollY / maxScroll) : 0.0F);
+        if (mouseY < thumbY || mouseY > thumbY + thumbH) {
+            float ratio = travel > 0.0F
+                    ? Math.max(0.0F, Math.min(1.0F, ((float) mouseY - y - thumbH * 0.5F) / travel))
+                    : 0.0F;
+            firstFrameSnap = false;
+            scrollY = scrollTarget = clamp(ratio * maxScroll);
+            animActive = false;
+            followBottom = bottomAnchor && scrollTarget >= maxScroll - BOTTOM_TOLERANCE;
         }
+        dragging = true;
+        dragStartY = (float) mouseY;
+        dragStartScroll = scrollY;
         return true;
     }
 
@@ -200,32 +206,31 @@ public final class ScrollController {
         return dragging;
     }
 
-    /** 绘制滚动条：鼠标靠近列表右侧或拖拽时淡入、变粗，不需要时淡出。 */
+    /** 绘制滚动条：有溢出时常驻浅色可读，靠近或拖拽时加粗变亮。 */
     public void drawBar(Canvas canvas, float x, float y, float w, float h, float mouseX, float mouseY, float dtMs) {
         boolean inside = mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h;
         boolean near = overBar(mouseX, mouseY, x, y, w, h);
-        barAlpha = Motion.approach(barAlpha, maxScroll > 0.0F && (inside || dragging || animActive) ? 1.0F : 0.0F,
-                dtMs, 90.0F);
+        float targetAlpha = maxScroll > 0.0F ? ((inside || dragging || animActive) ? 1.0F : IDLE_ALPHA) : 0.0F;
+        barAlpha = Motion.approach(barAlpha, targetAlpha, dtMs, 90.0F);
         barEmphasis = Motion.approach(barEmphasis, near || dragging ? 1.0F : 0.0F, dtMs, Motion.HOVER_MS);
-        if (barAlpha <= 0.01F || maxScroll <= 0.0F) {
+        if (barAlpha <= 0.01F || maxScroll <= 0.0F || h <= 0.0F) {
             return;
         }
         float barW = BAR_WIDTH + (BAR_WIDTH_HOVER - BAR_WIDTH) * barEmphasis;
         float trackX = x + w - barW - BAR_INSET;
         float thumbH = thumbHeight(h);
-        float thumbY = y + (h - thumbH) * (scrollY / maxScroll);
+        float travel = Math.max(0.0F, h - thumbH);
+        float thumbY = y + travel * (scrollY / maxScroll);
         int alpha = Math.round(255 * barAlpha);
-        int track = withAlpha(IOStyle.HAIR, Math.round(alpha * 0.6F * barEmphasis));
+        int track = withAlpha(IOStyle.HAIR, Math.round(alpha * (0.18F + 0.48F * barEmphasis)));
         int thumb = withAlpha(SkiaDraw.lerpColor(IOStyle.TEXT_3, IOStyle.TEXT_2, barEmphasis), alpha);
-        if (barEmphasis > 0.01F) {
-            SkiaDraw.drawRoundedRect(canvas, trackX, y, barW, h, barW / 2, track);
-        }
+        SkiaDraw.drawRoundedRect(canvas, trackX, y, barW, h, barW / 2, track);
         SkiaDraw.drawRoundedRect(canvas, trackX, thumbY, barW, thumbH, barW / 2, thumb);
     }
 
     private float thumbHeight(float h) {
         float ratio = Math.min(1.0F, h / (h + maxScroll));
-        return Math.max(THUMB_MIN, h * ratio);
+        return Math.min(h, Math.max(THUMB_MIN, h * ratio));
     }
 
     private void animateTo(float target, long ms, long now) {

@@ -198,23 +198,47 @@ public class AvatarScreen extends SkiaDialog {
 
     private final cn.autoforged.module_shop.client.ui.widget.ScrollController skScroll =
             new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skSearch;
+    private String skQuery = "";
+
+    @Override
+    protected void initSkia() {
+        this.skSearch = field(40, Component.translatable("gui.module_shop.search.placeholder").getString())
+                .clearable(true);
+        this.skSearch.editBox().setValue(this.skQuery);
+        this.skSearch.onChange(v -> {
+            this.skQuery = v == null ? "" : v;
+            this.skScroll.scrollTo(0, false);
+        });
+    }
 
     @Override
     protected void paint(io.github.humbleui.skija.Canvas c) {
-        float w = 250.0F;
+        float w = 264.0F;
         float rowH = 28.0F;
-        float listH = rowH * 6;
-        float h = HEADER_H + 8 + listH + 8 + 20 + PAD;
+        float listH = rowH * 5;
+        float h = HEADER_H + 8 + 18 + 6 + listH + 8 + 20 + PAD;
         float x = Math.round((this.width - w) / 2.0F);
         float y = Math.round((this.height - h) / 2.0F);
         float innerX = x + PAD;
         float innerW = w - PAD * 2;
         panel(c, x, y, w, h, this.title.getString());
-        List<ClientShopData.StallPlayer> players = ClientShopData.stallPlayers;
-        float listY = y + HEADER_H + 8;
+        if (this.skSearch != null) {
+            this.skSearch.bounds(innerX, y + HEADER_H + 6, innerW, 17);
+        }
+        List<ClientShopData.StallPlayer> allPlayers = ClientShopData.stallPlayers;
+        List<ClientShopData.StallPlayer> players = new ArrayList<>();
+        for (ClientShopData.StallPlayer p : allPlayers) {
+            if (cn.autoforged.module_shop.client.screen.shop.PageKit.matchesQuery(this.skQuery, p.name)) {
+                players.add(p);
+            }
+        }
+        float listY = y + HEADER_H + 28;
         if (players.isEmpty()) {
-            center(c, Component.translatable("gui.module_shop.avatar_empty").getString(), innerX, listY + listH / 2,
-                    innerW, IOStyle.TEXT_2);
+            String emptyMsg = allPlayers.isEmpty()
+                    ? Component.translatable("gui.module_shop.avatar_empty").getString()
+                    : Component.translatable("gui.module_shop.search.empty").getString();
+            center(c, emptyMsg, innerX, listY + listH / 2, innerW, IOStyle.TEXT_2);
         } else {
             float oy = beginList(c, this.skScroll, innerX, listY, innerW, listH, players.size() * rowH);
             for (int i = 0; i < players.size(); i++) {
@@ -223,7 +247,7 @@ public class AvatarScreen extends SkiaDialog {
                     continue;
                 }
                 ClientShopData.StallPlayer p = players.get(i);
-                float rw = innerW - 8;
+                float rw = innerW - 10;
                 float hv = hover("row" + i, innerX, ry, rw, rowH - 3);
                 cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX, ry, rw, rowH - 3, 3,
                         cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.CARD, IOStyle.GRAY_BTN_HOVER, hv));
@@ -233,10 +257,10 @@ public class AvatarScreen extends SkiaDialog {
                 final float hx = innerX + 5;
                 final float hy = ry + (rowH - 3 - 16) / 2;
                 this.items.addCustom(hx, hy, 16, 16, (g, font) -> Skins.drawHead(g, uuid, (int) hx, (int) hy, 16));
-                small(c, "#" + (i + 1), innerX + 26, ry + (rowH - 3) / 2, 20, IOStyle.ORANGE);
-                text(c, p.name, innerX + 46, ry + 8, rw - 54, IOStyle.TEXT);
-                small(c, Component.translatable("gui.module_shop.avatar_items", p.count).getString(), innerX + 46,
-                        ry + 18, rw - 54, IOStyle.TEXT_2);
+                small(c, "#" + (i + 1), innerX + 26, ry + (rowH - 3) / 2, 22, IOStyle.ORANGE);
+                text(c, p.name, innerX + 48, ry + 8, rw - 56, IOStyle.TEXT);
+                small(c, Component.translatable("gui.module_shop.avatar_items", p.count).getString(), innerX + 48,
+                        ry + 18, rw - 56, IOStyle.TEXT_2);
                 right(c, "›", innerX, ry + (rowH - 3) / 2, rw - 8,
                         cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.TEXT_3, IOStyle.BLUE, hv));
                 hit(innerX, ry, rw, rowH - 3, () -> openStall(uuid), null);

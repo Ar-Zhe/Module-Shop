@@ -1,11 +1,17 @@
 package cn.autoforged.module_shop.client;
 
+import cn.autoforged.module_shop.client.screen.ShopScreen;
+import cn.autoforged.module_shop.client.screen.shop.PageKit;
+import cn.autoforged.module_shop.data.PriceSpec;
+import cn.autoforged.module_shop.data.StallEntry;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
 import cn.autoforged.module_shop.shop.auction.AuctionCategory;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import net.minecraft.core.HolderLookup;
@@ -28,11 +34,22 @@ public final class StallClient {
         public long id;
         public ItemStack stack = ItemStack.EMPTY;
         public long price;
+        public PriceSpec priceSpec = PriceSpec.ZERO;
         public int stock;
         public int sold;
         public boolean own;
         public AuctionCategory category;
         public String searchText;
+
+        public PriceSpec resolvePriceSpec() {
+            if (priceSpec == null) {
+                return PriceSpec.star(price);
+            }
+            if (priceSpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && priceSpec.starPrice != price) {
+                return PriceSpec.star(price);
+            }
+            return priceSpec;
+        }
     }
 
     public static List<Item> market = new ArrayList<>();
@@ -121,7 +138,8 @@ public final class StallClient {
                         it.ownerName = c.getString("ownerName");
                         it.id = c.getLong("id");
                         it.stack = ItemStack.parseOptional(regs, c.getCompound("item"));
-                        it.price = c.getLong("price");
+                        it.priceSpec = PriceSpec.readFromParent(c, "priceSpec", "price");
+                        it.price = it.priceSpec.supportsStar() ? it.priceSpec.starPrice : c.getLong("price");
                         it.stock = c.getInt("stock");
                         it.sold = c.getInt("sold");
                         it.own = c.getBoolean("own");
@@ -146,16 +164,55 @@ public final class StallClient {
 
     private static String searchText(Item it) {
         if (it.searchText == null) {
-            StringBuilder sb = new StringBuilder();
-            if (!it.stack.isEmpty()) {
-                sb.append(it.stack.getHoverName().getString()).append(' ');
-                var id = BuiltInRegistries.ITEM.getKey(it.stack.getItem());
-                sb.append(id).append(' ').append(id.getPath().replace('_', ' ')).append(' ');
-            }
-            sb.append(it.ownerName);
-            it.searchText = sb.toString().toLowerCase(Locale.ROOT);
+            it.searchText = buildItemSearchText(it.stack, it.ownerName);
         }
         return it.searchText;
+    }
+
+    private static String buildItemSearchText(ItemStack stack, String ownerName) {
+        StringBuilder sb = new StringBuilder();
+        if (stack != null && !stack.isEmpty()) {
+            sb.append(stack.getHoverName().getString()).append(' ');
+            var id = BuiltInRegistries.ITEM.getKey(stack.getItem());
+            sb.append(id).append(' ').append(id.getPath().replace('_', ' ')).append(' ');
+            sb.append(ShopScreen.mallModName(id.getNamespace())).append(' ');
+            sb.append(ModNames.rawDisplayName(id.getNamespace())).append(' ');
+            stack.getEnchantments().keySet().forEach(h -> sb.append(
+                    net.minecraft.world.item.enchantment.Enchantment.getFullname(h, 1).getString()).append(' '));
+            stack.getOrDefault(net.minecraft.core.component.DataComponents.STORED_ENCHANTMENTS,
+                    net.minecraft.world.item.enchantment.ItemEnchantments.EMPTY).keySet().forEach(h -> sb.append(
+                    net.minecraft.world.item.enchantment.Enchantment.getFullname(h, 1).getString()).append(' '));
+        }
+        if (ownerName != null && !ownerName.isEmpty()) {
+            sb.append(ownerName);
+        }
+        return sb.toString().toLowerCase(Locale.ROOT);
+    }
+
+    public static boolean matches(Item it, String query) {
+        if (query == null || query.isBlank()) {
+            return true;
+        }
+        String hay = searchText(it);
+        for (String word : query.toLowerCase(Locale.ROOT).trim().split("\\s+")) {
+            if (!word.isEmpty() && !hay.contains(word) && (it.stack.isEmpty() || !PageKit.matchesItemQuery(it.stack, word))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public static boolean matchesEntry(StallEntry entry, String query) {
+        if (query == null || query.isBlank()) {
+            return true;
+        }
+        String hay = buildItemSearchText(entry.stack, "");
+        for (String word : query.toLowerCase(Locale.ROOT).trim().split("\\s+")) {
+            if (!word.isEmpty() && !hay.contains(word) && (entry.stack.isEmpty() || !PageKit.matchesItemQuery(entry.stack, word))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public static AuctionCategory categoryOf(Item it) {
@@ -165,35 +222,57 @@ public final class StallClient {
         return it.category;
     }
 
+    /** 按当前搜索词统计各分类匹配条数（忽略当前分类筛选），供左侧分类栏实时收敛。 */
+    public static Map<AuctionCategory, Integer> searchCategoryCounts() {
+        Map<AuctionCategory, Integer> counts = new EnumMap<>(AuctionCategory.class);
+        int total = 0;
+        for (Item it : market) {
+            if (!matches(it, search)) {
+                continue;
+            }
+            total++;
+            counts.merge(categoryOf(it), 1, Integer::sum);
+        }
+        counts.put(AuctionCategory.ALL, total);
+        return counts;
+    }
+
     public static List<Item> filtered() {
         List<Item> out = new ArrayList<>();
-        String q = search == null ? "" : search.trim().toLowerCase(Locale.ROOT);
         for (Item it : market) {
             if (category != AuctionCategory.ALL && categoryOf(it) != category) {
                 continue;
             }
-            if (!q.isEmpty()) {
-                String hay = searchText(it);
-                boolean ok = true;
-                for (String word : q.split("\\s+")) {
-                    if (!hay.contains(word)) {
-                        ok = false;
-                        break;
-                    }
-                }
-                if (!ok) {
-                    continue;
-                }
+            if (!matches(it, search)) {
+                continue;
             }
             out.add(it);
         }
         Comparator<Item> cmp = switch (sort) {
-            case 1 -> Comparator.comparingLong((Item i) -> i.price);
-            case 2 -> Comparator.comparingLong((Item i) -> i.price).reversed();
+            case 1 -> Comparator.comparingInt(StallClient::sortLedgerGroup)
+                    .thenComparingLong(StallClient::sortLedgerAmount);
+            case 2 -> Comparator.comparingInt(StallClient::sortLedgerGroup)
+                    .thenComparing(Comparator.comparingLong(StallClient::sortLedgerAmount).reversed());
             default -> Comparator.comparingLong((Item i) -> i.id).reversed(); // id 是上架顺序号，越大越新
         };
         out.sort(cmp.thenComparingLong(i -> i.id));
         return out;
+    }
+
+    private static int sortLedgerGroup(Item item) {
+        return item.resolvePriceSpec().supportsPhys() ? 1 : 0;
+    }
+
+    private static long sortLedgerAmount(Item item) {
+        PriceSpec spec = item.resolvePriceSpec();
+        if (!spec.supportsPhys()) {
+            return spec.starPrice;
+        }
+        ClientHomeCurrencyState.PhysTierView tier = ClientHomeCurrencyState.findTier(spec.physTierKey);
+        if (tier != null && tier.value > 0L && spec.physCount <= Long.MAX_VALUE / tier.value) {
+            return spec.physCount * tier.value;
+        }
+        return spec.physCount;
     }
 
     public static String sortKey(int s) {

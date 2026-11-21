@@ -8,8 +8,11 @@ import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
 import cn.autoforged.module_shop.client.ui.v2.CardGrid;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
 import cn.autoforged.module_shop.client.ui.v2.V2;
+import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
 import cn.autoforged.module_shop.data.DailyShopEntry;
+import cn.autoforged.module_shop.data.PriceSpec;
 import io.github.humbleui.skija.Canvas;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,7 +31,9 @@ public final class DailyPage implements ShopPage {
     private static final CardGrid GRID = new CardGrid();
     private static float[] flipAnim = new float[0];
     private static int filter;
+    private static String query = "";
 
+    private SkiaTextField search;
     private List<Integer> shown = new ArrayList<>();
     private float[][] segRects = new float[0][2];
     private float segY;
@@ -44,8 +49,39 @@ public final class DailyPage implements ShopPage {
         return Component.translatable(key, args).getString();
     }
 
+    @Override
+    public void init(ShopHost host) {
+        search = new SkiaTextField(host.screen(), host.font(), 48)
+                .placeholder(tr("gui.module_shop.search.placeholder"))
+                .clearable(true)
+                .fontSize(V2.FS_S)
+                .onChange(t -> {
+                    query = t == null ? "" : t;
+                    TABLE.scrollToTop();
+                    GRID.scrollToTop();
+                });
+        search.setValue(query);
+        host.registerInput(search.editBox());
+    }
+
     private static boolean flipped(int index) {
         return ClientShopData.dailyFlipped.contains(index);
+    }
+
+    private static boolean matchesEntry(DailyShopEntry e, boolean fl) {
+        if (query == null || query.isBlank()) {
+            return true;
+        }
+        String rarity = Component.translatable(e.rarity.translationKey()).getString();
+        if (!fl) {
+            return PageKit.matchesQuery(query, rarity, "???");
+        }
+        for (String word : query.trim().split("\\s+")) {
+            if (!word.isEmpty() && !PageKit.matchesItemQuery(e.stack, word) && !PageKit.matchesQuery(word, rarity)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override
@@ -58,7 +94,7 @@ public final class DailyPage implements ShopPage {
             if (fl) {
                 open++;
             }
-            if (filter == 0 || (filter == 1 && fl) || (filter == 2 && !fl)) {
+            if ((filter == 0 || (filter == 1 && fl) || (filter == 2 && !fl)) && matchesEntry(list.get(i), fl)) {
                 shown.add(i);
             }
         }
@@ -94,15 +130,16 @@ public final class DailyPage implements ShopPage {
         String rl = tr("gui.module_shop.refresh_daily");
         float rw = V2.buttonWidth(rl);
         right -= rw;
-        boolean canRefresh = ClientShopData.refreshCost >= 0L && all > 0;
+        boolean canRefresh = ClientShopData.hasRefreshCost() && all > 0;
         boolean hr = over(f, right, segY, rw, V2.CTRL);
         V2.button(c, rl, canRefresh ? V2.Btn.NORMAL : V2.Btn.DISABLED, right, segY, rw, V2.CTRL, hr ? 1 : 0);
         refreshRect = canRefresh ? new float[]{right, segY, rw, V2.CTRL} : null;
+        String refreshCostStr = PriceDisplay.formatPlain(ClientShopData.resolveRefreshSpec());
         if (hr) {
             int left = Math.max(0, ClientShopData.refreshMax - ClientShopData.refreshUsed);
             f.host().textTooltip(canRefresh
                     ? Component.translatable("gui.module_shop.refresh_tooltip",
-                    ClientShopData.money(ClientShopData.refreshCost), left, ClientShopData.refreshMax)
+                    refreshCostStr, left, ClientShopData.refreshMax)
                     : Component.translatable("gui.module_shop.refresh_tooltip_none", ClientShopData.refreshMax));
         }
         String fl = tr("gui.module_shop.v2.daily.flip_all");
@@ -113,16 +150,37 @@ public final class DailyPage implements ShopPage {
                 over(f, right, segY, fw, V2.CTRL) ? 1 : 0);
         flipAllRect = canFlip ? new float[]{right, segY, fw, V2.CTRL} : null;
 
-        String info = ClientShopData.refreshCost >= 0L
+        String info = ClientShopData.hasRefreshCost()
                 ? tr("gui.module_shop.v2.daily.refresh_info", ClientShopData.refreshUsed, ClientShopData.refreshMax,
-                ClientShopData.money(ClientShopData.refreshCost))
+                refreshCostStr)
                 : tr("gui.module_shop.v2.daily.refresh_none", ClientShopData.refreshMax);
-        float segEnd = segRects[segRects.length - 1][0] + segRects[segRects.length - 1][1] + 10;
-        V2.text(c, info, V2.FS_XS, IOStyle.TEXT_2, segEnd, cy, right - 8 - segEnd, Text.Align.RIGHT);
+        float segEnd = segRects[segRects.length - 1][0] + segRects[segRects.length - 1][1] + 8;
+        float avail = right - 8 - segEnd;
+        float afterSearch = segEnd;
+        if (search != null) {
+            if (avail >= 48.0F) {
+                float sw = Math.min(130.0F, Math.max(48.0F, avail >= 210.0F ? 110.0F : avail));
+                search.visible(true).bounds(segEnd, segY, sw, V2.CTRL);
+                search.render(c, f.mouseX(), f.mouseY(), f.dtMs());
+                afterSearch = segEnd + sw + 8.0F;
+            } else {
+                search.visible(false);
+            }
+        }
+        if (right - 8 - afterSearch >= 65.0F) {
+            V2.text(c, info, V2.FS_XS, IOStyle.TEXT_2, afterSearch, cy, right - 8 - afterSearch, Text.Align.RIGHT);
+        }
     }
 
     private void drawTable(Canvas c, PageFrame f, float x, float y, float w, float h) {
-        float[][] cols = V2.columns(x, w, 10, 6, 14, 0, 56, 64, 52, 96, 40);
+        float actW = Math.max(40.0F, Math.max(V2.buttonWidth(tr("gui.module_shop.v2.daily.flip")),
+                Math.max(V2.buttonWidth(tr("gui.module_shop.v2.buy")), V2.buttonWidth(tr("gui.module_shop.v2.daily.done")))));
+        float gap = 5.0F;
+        float[][] baseCols = V2.columns(x, w - actW - gap, 10, gap, 14, 0, 46, 66, 40, 80);
+        float[][] cols = new float[7][2];
+        System.arraycopy(baseCols, 0, cols, 0, 6);
+        cols[6][0] = x + w - 10 - actW;
+        cols[6][1] = actW;
         String[] heads = {"", tr("gui.module_shop.v2.col.item"), tr("gui.module_shop.v2.col.rarity"),
                 tr("gui.module_shop.v2.col.price"), tr("gui.module_shop.v2.col.left"), tr("gui.module_shop.v2.col.bought"), ""};
         Text.Align[] al = {Text.Align.LEFT, Text.Align.LEFT, Text.Align.LEFT, Text.Align.RIGHT, Text.Align.RIGHT,
@@ -160,15 +218,17 @@ public final class DailyPage implements ShopPage {
             V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(e.stack), V2.FS, left > 0 ? IOStyle.TEXT : IOStyle.TEXT_3,
                     cols[1][0], cy, cols[1][1], Text.Align.LEFT);
             V2.bold(cv, rarity, V2.FS_S, rc, cols[2][0], cy, cols[2][1], Text.Align.LEFT);
-            V2.bold(cv, V2.money(e.price), V2.FS, left > 0 ? IOStyle.ORANGE : IOStyle.TEXT_3, cols[3][0], cy, cols[3][1],
-                    Text.Align.RIGHT);
+            PriceSpec spec = e.resolvePriceSpec();
+            boolean can = PriceDisplay.canAfford(spec, 1);
+            PriceDisplay.drawCell(cv, f.host().items(), spec, cols[3][0], cy, cols[3][1], Text.Align.RIGHT,
+                    left > 0 ? (can ? IOStyle.ORANGE : IOStyle.RED) : IOStyle.TEXT_3, left <= 0);
             V2.text(cv, String.valueOf(left), V2.FS, left > 0 ? IOStyle.TEXT : IOStyle.RED, cols[4][0], cy, cols[4][1],
                     Text.Align.RIGHT);
-            float barW = 30;
+            float barW = Math.min(28.0F, cols[5][1] * 0.34F);
             float pct = e.limit <= 0 ? 1 : e.bought / (float) e.limit;
             V2.bar(cv, cols[5][0] + cols[5][1] - barW, cy, barW, pct, left > 0 ? IOStyle.BLUE : IOStyle.TEXT_3);
-            V2.text(cv, e.bought + " / " + e.limit, V2.FS_S, IOStyle.TEXT_2, cols[5][0], cy, cols[5][1] - barW - 5,
-                    Text.Align.RIGHT);
+            V2.text(cv, e.bought + " / " + e.limit, V2.FS_S, IOStyle.TEXT_2, cols[5][0], cy,
+                    Math.max(12.0F, cols[5][1] - barW - 4), Text.Align.RIGHT);
             if (left > 0) {
                 TABLE.button(cv, row, "buy", tr("gui.module_shop.v2.buy"), V2.Btn.NORMAL, right, ry, hover);
             } else {
@@ -240,9 +300,15 @@ public final class DailyPage implements ShopPage {
 
                 V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(e.stack), V2.FS_S, left > 0 ? IOStyle.TEXT : IOStyle.TEXT_3,
                         cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
-                String priceStr = left > 0 ? V2.money(e.price) : tr("gui.module_shop.v2.daily.done");
-                V2.bold(cv, priceStr, V2.FS, left > 0 ? IOStyle.ORANGE : IOStyle.TEXT_3,
-                        cx + 3, cy + 44.5F, cw - 6, Text.Align.CENTER);
+                if (left > 0) {
+                    PriceSpec spec = e.resolvePriceSpec();
+                    boolean can = PriceDisplay.canAfford(spec, 1);
+                    PriceDisplay.drawCard(cv, f.host().items(), spec, cx + 3, cy + 44.5F, cx + cw * 0.5F, cw - 6, sx,
+                            can ? IOStyle.ORANGE : IOStyle.RED, false);
+                } else {
+                    V2.bold(cv, tr("gui.module_shop.v2.daily.done"), V2.FS, IOStyle.TEXT_3,
+                            cx + 3, cy + 44.5F, cw - 6, Text.Align.CENTER);
+                }
                 float pct = e.limit <= 0 ? 1.0F : e.bought / (float) e.limit;
                 V2.bar(cv, cx + 5, cy + 50.5F, cw - 10, pct, left > 0 ? IOStyle.BLUE : IOStyle.TEXT_3);
             } finally {
@@ -257,6 +323,12 @@ public final class DailyPage implements ShopPage {
 
     @Override
     public boolean mouseClicked(PageFrame f, double mx, double my, int button) {
+        if (search != null && search.isVisible() && search.mouseClicked(mx, my, button)) {
+            return true;
+        }
+        if (search != null && search.isFocused()) {
+            search.blur();
+        }
         if (button == 0) {
             for (int i = 0; i < segRects.length; i++) {
                 if (mx >= segRects[i][0] && mx < segRects[i][0] + segRects[i][1] && my >= segY && my < segY + V2.CTRL) {
@@ -269,7 +341,9 @@ public final class DailyPage implements ShopPage {
             }
             if (in(refreshRect, mx, my)) {
                 ClickSound.play();
-                f.host().action("refresh_daily_shop", null);
+                CompoundTag extra = new CompoundTag();
+                extra.putString("pay_channel", PriceDisplay.resolveBuyChannel(ClientShopData.resolveRefreshSpec(), 1));
+                f.host().action("refresh_daily_shop", extra);
                 return true;
             }
             if (in(flipAllRect, mx, my)) {
@@ -303,6 +377,10 @@ public final class DailyPage implements ShopPage {
                 ClickSound.play();
                 CompoundTag extra = new CompoundTag();
                 extra.putInt("index", index);
+                if (flipped(index)) {
+                    extra.putString("pay_channel",
+                            PriceDisplay.resolveBuyChannel(ClientShopData.dailyShop.get(index).resolvePriceSpec(), 1));
+                }
                 f.host().action(flipped(index) ? "buy_shop" : "flip_shop", extra);
             }
             return true;
@@ -318,17 +396,34 @@ public final class DailyPage implements ShopPage {
         ClickSound.play();
         CompoundTag extra = new CompoundTag();
         extra.putInt("index", index);
+        if (flipped(index)) {
+            extra.putString("pay_channel",
+                    PriceDisplay.resolveBuyChannel(ClientShopData.dailyShop.get(index).resolvePriceSpec(), 1));
+        }
         f.host().action(flipped(index) ? "buy_shop" : "flip_shop", extra);
         return true;
     }
 
     @Override
+    public void clickedOutside() {
+        if (search != null && search.isFocused()) {
+            search.blur();
+        }
+    }
+
+    @Override
     public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
+        if (search != null) {
+            search.mouseReleased(mx, my, button);
+        }
         return UIViewMode.isGrid() ? GRID.releaseBar() : TABLE.releaseBar();
     }
 
     @Override
     public boolean mouseDragged(PageFrame f, double mx, double my, int button, double dx, double dy) {
+        if (search != null && search.mouseDragged(mx, my, button, dx, dy)) {
+            return true;
+        }
         return UIViewMode.isGrid() ? GRID.dragBar(my) : TABLE.dragBar(my);
     }
 
@@ -340,6 +435,9 @@ public final class DailyPage implements ShopPage {
 
     @Override
     public void cancelInput() {
+        if (search != null) {
+            search.visible(false);
+        }
         TABLE.releaseBar();
         GRID.releaseBar();
     }

@@ -11,6 +11,7 @@ import net.minecraft.world.item.ItemStack;
 public final class DailyBuybackEntry {
     public ItemStack stack = ItemStack.EMPTY;
     public long price;
+    public PriceSpec priceSpec = PriceSpec.ZERO;
     public Rarity rarity = Rarity.COMMON;
     public int sold;
     /** 需求 6/9：该物品当日的可收购数量上限。 */
@@ -20,8 +21,27 @@ public final class DailyBuybackEntry {
     }
 
     public DailyBuybackEntry(ItemStack stack, long price) {
+        this(stack, PriceSpec.star(price));
+    }
+
+    public DailyBuybackEntry(ItemStack stack, PriceSpec priceSpec) {
         this.stack = stack;
-        this.price = price;
+        setPriceSpec(priceSpec);
+    }
+
+    public void setPriceSpec(PriceSpec spec) {
+        this.priceSpec = spec == null ? PriceSpec.ZERO : spec;
+        this.price = this.priceSpec.supportsStar() ? this.priceSpec.starPrice : 0L;
+    }
+
+    public PriceSpec resolvePriceSpec() {
+        if (priceSpec == null) {
+            return PriceSpec.star(price);
+        }
+        if (priceSpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && priceSpec.starPrice != price) {
+            return PriceSpec.star(price);
+        }
+        return priceSpec;
     }
 
     public int remaining() {
@@ -30,7 +50,7 @@ public final class DailyBuybackEntry {
 
     public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
-        tag.putLong("price", price);
+        resolvePriceSpec().writeToParent(tag, "priceSpec", "price");
         tag.putString("rarity", rarity.id());
         tag.putInt("sold", sold);
         tag.putInt("limit", limit);
@@ -40,7 +60,7 @@ public final class DailyBuybackEntry {
     public static DailyBuybackEntry load(CompoundTag tag, HolderLookup.Provider registries) {
         DailyBuybackEntry entry = new DailyBuybackEntry();
         entry.stack = ShopNbt.loadStack(tag, registries);
-        entry.price = tag.getLong("price");
+        entry.setPriceSpec(PriceSpec.readFromParent(tag, "priceSpec", "price"));
         entry.rarity = Rarity.byId(tag.getString("rarity"));
         entry.sold = tag.getInt("sold");
         entry.limit = tag.contains("limit") ? tag.getInt("limit")

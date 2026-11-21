@@ -4,8 +4,11 @@ import cn.autoforged.module_shop.client.ClientShopData;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
+import javax.annotation.Nullable;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.client.gui.screens.Screen;
 
 /**
@@ -85,13 +88,33 @@ public final class Nav {
         }
     }
 
+    /** 判断当前界面是否为原版聊天框或 AtomChat 等自定义聊天输入界面（不应阻塞 /shop 打开，也不应压入返回栈）。 */
+    public static boolean isChatScreen(@Nullable Screen screen) {
+        if (screen == null) {
+            return false;
+        }
+        if (screen instanceof ChatScreen) {
+            return true;
+        }
+        String cls = screen.getClass().getName().toLowerCase(Locale.ROOT);
+        return (cls.contains("atom") && cls.contains("chat"))
+                || cls.contains("atomchat")
+                || cls.endsWith("chatscreen");
+    }
+
     private static void push(Screen next) {
         Minecraft mc = Minecraft.getInstance();
         Screen current = mc.screen;
         if (next instanceof ShopScreen) {
             root = next;
+            // 从聊天界面（含 AtomChat）敲 /shop /shop admin 拉起主商店时，清栈且绝不把聊天界面压栈。
+            if (isChatScreen(current)) {
+                STACK.clear();
+                mc.setScreen(next);
+                return;
+            }
         }
-        if (current != null && current != next) {
+        if (current != null && current != next && !isChatScreen(current)) {
             // 同一类型的旧记录先清掉：返回时不会又跳回刚关掉的那个界面。
             STACK.removeIf(s -> s == current || s.getClass() == current.getClass());
             STACK.push(current);

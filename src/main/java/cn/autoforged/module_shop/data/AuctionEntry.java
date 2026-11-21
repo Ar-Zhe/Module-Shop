@@ -69,6 +69,10 @@ public final class AuctionEntry {
     public int extensions;
     /** 当前托管的出价资金。 */
     public long escrow;
+    /** 当前托管资金中来自实体货币的部分（旧混扣时代遗留兼容字段；新双独立账本统一由 physTierKey 标识整场币种）。 */
+    public long physicalEscrow;
+    /** 非空时表示本场拍卖使用该实体货币档位结算（起拍/当前价/一口价/加价步长/托管/手续费均以该档位枚数计）。 */
+    public String physTierKey = "";
     /** 上架时实际收取的手续费（记录用，不退）。 */
     public long listingFee;
     /** 交易唯一标识（上架时生成），流水与审计都带它。 */
@@ -113,6 +117,17 @@ public final class AuctionEntry {
         return ACTIVE.equals(status);
     }
 
+    public boolean isPhysical() {
+        return physTierKey != null && !physTierKey.isBlank();
+    }
+
+    public PriceSpec specOf(long amount) {
+        if (amount <= 0L) {
+            return PriceSpec.ZERO;
+        }
+        return isPhysical() ? PriceSpec.phys(physTierKey, amount) : PriceSpec.star(amount);
+    }
+
     public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
         if ((stack == null || stack.isEmpty()) && rawItem != null) {
@@ -140,6 +155,12 @@ public final class AuctionEntry {
         tag.putLong("durationMs", durationMs);
         tag.putInt("extensions", extensions);
         tag.putLong("escrow", escrow);
+        if (physicalEscrow > 0L) {
+            tag.putLong("physicalEscrow", physicalEscrow);
+        }
+        if (physTierKey != null && !physTierKey.isBlank()) {
+            tag.putString("physTier", physTierKey.trim());
+        }
         tag.putLong("listingFee", listingFee);
         tag.putString("txId", txId == null ? "" : txId);
         ListTag bidList = new ListTag();
@@ -213,6 +234,8 @@ public final class AuctionEntry {
         // 旧版本出价即扣款、退款在超价时完成，所以托管额 = 当前价（有人出价时）。
         entry.escrow = tag.contains("escrow") ? Math.max(0L, tag.getLong("escrow"))
                 : (entry.topBidder != null && entry.active() ? entry.currentBid : 0L);
+        entry.physicalEscrow = Math.min(entry.escrow, Math.max(0L, tag.getLong("physicalEscrow")));
+        entry.physTierKey = tag.getString("physTier").trim();
         entry.listingFee = Math.max(0L, tag.getLong("listingFee"));
         entry.txId = tag.getString("txId");
         ListTag bidList = tag.getList("bids", Tag.TAG_COMPOUND);

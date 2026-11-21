@@ -54,21 +54,26 @@ public final class PlayerPickerPage implements ShopPage {
     public void init(ShopHost host) {
         String value = search == null ? SAVED_QUERY.getOrDefault(transfer, "") : search.value();
         search = new SkiaTextField(host.screen(), host.font(), 32)
-                .placeholder(tr("gui.module_shop.trade.search_hint")).fontSize(V2.FS_S)
-                .onChange(text -> SAVED_QUERY.put(transfer, text));
+                .placeholder(tr(transfer ? "gui.module_shop.transfer.search_hint" : "gui.module_shop.trade.search_hint"))
+                .clearable(true)
+                .fontSize(V2.FS_S)
+                .onChange(text -> {
+                    SAVED_QUERY.put(transfer, text == null ? "" : text);
+                    table().scrollToTop();
+                });
         search.setValue(value);
         host.registerInput(search.editBox());
     }
 
     private List<ClientShopData.OnlinePlayer> players() {
         String self = ClientShopData.playerName;
-        String q = search == null ? "" : search.value().trim().toLowerCase(Locale.ROOT);
+        String q = search == null ? "" : search.value();
         List<ClientShopData.OnlinePlayer> out = new ArrayList<>();
         for (ClientShopData.OnlinePlayer p : ClientShopData.onlinePlayers) {
             if (p.name.equals(self)) {
                 continue;
             }
-            if (!q.isEmpty() && !p.name.toLowerCase(Locale.ROOT).contains(q)) {
+            if (!PageKit.matchesQuery(q, p.name)) {
                 continue;
             }
             out.add(p);
@@ -106,15 +111,30 @@ public final class PlayerPickerPage implements ShopPage {
         Draw.hairline(c, x, f.y() + V2.BAR - 0.5F, f.w(), IOStyle.BORDER_DIM);
         float tw = V2.bold(c, tr(transfer ? "tab.module_shop.transfer" : "tab.module_shop.trade"), V2.FS_T, IOStyle.TEXT, x + 8, cy,
                 90, Text.Align.LEFT);
-        search.visible(true).bounds(x + 8 + tw + 10, by, 160, V2.CTRL);
-        search.render(c, f.mouseX(), f.mouseY(), f.dtMs());
-        shown = players();
-        V2.text(c, tr("gui.module_shop.v2.trade.online", shown.size()), V2.FS_XS, IOStyle.TEXT_2, x + 8 + tw + 178, cy, 120,
-                Text.Align.LEFT);
+        float right = x + f.w() - 8;
         if (!transfer) {
             String rl = tr("gui.module_shop.v2.trade.requests", ClientShopData.tradeRequests.size());
             float rw = V2.buttonWidth(rl);
-            btn(c, f, rl, V2.Btn.NORMAL, x + f.w() - 8 - rw, by, () -> f.host().action("trade_requests_open", null));
+            right -= rw;
+            btn(c, f, rl, V2.Btn.NORMAL, right, by, () -> f.host().action("trade_requests_open", null));
+            right -= 6;
+        }
+        float sx = x + 8 + tw + 10;
+        float avail = right - sx;
+        float sw = Math.min(160.0F, Math.max(48.0F, avail >= 210.0F ? 140.0F : avail));
+        if (search != null) {
+            if (avail >= 44.0F) {
+                search.visible(true).bounds(sx, by, sw, V2.CTRL);
+                search.render(c, f.mouseX(), f.mouseY(), f.dtMs());
+            } else {
+                search.visible(false);
+            }
+        }
+        shown = players();
+        float afterSearch = sx + sw + 8;
+        if (right - afterSearch >= 55.0F) {
+            V2.text(c, tr("gui.module_shop.v2.trade.online", shown.size()), V2.FS_XS, IOStyle.TEXT_2, afterSearch, cy,
+                    right - afterSearch, Text.Align.LEFT);
         }
         float top = f.y() + V2.BAR;
         // 交易请求条
@@ -142,13 +162,21 @@ public final class PlayerPickerPage implements ShopPage {
         }
         float bottom = f.y() + f.h() - V2.FOOT;
         ListTable table = table();
-        float[][] cols = V2.columns(x, f.w(), 10, 8, 12, 0, 80, 90);
+        float actW = Math.max(56.0F, V2.buttonWidth(tr(transfer ? "gui.module_shop.v2.trade.transfer" : "gui.module_shop.v2.trade.start")));
+        float gap = 6.0F;
+        float[][] baseCols = V2.columns(x, f.w() - actW - gap, 10, gap, 12, 0, 72);
+        float[][] cols = new float[4][2];
+        System.arraycopy(baseCols, 0, cols, 0, 3);
+        cols[3][0] = x + f.w() - 10 - actW;
+        cols[3][1] = actW;
         String[] heads = {"", tr("gui.module_shop.v2.col.player"), tr("gui.module_shop.v2.col.state"), ""};
         Text.Align[] al = {Text.Align.LEFT, Text.Align.LEFT, Text.Align.LEFT, Text.Align.RIGHT};
         table.layout(x, top, f.w(), bottom - top, cols, heads, al, null);
         if (shown.isEmpty()) {
             V2.tableHead(c, x, top, f.w(), cols, heads, al, -1, false);
-            V2.empty(c, tr("gui.module_shop.trade.no_online"), x, top + V2.HEAD, f.w(), bottom - top - V2.HEAD);
+            boolean searching = search != null && !search.value().isBlank();
+            V2.empty(c, tr(searching && ClientShopData.onlinePlayers.size() > 1 ? "gui.module_shop.v2.no_match" : "gui.module_shop.trade.no_online"),
+                    x, top + V2.HEAD, f.w(), bottom - top - V2.HEAD);
         } else {
             table.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), shown.size(), (cv, row, ry, hover) -> {
                 ClientShopData.OnlinePlayer p = shown.get(row);

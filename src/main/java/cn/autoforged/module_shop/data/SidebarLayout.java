@@ -57,9 +57,26 @@ public final class SidebarLayout {
     /** 主标题最大长度（标题行比页签宽，可放 16 个字）。 */
     public static final int MAX_TITLE = 16;
 
+    /** 自定义商店图标的媒体 SHA-256（空 = 使用默认渐变首字方块）。 */
+    private String brandIconId = "";
+
     /** 自定义主标题；没设置返回 {@code null}。 */
     public String shopTitle() {
         return this.shopTitle == null || this.shopTitle.isBlank() ? null : this.shopTitle;
+    }
+
+    /** 自定义图标媒体 ID（空串表示未自定义）。 */
+    public String brandIconId() {
+        return this.brandIconId == null ? "" : this.brandIconId;
+    }
+
+    /** 设置自定义图标媒体 ID（空白 = 恢复默认）。返回是否真的改了。 */
+    public boolean setBrandIconId(String raw) {
+        String text = raw == null ? "" : raw.trim().toLowerCase(java.util.Locale.ROOT);
+        String clean = cn.autoforged.module_shop.shop.media.ShopMediaStore.isValidId(text) ? text : "";
+        String previous = this.brandIconId == null ? "" : this.brandIconId;
+        this.brandIconId = clean;
+        return !clean.equals(previous);
     }
 
     /** 设置主标题；空白 = 恢复默认。返回是否真的改了。 */
@@ -132,13 +149,16 @@ public final class SidebarLayout {
     }
 
     public boolean isEmpty() {
-        return this.order.isEmpty() && this.hidden.isEmpty() && this.names.isEmpty() && this.shopTitle.isBlank();
+        return this.order.isEmpty() && this.hidden.isEmpty() && this.names.isEmpty()
+                && this.shopTitle.isBlank() && this.brandIconId.isBlank();
     }
 
     public void clear() {
         this.order.clear();
         this.hidden.clear();
         this.names.clear();
+        this.shopTitle = "";
+        this.brandIconId = "";
     }
 
     /** 用给定顺序整体替换（去重、去空、截断，服务端也会再过滤一次未知 id）。 */
@@ -204,6 +224,7 @@ public final class SidebarLayout {
         }
         tag.put("names", nameTag);
         tag.putString("title", this.shopTitle == null ? "" : this.shopTitle);
+        tag.putString("brandIconId", this.brandIconId == null ? "" : this.brandIconId);
         return tag;
     }
 
@@ -229,6 +250,7 @@ public final class SidebarLayout {
             layout.setName(id, nameTag.getString(id));
         }
         layout.setShopTitle(tag.getString("title"));
+        layout.setBrandIconId(tag.getString("brandIconId"));
         return layout;
     }
 }
