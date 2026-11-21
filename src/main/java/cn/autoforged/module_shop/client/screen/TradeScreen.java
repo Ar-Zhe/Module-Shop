@@ -132,7 +132,7 @@ public class TradeScreen extends SkiaDialog {
             Bricks.slot(g, x + 6, slotY);
             g.renderItem(stack, x + 6, slotY);
             g.renderItemDecorations(this.font, stack, x + 6, slotY);
-            g.drawString(this.font, stack.getHoverName(), x + 26, slotY + 4, IOStyle.TEXT, false);
+            g.drawString(this.font, net.minecraft.network.chat.Component.literal(cn.autoforged.module_shop.client.ui.ItemNames.display(stack)), x + 26, slotY + 4, IOStyle.TEXT, false);
             if (mouseX >= x + 6 && mouseX < x + 22 && mouseY >= slotY && mouseY < slotY + 16) {
                 g.renderTooltip(this.font, stack, mouseX, mouseY);
             }
@@ -344,7 +344,7 @@ public class TradeScreen extends SkiaDialog {
             float sy = rowY + i * 18;
             cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x + 5, sy, 17, 17, 2, IOStyle.FIELD_BG);
             item(stack, x + 5.5F, sy + 0.5F);
-            text(c, stack.getHoverName().getString(), x + 26, sy + 8.5F, w - 26 - (removable ? 20 : 6), IOStyle.TEXT);
+            text(c, cn.autoforged.module_shop.client.ui.ItemNames.display(stack), x + 26, sy + 8.5F, w - 26 - (removable ? 20 : 6), IOStyle.TEXT);
             if (removable) {
                 final int index = i;
                 float bx = x + w - 16;

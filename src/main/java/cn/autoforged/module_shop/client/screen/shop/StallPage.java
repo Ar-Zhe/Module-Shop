@@ -212,7 +212,7 @@ public final class StallPage implements ShopPage {
                 String mineTag = tr("gui.module_shop.stall.mine_tag");
                 float tagReserve = it.own ? (V2.tagWidth(mineTag) + 4.0F) : 0.0F;
                 float nameMaxW = Math.max(16.0F, cols[1][1] - tagReserve);
-                float nw = V2.text(cv, it.stack.getHoverName().getString(), V2.FS, sold ? IOStyle.TEXT_3 : IOStyle.TEXT, cols[1][0],
+                float nw = V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(it.stack), V2.FS, sold ? IOStyle.TEXT_3 : IOStyle.TEXT, cols[1][0],
                         cy, nameMaxW, Text.Align.LEFT);
                 if (it.own) {
                     V2.tag(cv, mineTag, IOStyle.BLUE, cols[1][0] + Math.min(nw, nameMaxW) + 4, cy);
@@ -281,7 +281,7 @@ public final class StallPage implements ShopPage {
             float iconSize = 16.0F;
             f.host().items().add(it.stack, cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
 
-            V2.text(cv, it.stack.getHoverName().getString(), V2.FS_S, sold ? IOStyle.TEXT_3 : IOStyle.TEXT,
+            V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(it.stack), V2.FS_S, sold ? IOStyle.TEXT_3 : IOStyle.TEXT,
                     cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
             PriceDisplay.drawCard(cv, f.host().items(), spec, cx + 3, cy + 45.0F, cx + cw * 0.5F, cw - 6, 1.0F,
                     sold ? IOStyle.TEXT_3 : IOStyle.ORANGE, sold);
@@ -429,7 +429,7 @@ public final class StallPage implements ShopPage {
                 StallEntry e = stall.get(mineShown.get(row));
                 boolean sold = e.stock <= 0;
                 f.host().items().add(e.stack, cols[0][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, true);
-                V2.text(cv, e.stack.getHoverName().getString(), V2.FS, IOStyle.TEXT, cols[1][0], cy, cols[1][1], Text.Align.LEFT);
+                V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(e.stack), V2.FS, IOStyle.TEXT, cols[1][0], cy, cols[1][1], Text.Align.LEFT);
                 PriceSpec spec = e.resolvePriceSpec();
                 PriceDisplay.drawCell(cv, f.host().items(), spec, cols[2][0], cy, cols[2][1], Text.Align.RIGHT,
                         IOStyle.ORANGE, false);
@@ -507,7 +507,7 @@ public final class StallPage implements ShopPage {
             float iconSize = 16.0F;
             f.host().items().add(e.stack, cx + (cw - iconSize) * 0.5F, cy + 13.0F, iconSize, true);
 
-            V2.text(cv, e.stack.getHoverName().getString(), V2.FS_S, IOStyle.TEXT,
+            V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(e.stack), V2.FS_S, IOStyle.TEXT,
                     cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
             PriceDisplay.drawCard(cv, f.host().items(), spec, cx + 3, cy + 44.5F, cx + cw * 0.5F, cw - 6, 1.0F,
                     IOStyle.ORANGE, false);

@@ -412,7 +412,7 @@ public final class AtomDemoScreen extends Screen implements JeiHoverSource {
             if (!modalShown.isEmpty()) {
                 Draw.fill(canvas, x + 12.0F, y + 28.0F, 22.0F, 22.0F, 2.0F, IOStyle.SLOT_INNER);
                 Draw.stroke(canvas, x + 12.0F, y + 28.0F, 22.0F, 22.0F, 2.0F, 1.0F, IOStyle.SLOT_BORDER);
-                Text.drawLine(canvas, modalShown.getHoverName().getString() + " × " + modalShown.getCount(),
+                Text.drawLine(canvas, cn.autoforged.module_shop.client.ui.ItemNames.display(modalShown) + " × " + modalShown.getCount(),
                         AtomUi.REGULAR, Text.BODY, IOStyle.TEXT, x + 40.0F, y + 39.0F, MODAL_W - 52.0F,
                         Text.Align.LEFT);
                 // 原版物品无法跟随 Skija 图层半透明，只在弹窗基本完全显示时出现，避免“物品先出现/后消失”
