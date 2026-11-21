@@ -5,6 +5,7 @@ import cn.autoforged.module_shop.shop.GrantManager;
 import cn.autoforged.module_shop.shop.BillExporter;
 import cn.autoforged.module_shop.shop.ShopManager;
 import cn.autoforged.module_shop.shop.TradeManager;
+import cn.autoforged.module_shop.shop.auth.AdminAuthService;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.LongArgumentType;
@@ -30,32 +31,42 @@ public final class ShopCommands {
     private static LiteralArgumentBuilder<CommandSourceStack> build() {
         return Commands.literal("shop")
                 .executes(ctx -> {
-                    ShopManager.sendSnapshotOpen(ctx.getSource().getPlayerOrException(), "daily");
+                    ShopManager.sendSnapshotOpen(ctx.getSource().getPlayerOrException(), "home");
                     return 1;
                 })
                 // 拍卖行管理：/shop auction list|history|anomalies|audit|cancel <id>|end <id>
                 .then(Commands.literal("auction")
                         .requires(source -> source.hasPermission(2))
                         .executes(ctx -> {
+                            if (!checkPlayerCommandUnlocked(ctx.getSource())) {
+                                return 0;
+                            }
                             ShopManager.sendSnapshotOpen(ctx.getSource().getPlayerOrException(), "auction");
                             return 1;
                         })
-                        .then(Commands.literal("list").executes(ctx -> AuctionCommands.list(ctx.getSource())))
+                        .then(Commands.literal("list").executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                ? AuctionCommands.list(ctx.getSource()) : 0))
                         .then(Commands.literal("history")
-                                .executes(ctx -> AuctionCommands.history(ctx.getSource(), 1))
+                                .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                        ? AuctionCommands.history(ctx.getSource(), 1) : 0)
                                 .then(Commands.argument("page", IntegerArgumentType.integer(1))
-                                        .executes(ctx -> AuctionCommands.history(ctx.getSource(),
-                                                IntegerArgumentType.getInteger(ctx, "page")))))
-                        .then(Commands.literal("anomalies").executes(ctx -> AuctionCommands.anomalies(ctx.getSource())))
-                        .then(Commands.literal("audit").executes(ctx -> AuctionCommands.audit(ctx.getSource())))
+                                        .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                ? AuctionCommands.history(ctx.getSource(),
+                                                        IntegerArgumentType.getInteger(ctx, "page")) : 0)))
+                        .then(Commands.literal("anomalies").executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                ? AuctionCommands.anomalies(ctx.getSource()) : 0))
+                        .then(Commands.literal("audit").executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                ? AuctionCommands.audit(ctx.getSource()) : 0))
                         .then(Commands.literal("cancel")
                                 .then(Commands.argument("id", LongArgumentType.longArg(1))
-                                        .executes(ctx -> AuctionCommands.force(ctx.getSource(),
-                                                LongArgumentType.getLong(ctx, "id"), true))))
+                                        .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                ? AuctionCommands.force(ctx.getSource(),
+                                                        LongArgumentType.getLong(ctx, "id"), true) : 0)))
                         .then(Commands.literal("end")
                                 .then(Commands.argument("id", LongArgumentType.longArg(1))
-                                        .executes(ctx -> AuctionCommands.force(ctx.getSource(),
-                                                LongArgumentType.getLong(ctx, "id"), false)))))
+                                        .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                ? AuctionCommands.force(ctx.getSource(),
+                                                        LongArgumentType.getLong(ctx, "id"), false) : 0))))
                 .then(Commands.literal("mailbox").executes(ctx -> {
                     ShopManager.sendSnapshotOpen(ctx.getSource().getPlayerOrException(), "mail");
                     return 1;
@@ -64,9 +75,20 @@ public final class ShopCommands {
                     ShopManager.sendSnapshotOpen(ctx.getSource().getPlayerOrException(), "stall");
                     return 1;
                 }))
+                .then(Commands.literal("auth")
+                        .executes(ctx -> authCommand(ctx.getSource()))
+                        .then(Commands.literal("status")
+                                .requires(source -> source.getEntity() == null)
+                                .executes(ctx -> printAuthStatus(ctx.getSource())))
+                        .then(Commands.literal("disable")
+                                .requires(source -> source.getEntity() == null)
+                                .executes(ctx -> consoleDisableAuth(ctx.getSource()))))
                 .then(Commands.literal("admin")
                         .requires(source -> source.hasPermission(2))
                         .executes(ctx -> {
+                            if (!checkPlayerCommandUnlocked(ctx.getSource())) {
+                                return 0;
+                            }
                             ShopManager.sendSnapshotOpen(ctx.getSource().getPlayerOrException(), "admin");
                             return 1;
                         })
@@ -74,6 +96,9 @@ public final class ShopCommands {
                         .then(Commands.literal("refresh")
                                 .then(Commands.argument("target", EntityArgument.player())
                                         .executes(ctx -> {
+                                            if (!checkPlayerCommandUnlocked(ctx.getSource())) {
+                                                return 0;
+                                            }
                                             ServerPlayer target = EntityArgument.getPlayer(ctx, "target");
                                             ShopManager.refreshDaily(target);
                                             ctx.getSource().sendSuccess(() -> Component.translatable(
@@ -87,57 +112,71 @@ public final class ShopCommands {
                                 .then(Commands.literal("set")
                                         .then(Commands.argument("target", StringArgumentType.word())
                                                 .then(Commands.argument("amount", LongArgumentType.longArg(0L))
-                                                        .executes(ctx -> setMoney(ctx.getSource(),
-                                                                StringArgumentType.getString(ctx, "target"),
-                                                                LongArgumentType.getLong(ctx, "amount"))))))
+                                                        .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                                ? setMoney(ctx.getSource(),
+                                                                        StringArgumentType.getString(ctx, "target"),
+                                                                        LongArgumentType.getLong(ctx, "amount")) : 0))))
                                 .then(Commands.argument("amount", LongArgumentType.longArg(1L))
-                                        .executes(ctx -> giveMoneyAll(ctx.getSource(),
-                                                LongArgumentType.getLong(ctx, "amount")))
+                                        .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                ? giveMoneyAll(ctx.getSource(),
+                                                        LongArgumentType.getLong(ctx, "amount")) : 0)
                                         // 目标写玩家名（在线/离线都行，离线按账户表名字匹配），也可以写 all 或 @a 表示全体。
                                         .then(Commands.argument("targets", StringArgumentType.greedyString())
-                                                .executes(ctx -> giveMoneyNames(ctx.getSource(),
-                                                        StringArgumentType.getString(ctx, "targets"),
-                                                        LongArgumentType.getLong(ctx, "amount"))))))
+                                                .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                        ? giveMoneyNames(ctx.getSource(),
+                                                                StringArgumentType.getString(ctx, "targets"),
+                                                                LongArgumentType.getLong(ctx, "amount")) : 0))))
                         // 管理员发放物品：打开发放界面（放入物品 + 勾选玩家/全体 → 发送，物品在邮箱领取）。
                         .then(Commands.literal("send")
                                 .executes(ctx -> {
+                                    if (!checkPlayerCommandUnlocked(ctx.getSource())) {
+                                        return 0;
+                                    }
                                     GrantManager.open(ctx.getSource().getPlayerOrException());
                                     return 1;
                                 }))
                         // 管理员查看某玩家的交易流水：/shop admin history <玩家> [页码]
                         .then(Commands.literal("history")
                                 .then(Commands.argument("target", StringArgumentType.word())
-                                        .executes(ctx -> history(ctx.getSource(),
-                                                StringArgumentType.getString(ctx, "target"), 1))
+                                        .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                ? history(ctx.getSource(),
+                                                        StringArgumentType.getString(ctx, "target"), 1) : 0)
                                         .then(Commands.argument("page", IntegerArgumentType.integer(1))
-                                                .executes(ctx -> history(ctx.getSource(),
-                                                        StringArgumentType.getString(ctx, "target"),
-                                                        IntegerArgumentType.getInteger(ctx, "page")))))))
+                                                .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                        ? history(ctx.getSource(),
+                                                                StringArgumentType.getString(ctx, "target"),
+                                                                IntegerArgumentType.getInteger(ctx, "page")) : 0)))))
                         // 同 IP 多账号登录限制已按需求移除（不再有 /shop admin ip 子命令）。
                 // 账单导出（管理员）：/shop bill <玩家> [起日] [止日]  或  /shop bill all
                 .then(Commands.literal("bill")
                         .requires(source -> source.hasPermission(2))
                         .then(Commands.literal("all")
-                                .executes(ctx -> billAll(ctx.getSource(), null, null))
+                                .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                        ? billAll(ctx.getSource(), null, null) : 0)
                                 .then(Commands.argument("from", StringArgumentType.word())
-                                        .executes(ctx -> billAll(ctx.getSource(),
-                                                StringArgumentType.getString(ctx, "from"), null))
+                                        .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                ? billAll(ctx.getSource(),
+                                                        StringArgumentType.getString(ctx, "from"), null) : 0)
                                         .then(Commands.argument("to", StringArgumentType.word())
-                                                .executes(ctx -> billAll(ctx.getSource(),
-                                                        StringArgumentType.getString(ctx, "from"),
-                                                        StringArgumentType.getString(ctx, "to"))))))
+                                                .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                        ? billAll(ctx.getSource(),
+                                                                StringArgumentType.getString(ctx, "from"),
+                                                                StringArgumentType.getString(ctx, "to")) : 0))))
                         .then(Commands.argument("target", StringArgumentType.word())
-                                .executes(ctx -> billPlayer(ctx.getSource(),
-                                        StringArgumentType.getString(ctx, "target"), null, null))
+                                .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                        ? billPlayer(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "target"), null, null) : 0)
                                 .then(Commands.argument("from", StringArgumentType.word())
-                                        .executes(ctx -> billPlayer(ctx.getSource(),
-                                                StringArgumentType.getString(ctx, "target"),
-                                                StringArgumentType.getString(ctx, "from"), null))
-                                        .then(Commands.argument("to", StringArgumentType.word())
-                                                .executes(ctx -> billPlayer(ctx.getSource(),
+                                        .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                ? billPlayer(ctx.getSource(),
                                                         StringArgumentType.getString(ctx, "target"),
-                                                        StringArgumentType.getString(ctx, "from"),
-                                                        StringArgumentType.getString(ctx, "to")))))))
+                                                        StringArgumentType.getString(ctx, "from"), null) : 0)
+                                        .then(Commands.argument("to", StringArgumentType.word())
+                                                .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                        ? billPlayer(ctx.getSource(),
+                                                                StringArgumentType.getString(ctx, "target"),
+                                                                StringArgumentType.getString(ctx, "from"),
+                                                                StringArgumentType.getString(ctx, "to")) : 0)))))
                 // 需求 3：点击交易邀请提示后执行，把自己的交易界面打开。
                 .then(Commands.literal("trade")
                         .then(Commands.literal("open").executes(ctx -> {
@@ -147,6 +186,9 @@ public final class ShopCommands {
                 .then(Commands.literal("reload")
                         .requires(source -> source.hasPermission(2))
                         .executes(ctx -> {
+                            if (!checkPlayerCommandUnlocked(ctx.getSource())) {
+                                return 0;
+                            }
                             ShopManager.reload(ctx.getSource().getServer());
                             ctx.getSource().sendSuccess(() -> Component.translatable("msg.module_shop.reloaded")
                                     .withStyle(ChatFormatting.GREEN), true);
@@ -170,22 +212,84 @@ public final class ShopCommands {
                                 .requires(source -> source.hasPermission(2))
                                 .then(Commands.argument("target", EntityArgument.player())
                                         .then(Commands.argument("amount", IntegerArgumentType.integer(1))
-                                                .executes(ctx -> give(ctx.getSource(), EntityArgument.getPlayer(ctx, "target"),
-                                                        IntegerArgumentType.getInteger(ctx, "amount"))))))
+                                                .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                        ? give(ctx.getSource(), EntityArgument.getPlayer(ctx, "target"),
+                                                                IntegerArgumentType.getInteger(ctx, "amount")) : 0))))
                         // 外部账目：其它插件 / 模组扣的或加的钱也写进玩家账单（只记账，不动本模组余额）。
                         // 用法：/shop wallet log <玩家名> <金额(负=扣款)> [事由] [来源]
                         .then(Commands.literal("log")
                                 .requires(source -> source.hasPermission(2))
                                 .then(Commands.argument("target", StringArgumentType.word())
                                         .then(Commands.argument("amount", LongArgumentType.longArg())
-                                                .executes(ctx -> logExternal(ctx.getSource(),
-                                                        StringArgumentType.getString(ctx, "target"),
-                                                        LongArgumentType.getLong(ctx, "amount"), "", ""))
-                                                .then(Commands.argument("reason", StringArgumentType.greedyString())
-                                                        .executes(ctx -> logExternal(ctx.getSource(),
+                                                .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                        ? logExternal(ctx.getSource(),
                                                                 StringArgumentType.getString(ctx, "target"),
-                                                                LongArgumentType.getLong(ctx, "amount"),
-                                                                StringArgumentType.getString(ctx, "reason"), "")))))));
+                                                                LongArgumentType.getLong(ctx, "amount"), "", "") : 0)
+                                                .then(Commands.argument("reason", StringArgumentType.greedyString())
+                                                        .executes(ctx -> checkPlayerCommandUnlocked(ctx.getSource())
+                                                                ? logExternal(ctx.getSource(),
+                                                                        StringArgumentType.getString(ctx, "target"),
+                                                                        LongArgumentType.getLong(ctx, "amount"),
+                                                                        StringArgumentType.getString(ctx, "reason"), "") : 0))))));
+    }
+
+    /**
+     * 玩家执行管理员指令时必须校验密码锁；控制台 / RCON / 命令方块 / FTB Quests / KubeJS（{@code getEntity() == null}）直接放行。
+     */
+    private static boolean checkPlayerCommandUnlocked(CommandSourceStack source) {
+        if (source.getEntity() instanceof ServerPlayer player) {
+            if (!AdminAuthService.canEditAdmin(player)) {
+                source.sendFailure(Component.translatable("msg.module_shop.auth_required")
+                        .withStyle(ChatFormatting.RED));
+                ShopManager.promptAdminAuth(player);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int authCommand(CommandSourceStack source) {
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            return printAuthStatus(source);
+        }
+        if (!player.hasPermissions(2)) {
+            source.sendFailure(Component.translatableWithFallback(
+                    "msg.module_shop.no_permission", "权限不足"));
+            return 0;
+        }
+        if (!AdminAuthService.isLockEnabled()) {
+            source.sendSuccess(() -> Component.translatableWithFallback(
+                    "msg.module_shop.auth_not_enabled", "当前未启用管理员密码锁")
+                    .withStyle(ChatFormatting.GRAY), false);
+            return 1;
+        }
+        if (AdminAuthService.isUnlocked(player)) {
+            source.sendSuccess(() -> Component.translatable("msg.module_shop.auth_ok")
+                    .withStyle(ChatFormatting.GREEN), false);
+            return 1;
+        }
+        ShopManager.promptAdminAuth(player);
+        return 1;
+    }
+
+    private static int printAuthStatus(CommandSourceStack source) {
+        boolean enabled = AdminAuthService.isLockEnabled();
+        int timeout = AdminAuthService.sessionTimeoutMinutes();
+        int sessions = AdminAuthService.activeSessionCount();
+        source.sendSuccess(() -> Component.literal("[ModuleShop] 密码锁: "
+                + (enabled ? "开启" : "关闭")
+                + ", 会话超时: " + (timeout <= 0 ? "直到下线" : timeout + " 分钟")
+                + ", 当前已解锁会话数: " + sessions)
+                .withStyle(enabled ? ChatFormatting.YELLOW : ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int consoleDisableAuth(CommandSourceStack source) {
+        AdminAuthService.consoleDisable();
+        ShopManager.refreshAllClients(source.getServer(), ShopManager.data(source.getServer()));
+        source.sendSuccess(() -> Component.literal("[ModuleShop] 已从服务端控制台关闭管理员密码锁并同步在线管理员状态。")
+                .withStyle(ChatFormatting.GREEN), true);
+        return 1;
     }
 
     /** /shop wallet log <玩家> <金额> [事由]：其它插件 / 模组把扣款或入账写进该玩家账单（只记账）。 */

@@ -1,6 +1,7 @@
 package cn.autoforged.module_shop.client.screen;
 
 import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
 import java.util.ArrayList;
 import java.util.List;
@@ -161,14 +162,13 @@ public class RedeemEditScreen extends SkiaDialog {
         small(g, x + 146, y + 124, Component.translatable("gui.module_shop.redeem.reward_items_line",
                 IOStyle.ellipsize(this.font, Component.literal(items), 300).getString()), IOStyle.TEXT);
         // 玩家一栏：一个都没勾 = 全体玩家都能兑换（默认）。
+        String rewardText = PriceDisplay.formatPlain(ClientShopData.redeemDraftSpec);
+        boolean hasMoney = ClientShopData.redeemDraftSpec.isValid() || ClientShopData.redeemDraftMoney > 0L;
         Component summary = ClientShopData.redeemDraftPlayers.isEmpty()
-                ? Component.translatable("gui.module_shop.redeem.reward_summary_all",
-                        ClientShopData.money(ClientShopData.redeemDraftMoney))
+                ? Component.translatable("gui.module_shop.redeem.reward_summary_all", rewardText)
                 : Component.translatable("gui.module_shop.redeem.reward_summary",
-                        ClientShopData.money(ClientShopData.redeemDraftMoney),
-                        ClientShopData.redeemDraftPlayers.size());
-        small(g, x + 146, y + 136, summary,
-                ClientShopData.redeemDraftMoney > 0L ? IOStyle.ORANGE : IOStyle.TEXT_2);
+                        rewardText, ClientShopData.redeemDraftPlayers.size());
+        small(g, x + 146, y + 136, summary, hasMoney ? IOStyle.ORANGE : IOStyle.TEXT_2);
         small(g, x + 14, y + 166, Component.translatable("gui.module_shop.field.title"));
         small(g, x + 14, y + 190, Component.translatable("gui.module_shop.field.note"));
         // 底部：保存修改 / 取消 + 说明
@@ -269,13 +269,13 @@ public class RedeemEditScreen extends SkiaDialog {
         float sw = innerW - 134;
         small(c, Component.translatable("gui.module_shop.redeem.reward_items_line", items).getString(), sx, cy + 12,
                 sw, IOStyle.TEXT);
+        String rewardText = PriceDisplay.formatPlain(ClientShopData.redeemDraftSpec);
+        boolean hasMoney = ClientShopData.redeemDraftSpec.isValid() || ClientShopData.redeemDraftMoney > 0L;
         Component summary = ClientShopData.redeemDraftPlayers.isEmpty()
-                ? Component.translatable("gui.module_shop.redeem.reward_summary_all",
-                ClientShopData.money(ClientShopData.redeemDraftMoney))
+                ? Component.translatable("gui.module_shop.redeem.reward_summary_all", rewardText)
                 : Component.translatable("gui.module_shop.redeem.reward_summary",
-                ClientShopData.money(ClientShopData.redeemDraftMoney), ClientShopData.redeemDraftPlayers.size());
-        small(c, summary.getString(), sx, cy + 24, sw,
-                ClientShopData.redeemDraftMoney > 0L ? IOStyle.ORANGE : IOStyle.TEXT_2);
+                        rewardText, ClientShopData.redeemDraftPlayers.size());
+        small(c, summary.getString(), sx, cy + 24, sw, hasMoney ? IOStyle.ORANGE : IOStyle.TEXT_2);
         cy += 36 + 8;
         text(c, Component.translatable("gui.module_shop.field.title").getString(), innerX, cy + 9, labelW,
                 IOStyle.TEXT_2);

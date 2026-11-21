@@ -1,6 +1,7 @@
 package cn.autoforged.module_shop.client.screen;
 
 import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
 import java.util.ArrayList;
 import java.util.List;
@@ -208,14 +209,13 @@ public class RedeemGeneratorScreen extends SkiaDialog {
                 IOStyle.ellipsize(this.font, Component.literal(items), 300).getString()),
                 readyReward ? IOStyle.TEXT : IOStyle.TEXT_2);
         // 玩家一栏：一个都没勾 = 全体玩家都能兑换（默认），摘要里直接写"全体玩家"。
+        String rewardText = PriceDisplay.formatPlain(ClientShopData.redeemDraftSpec);
+        boolean hasMoney = ClientShopData.redeemDraftSpec.isValid() || ClientShopData.redeemDraftMoney > 0L;
         Component summary = ClientShopData.redeemDraftPlayers.isEmpty()
-                ? Component.translatable("gui.module_shop.redeem.reward_summary_all",
-                        ClientShopData.money(ClientShopData.redeemDraftMoney))
+                ? Component.translatable("gui.module_shop.redeem.reward_summary_all", rewardText)
                 : Component.translatable("gui.module_shop.redeem.reward_summary",
-                        ClientShopData.money(ClientShopData.redeemDraftMoney),
-                        ClientShopData.redeemDraftPlayers.size());
-        small(g, x + 146, y + 136, summary,
-                ClientShopData.redeemDraftMoney > 0L ? IOStyle.ORANGE : IOStyle.TEXT_2);
+                        rewardText, ClientShopData.redeemDraftPlayers.size());
+        small(g, x + 146, y + 136, summary, hasMoney ? IOStyle.ORANGE : IOStyle.TEXT_2);
 
         // ---------- 第三块：标题 / 公告正文 ----------
         small(g, x + 14, y + 166, Component.translatable("gui.module_shop.field.title"));
@@ -349,13 +349,13 @@ public class RedeemGeneratorScreen extends SkiaDialog {
         float sw = innerW - 134;
         small(c, Component.translatable("gui.module_shop.redeem.reward_items_line", items).getString(), sx, cy + 12,
                 sw, readyReward ? IOStyle.TEXT : IOStyle.TEXT_2);
+        String rewardText = PriceDisplay.formatPlain(ClientShopData.redeemDraftSpec);
+        boolean hasMoney = ClientShopData.redeemDraftSpec.isValid() || ClientShopData.redeemDraftMoney > 0L;
         Component summary = ClientShopData.redeemDraftPlayers.isEmpty()
-                ? Component.translatable("gui.module_shop.redeem.reward_summary_all",
-                ClientShopData.money(ClientShopData.redeemDraftMoney))
+                ? Component.translatable("gui.module_shop.redeem.reward_summary_all", rewardText)
                 : Component.translatable("gui.module_shop.redeem.reward_summary",
-                ClientShopData.money(ClientShopData.redeemDraftMoney), ClientShopData.redeemDraftPlayers.size());
-        small(c, summary.getString(), sx, cy + 24, sw,
-                ClientShopData.redeemDraftMoney > 0L ? IOStyle.ORANGE : IOStyle.TEXT_2);
+                        rewardText, ClientShopData.redeemDraftPlayers.size());
+        small(c, summary.getString(), sx, cy + 24, sw, hasMoney ? IOStyle.ORANGE : IOStyle.TEXT_2);
         cy += 36 + 8;
         // 标题 / 正文
         text(c, Component.translatable("gui.module_shop.field.title").getString(), innerX, cy + 9, labelW,
@@ -414,7 +414,9 @@ public class RedeemGeneratorScreen extends SkiaDialog {
     }
 
     private boolean hasReward() {
-        return !isBlank(ClientShopData.redeemDraftItems) || ClientShopData.redeemDraftMoney > 0L;
+        return !isBlank(ClientShopData.redeemDraftItems)
+                || ClientShopData.redeemDraftSpec.isValid()
+                || ClientShopData.redeemDraftMoney > 0L;
     }
 
     private static boolean isBlank(String text) {

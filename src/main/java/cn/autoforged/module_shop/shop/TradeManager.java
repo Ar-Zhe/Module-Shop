@@ -232,13 +232,13 @@ public final class TradeManager {
         return itemsFor(session, player).size() >= MAX_ITEMS;
     }
 
-    /** 设定本方的星币数额（不超过当前余额）。 */
+    /** 设定本方的星币数额（仅限星币账本可用余额）。 */
     public static void setMoney(ServerPlayer player, long amount) {
         TradeSession session = sessionOf(player);
         if (session == null || session.readyAt > 0 || !session.accepted) {
             return;
         }
-        long balance = ShopManager.account(player).balance;
+        long balance = Math.max(0L, ShopManager.account(player).balance);
         long clamped = Math.max(0L, Math.min(amount, balance));
         if (isA(session, player)) {
             session.moneyA = clamped;
@@ -405,7 +405,6 @@ public final class TradeManager {
                 return;
             }
             long max = Config.maxBalanceLimit();
-            // 收款方余额装不下就先不执行：否则一方已扣、另一方只进一部分，差额凭空消失。
             if (Math.max(0L, max - accB.balance) < session.moneyA
                     || Math.max(0L, max - accA.balance) < session.moneyB) {
                 notify(a, Component.translatable("msg.module_shop.trade_balance_full").withStyle(ChatFormatting.RED));
@@ -415,10 +414,29 @@ public final class TradeManager {
                 broadcast(session, server);
                 return;
             }
-            cn.autoforged.module_shop.shop.ShopManager.debit(accA, session.moneyA, "trade");
-            accB.balance += session.moneyA;
-            cn.autoforged.module_shop.shop.ShopManager.debit(accB, session.moneyB, "trade");
-            accA.balance += session.moneyB;
+            if (session.moneyA > 0L && ShopManager.debit(accA, session.moneyA, "trade") < 0L) {
+                notify(a, Component.translatable("msg.module_shop.no_money").withStyle(ChatFormatting.RED));
+                session.confirmedA = false;
+                session.confirmedB = false;
+                broadcast(session, server);
+                return;
+            }
+            if (session.moneyB > 0L && ShopManager.debit(accB, session.moneyB, "trade") < 0L) {
+                if (session.moneyA > 0L) {
+                    ShopManager.credit(accA, session.moneyA, max);
+                }
+                notify(b, Component.translatable("msg.module_shop.no_money").withStyle(ChatFormatting.RED));
+                session.confirmedA = false;
+                session.confirmedB = false;
+                broadcast(session, server);
+                return;
+            }
+            if (session.moneyA > 0L) {
+                ShopManager.credit(accB, session.moneyA, max);
+            }
+            if (session.moneyB > 0L) {
+                ShopManager.credit(accA, session.moneyB, max);
+            }
             ShopManager.data(server).setDirty();
             // 流水：双方各记一条（星币净额 + 自己给出的物品摘要）。
             TransactionLog.record(server, session.playerA, TransactionLog.TRADE_OUT, session.nameB,

@@ -11,6 +11,7 @@ import net.minecraft.world.item.ItemStack;
 public final class StallEntry {
     public ItemStack stack = ItemStack.EMPTY;
     public long price;
+    public PriceSpec priceSpec = PriceSpec.ZERO;
     public long order;
     /** 单件价格对应的库存数量（上限 64）。 */
     public int stock;
@@ -28,19 +29,38 @@ public final class StallEntry {
     }
 
     public StallEntry(ItemStack stack, long price, long order) {
-        this(stack, price, order, Math.max(1, stack.getCount()));
+        this(stack, PriceSpec.star(price), order, Math.max(1, stack.getCount()));
     }
 
     public StallEntry(ItemStack stack, long price, long order, int stock) {
+        this(stack, PriceSpec.star(price), order, stock);
+    }
+
+    public StallEntry(ItemStack stack, PriceSpec spec, long order, int stock) {
         this.stack = stack;
-        this.price = price;
+        setPriceSpec(spec);
         this.order = order;
         this.stock = Math.max(0, stock);
     }
 
+    public void setPriceSpec(PriceSpec spec) {
+        this.priceSpec = spec == null ? PriceSpec.ZERO : spec;
+        this.price = this.priceSpec.supportsStar() ? this.priceSpec.starPrice : 0L;
+    }
+
+    public PriceSpec resolvePriceSpec() {
+        if (priceSpec == null) {
+            return PriceSpec.star(price);
+        }
+        if (priceSpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && priceSpec.starPrice != price) {
+            return PriceSpec.star(price);
+        }
+        return priceSpec;
+    }
+
     public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
-        tag.putLong("price", price);
+        resolvePriceSpec().writeToParent(tag, "priceSpec", "price");
         tag.putLong("order", order);
         tag.putInt("stock", stock);
         tag.putInt("sold", sold);
@@ -56,7 +76,7 @@ public final class StallEntry {
     public static StallEntry load(CompoundTag tag, HolderLookup.Provider registries) {
         StallEntry entry = new StallEntry();
         entry.stack = ShopNbt.loadStack(tag, registries);
-        entry.price = tag.getLong("price");
+        entry.setPriceSpec(PriceSpec.readFromParent(tag, "priceSpec", "price"));
         entry.order = tag.getLong("order");
         // 旧存档没有 stock 字段时，以 item 栈数量回退。
         entry.stock = tag.contains("stock") ? tag.getInt("stock") : Math.max(1, entry.stack.getCount());

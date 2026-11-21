@@ -1,5 +1,11 @@
 package cn.autoforged.module_shop.client.screen;
 
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState;
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState.PhysTierView;
+import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
+import cn.autoforged.module_shop.data.PriceSpec;
+import cn.autoforged.module_shop.data.PriceSpec.CurrencyMode;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
 import java.util.ArrayList;
 import java.util.List;
@@ -37,7 +43,16 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
     private int page;
 
     /** id = 商品 id（服务端 StallEntry.order），购买按它定位；index 只给旧流程用。 */
-    private record Entry(ItemStack stack, long price, int stock, int sold, int index, long id) {
+    private record Entry(ItemStack stack, long price, PriceSpec priceSpec, int stock, int sold, int index, long id) {
+        PriceSpec resolvePriceSpec() {
+            if (priceSpec == null) {
+                return PriceSpec.star(price);
+            }
+            if (priceSpec.mode == CurrencyMode.STAR_ONLY && priceSpec.starPrice != price) {
+                return PriceSpec.star(price);
+            }
+            return priceSpec;
+        }
     }
 
     /** 这是不是我自己的摊位（自己不能买）。 */
@@ -75,7 +90,9 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
             int stock = c.contains("stock") ? c.getInt("stock") : Math.max(1, stack.getCount());
             // 需求 9：按商品分别显示已售出件数。
             int sold = c.contains("sold") ? c.getInt("sold") : 0;
-            this.entries.add(new Entry(stack, c.getLong("price"), stock, sold, c.getInt("index"),
+            PriceSpec spec = PriceSpec.readFromParent(c, "priceSpec", "price");
+            long price = spec.supportsStar() ? spec.starPrice : c.getLong("price");
+            this.entries.add(new Entry(stack, price, spec, stock, sold, c.getInt("index"),
                     c.contains("id") ? c.getLong("id") : -1L - i));
         }
     }
@@ -122,7 +139,7 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
             g.drawString(this.font, entry.stack.getHoverName(), x + 38, rowY + 3, IOStyle.TEXT, false);
             // 需求 4/5：单价按单件计算。
             String priceText = Component.translatable("gui.module_shop.stall_unit_price",
-                    cn.autoforged.module_shop.client.ClientShopData.money(entry.price)).getString();
+                    PriceDisplay.formatPlain(entry.resolvePriceSpec())).getString();
             g.drawString(this.font, priceText, x + 38, rowY + 14, IOStyle.ORANGE, false);
             if (entry.stock <= 0) {
                 g.drawString(this.font, Component.translatable("gui.module_shop.stall_sold_out"),
@@ -206,28 +223,7 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
                 if (entry.stock <= 0) {
                     return true;
                 }
-                // 需求 5：点击商品弹出数量选择小窗口（中间数量、下方输入框、底部取消/购买）。
-                CompoundTag request = new CompoundTag();
-                request.putString("kind", "input");
-                request.putString("action", "stall_buy");
-                request.putString("title", "gui.module_shop.input.stall_buy");
-                request.putString("owner", this.owner);
-                request.putInt("index", entry.index);
-                request.putString("default_quantity", "1");
-                // 需求 7：防误触按钮对调——左侧确认、右侧取消。
-                request.putBoolean("confirm_right", false);
-                // 需求 7：弹窗内实时显示总价与余额变化。
-                request.putLong("unit_price", entry.price);
-                request.putLong("balance",
-                        cn.autoforged.module_shop.client.ClientShopData.balance);
-                request.putString("info", Component.translatable("gui.module_shop.stall_buy_info",
-                        entry.stack.getHoverName(),
-                        cn.autoforged.module_shop.client.ClientShopData.money(entry.price),
-                        entry.stock).getString());
-                ListTag fields = new ListTag();
-                fields.add(net.minecraft.nbt.StringTag.valueOf("quantity"));
-                request.put("fields", fields);
-                Nav.open(new ShopInputScreen(request));
+                openBuy(entry);
                 return true;
             }
         }
@@ -241,7 +237,9 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
     // 购买请求带商品 id + 我看到的单价 + 请求号；服务端核对后成交并推回最新库存（就地刷新，不重建界面）。
 
     private long selectedId = -1L;
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField searchField;
     private cn.autoforged.module_shop.client.ui.widget.SkiaTextField qtyField;
+    private String skQuery = "";
     private boolean buying;
     private long buyingAt;
     private int gridPage;
@@ -251,6 +249,13 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
 
     @Override
     protected void initSkia() {
+        this.searchField = field(48, Component.translatable("gui.module_shop.search.placeholder").getString())
+                .clearable(true);
+        this.searchField.editBox().setValue(this.skQuery);
+        this.searchField.onChange(v -> {
+            this.skQuery = v == null ? "" : v;
+            this.gridPage = 0;
+        });
         String keep = this.qtyField == null ? "1" : this.qtyField.value();
         this.qtyField = field(6, "1");
         this.qtyField.setValue(keep.isEmpty() ? "1" : keep);
@@ -286,7 +291,8 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
 
     private void buy(Entry e) {
         int q = quantity();
-        if (q < 1 || q > e.stock() || this.ownStall) {
+        PriceSpec expectSpec = e.resolvePriceSpec();
+        if (q < 1 || q > e.stock() || this.ownStall || !PriceDisplay.canAfford(expectSpec, q)) {
             return;
         }
         if (this.buying && System.currentTimeMillis() - this.buyingAt < 4000L) {
@@ -300,14 +306,10 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
         tag.putInt("index", e.index());
         tag.putString("quantity", Integer.toString(q));
         tag.putLong("expect", e.price());
+        tag.put("expectSpec", expectSpec.toTag());
+        tag.putString("pay_channel", expectSpec.supportsPhys() ? ClientHomeCurrencyState.CHANNEL_PHYS
+                : ClientHomeCurrencyState.CHANNEL_STAR);
         cn.autoforged.module_shop.client.StallClient.sendOnce("stall_buy", tag);
-    }
-
-    private static long safeTotal(long price, int count) {
-        if (price <= 0L || count <= 0) {
-            return 0L;
-        }
-        return price > Long.MAX_VALUE / count ? Long.MAX_VALUE : price * count;
     }
 
     @Override
@@ -361,39 +363,56 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
         small(c, Component.translatable("gui.module_shop.stall.goods_count", this.entries.size(), inStock).getString(),
                 sx + 9 + stw + 10, infoY, ix + iw - (sx + 9 + stw + 10), IOStyle.TEXT_2);
 
-        // ---- 左：商品格子 ----
+        // ---- 左：搜索 + 商品格子 ----
         float detailW = 132.0F;
         float gx = ix;
         float gy = infoY + 9;
         float gw = iw - detailW - 8;
-        float gh = bottom - 24 - gy;
+        if (this.searchField != null) {
+            this.searchField.bounds(gx, gy, gw, 16);
+        }
+        float gridY = gy + 20;
+        float gh = bottom - 24 - gridY;
         int cols = gw >= 230 ? 3 : 2;
         float cellGap = 3.0F;
         float cellW = (gw - cellGap * (cols - 1)) / cols;
         float cellH = 34.0F;
         int rows = Math.max(1, (int) ((gh + cellGap) / (cellH + cellGap)));
         this.perPage = rows * cols;
-        this.pages = Math.max(1, (this.entries.size() + this.perPage - 1) / this.perPage);
         if (this.jumpToSelection && selected() != null) {
             this.jumpToSelection = false;
+            this.skQuery = "";
+            if (this.searchField != null) {
+                this.searchField.setValue("");
+            }
             int pos = this.entries.indexOf(selected());
             if (pos >= this.perPage) {
                 this.gridPage = pos / this.perPage; // 从大厅点进来：翻到预选商品所在页（只翻一次）
             }
         }
+        List<Entry> visible = new ArrayList<>();
+        for (Entry itemEntry : this.entries) {
+            if (cn.autoforged.module_shop.client.screen.shop.PageKit.matchesItemQuery(
+                    itemEntry.stack(), this.skQuery)) {
+                visible.add(itemEntry);
+            }
+        }
+        this.pages = Math.max(1, (visible.size() + this.perPage - 1) / this.perPage);
         this.gridPage = Math.max(0, Math.min(this.gridPage, this.pages - 1));
-        if (this.entries.isEmpty()) {
-            center(c, Component.translatable("gui.module_shop.stall_empty").getString(), gx, gy + gh / 2, gw,
-                    IOStyle.TEXT_2);
+        if (visible.isEmpty()) {
+            String emptyMsg = this.entries.isEmpty()
+                    ? Component.translatable("gui.module_shop.stall_empty").getString()
+                    : Component.translatable("gui.module_shop.search.empty").getString();
+            center(c, emptyMsg, gx, gridY + gh / 2, gw, IOStyle.TEXT_2);
         }
         for (int i = 0; i < this.perPage; i++) {
             int idx = this.gridPage * this.perPage + i;
-            if (idx >= this.entries.size()) {
+            if (idx >= visible.size()) {
                 break;
             }
-            Entry e = this.entries.get(idx);
+            Entry e = visible.get(idx);
             float cx = gx + (i % cols) * (cellW + cellGap);
-            float cy = gy + (i / cols) * (cellH + cellGap);
+            float cy = gridY + (i / cols) * (cellH + cellGap);
             boolean sel = e.id() == this.selectedId;
             boolean soldOut = e.stock() <= 0;
             float hv = hover("cell" + e.id(), cx, cy, cellW, cellH);
@@ -409,15 +428,14 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
             }
             float tx = cx + 25;
             float tw = cellW - 28;
-            small(c, e.stack().getHoverName().getString(), tx, cy + 8, tw, soldOut ? IOStyle.TEXT_3 : IOStyle.TEXT);
-            cn.autoforged.module_shop.client.ui.render.Text.drawLine(c,
-                    cn.autoforged.module_shop.client.ClientShopData.money(e.price()),
-                    cn.autoforged.module_shop.client.ui.AtomUi.BOLD, cn.autoforged.module_shop.client.ui.render.Text.SMALL,
-                    soldOut ? IOStyle.TEXT_3 : IOStyle.ORANGE, tx, cy + 17, tw,
-                    cn.autoforged.module_shop.client.ui.render.Text.Align.LEFT);
+            small(c, e.stack().getHoverName().getString(), tx, cy + 8, tw + 0.5F,
+                    soldOut ? IOStyle.TEXT_3 : IOStyle.TEXT);
+            PriceDisplay.drawCell(c, this.items, e.resolvePriceSpec(), tx, cy + 17, tw + 0.5F,
+                    cn.autoforged.module_shop.client.ui.render.Text.Align.LEFT,
+                    soldOut ? IOStyle.TEXT_3 : IOStyle.ORANGE, soldOut);
             small(c, soldOut ? Component.translatable("gui.module_shop.stall_sold_out").getString()
                             : Component.translatable("gui.module_shop.stall_stock", e.stock()).getString(), tx, cy + 26,
-                    tw, soldOut ? IOStyle.RED : IOStyle.TEXT_2);
+                    tw + 0.5F, soldOut ? IOStyle.RED : IOStyle.TEXT_2);
             final long id = e.id();
             hit(cx, cy, cellW, cellH, () -> {
                 if (this.selectedId != id) {
@@ -446,12 +464,15 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
             if (over(px, dy + 6, 22, 22)) {
                 this.items.setHovered(e.stack());
             }
-            text(c, e.stack().getHoverName().getString(), px + 27, dy + 13, pw - 27, IOStyle.TEXT);
+            text(c, e.stack().getHoverName().getString(), px + 27, dy + 13, pw - 27 + 0.5F, IOStyle.TEXT);
             small(c, Component.translatable("gui.module_shop.stall_sold_count", e.sold()).getString(), px + 27,
-                    dy + 23, pw - 27, IOStyle.TEXT_3);
+                    dy + 23, pw - 27 + 0.5F, IOStyle.TEXT_3);
+            PriceSpec unitSpec = e.resolvePriceSpec();
             float ly = dy + 38;
-            small(c, Component.translatable("gui.module_shop.stall.unit_price").getString(), px, ly, pw / 2, IOStyle.TEXT_3);
-            right(c, cn.autoforged.module_shop.client.ClientShopData.money(e.price()), px, ly, pw, IOStyle.ORANGE);
+            float ulw = small(c, Component.translatable("gui.module_shop.stall.unit_price").getString(), px, ly,
+                    pw * 0.45F + 0.5F, IOStyle.TEXT_3) + 4.0F;
+            PriceDisplay.drawCell(c, this.items, unitSpec, px + ulw, ly, pw - ulw + 0.5F,
+                    cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT, IOStyle.ORANGE, false);
             ly += 12;
             small(c, Component.translatable("gui.module_shop.stall.stock_label").getString(), px, ly, pw / 2, IOStyle.TEXT_3);
             right(c, Integer.toString(e.stock()), px, ly, pw, e.stock() > 0 ? IOStyle.TEXT : IOStyle.RED);
@@ -473,26 +494,43 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
                 ly += 22;
                 int q = quantity();
                 boolean qOk = q >= 1 && q <= e.stock();
-                long total = qOk ? safeTotal(e.price(), q) : 0L;
-                small(c, Component.translatable("gui.module_shop.stall.total").getString(), px, ly, pw / 2, IOStyle.TEXT_2);
-                cn.autoforged.module_shop.client.ui.render.Text.drawLine(c,
-                        qOk ? cn.autoforged.module_shop.client.ClientShopData.money(total) : "-",
-                        cn.autoforged.module_shop.client.ui.AtomUi.BOLD, cn.autoforged.module_shop.client.ui.render.Text.BODY,
-                        IOStyle.ORANGE, px, ly, pw, cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
+                PriceSpec totalSpec = qOk ? unitSpec.scale(q) : null;
+                float tlw = small(c, Component.translatable("gui.module_shop.stall.total").getString(), px, ly,
+                        pw * 0.45F, IOStyle.TEXT_2) + 4.0F;
+                if (qOk && totalSpec != null && totalSpec.isValid()) {
+                    PriceDisplay.drawCell(c, this.items, totalSpec, px + tlw, ly, pw - tlw,
+                            cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT, IOStyle.ORANGE, false);
+                } else {
+                    right(c, "-", px + tlw, ly, pw - tlw, IOStyle.TEXT_3);
+                }
                 ly += 12;
-                long balance = cn.autoforged.module_shop.client.ClientShopData.balance;
+                boolean affordable = qOk && PriceDisplay.canAfford(unitSpec, q);
                 String hint;
                 int hintColor;
                 if (!qOk) {
                     hint = Component.translatable("gui.module_shop.stall.qty_range", e.stock()).getString();
                     hintColor = IOStyle.RED;
-                } else if (total > balance) {
-                    hint = Component.translatable("gui.module_shop.stall.no_money",
-                            cn.autoforged.module_shop.client.ClientShopData.money(balance)).getString();
+                } else if (!affordable) {
+                    if (unitSpec.supportsPhys()) {
+                        PhysTierView tier = ClientHomeCurrencyState.findTier(unitSpec.physTierKey);
+                        String have = PriceDisplay.physPlain(unitSpec.physTierKey, tier != null ? tier.ownedCount : 0);
+                        hint = ClientHomeCurrencyState.tr("gui.module_shop.stall.no_phys",
+                                "实体币不足或无法找零（持有 %s）", have);
+                    } else {
+                        hint = Component.translatable("gui.module_shop.stall.no_money",
+                                ClientShopData.money(ClientShopData.balance)).getString();
+                    }
                     hintColor = IOStyle.RED;
                 } else {
-                    hint = Component.translatable("gui.module_shop.stall.balance_line",
-                            cn.autoforged.module_shop.client.ClientShopData.money(balance)).getString();
+                    if (unitSpec.supportsPhys()) {
+                        PhysTierView tier = ClientHomeCurrencyState.findTier(unitSpec.physTierKey);
+                        String have = PriceDisplay.physPlain(unitSpec.physTierKey, tier != null ? tier.ownedCount : 0);
+                        hint = ClientHomeCurrencyState.tr("gui.module_shop.stall.phys_balance_line",
+                                "背包持有 %s", have);
+                    } else {
+                        hint = Component.translatable("gui.module_shop.stall.balance_line",
+                                ClientShopData.money(ClientShopData.balance)).getString();
+                    }
                     hintColor = IOStyle.TEXT_3;
                 }
                 small(c, hint, px, ly, pw, hintColor);
@@ -500,7 +538,7 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
                 button(c, "buy", Component.translatable(busy ? "gui.module_shop.auction.submitting"
                                 : "gui.module_shop.stall.buy").getString(), px, dy + dh - 24, pw, 18,
                         cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT,
-                        qOk && total <= balance && !busy, () -> buy(e));
+                        qOk && affordable && !busy, () -> buy(e));
             } else {
                 this.qtyField.visible(false);
                 paragraph(c, Component.translatable(this.ownStall ? "gui.module_shop.stall.own_hint"
@@ -530,6 +568,7 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
     }
 
     private void openBuy(Entry entry) {
+        PriceSpec spec = entry.resolvePriceSpec();
         CompoundTag request = new CompoundTag();
         request.putString("kind", "input");
         request.putString("action", "stall_buy");
@@ -540,13 +579,18 @@ public class StallBrowseScreen extends SkiaDialog implements JeiHoverSource {
             // 按商品 id 定位 + 带上看到的单价：卖家改价 / 下架其它商品时不会买错
             request.putLong("id", entry.id());
             request.putLong("expect", entry.price());
+            request.put("expectSpec", spec.toTag());
         }
+        request.put("priceSpec", spec.toTag());
+        request.put("price_spec", spec.toTag());
+        request.putString("pay_channel", spec.supportsPhys() ? ClientHomeCurrencyState.CHANNEL_PHYS
+                : ClientHomeCurrencyState.CHANNEL_STAR);
         request.putString("default_quantity", "1");
         request.putBoolean("confirm_right", false);
         request.putLong("unit_price", entry.price);
-        request.putLong("balance", cn.autoforged.module_shop.client.ClientShopData.balance);
+        request.putLong("balance", ClientShopData.balance);
         request.putString("info", Component.translatable("gui.module_shop.stall_buy_info",
-                entry.stack.getHoverName(), cn.autoforged.module_shop.client.ClientShopData.money(entry.price),
+                entry.stack.getHoverName(), PriceDisplay.formatPlain(spec),
                 entry.stock).getString());
         ListTag fields = new ListTag();
         fields.add(net.minecraft.nbt.StringTag.valueOf("quantity"));

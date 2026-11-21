@@ -2,11 +2,15 @@ package cn.autoforged.module_shop.shop.stall;
 
 import cn.autoforged.module_shop.Config;
 import cn.autoforged.module_shop.data.PlayerAccount;
+import cn.autoforged.module_shop.data.PriceSpec;
+import cn.autoforged.module_shop.data.PriceSpec.CurrencyMode;
 import cn.autoforged.module_shop.data.ShopSavedData;
 import cn.autoforged.module_shop.data.StallEntry;
 import cn.autoforged.module_shop.network.payload.ClientboundShopSyncPayload;
 import cn.autoforged.module_shop.shop.RequestGuard;
 import cn.autoforged.module_shop.shop.ShopManager;
+import cn.autoforged.module_shop.shop.currency.CurrencySettlement;
+import cn.autoforged.module_shop.shop.currency.PhysicalCurrencyConfig;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -105,7 +109,7 @@ public final class StallService {
             for (StallEntry e : pair.getValue().stall) {
                 h = 31 * h + owner;
                 h = 31 * h + e.order;
-                h = 31 * h + e.price;
+                h = 31 * h + e.resolvePriceSpec().hashCode();
                 h = 31 * h + e.stock;
             }
         }
@@ -139,7 +143,7 @@ public final class StallService {
                 c.putUUID("owner", pair.getKey());
                 c.putString("ownerName", account.name == null ? "" : account.name);
                 c.putLong("id", e.order);
-                c.putLong("price", e.price);
+                e.resolvePriceSpec().writeToParent(c, "priceSpec", "price");
                 c.putInt("stock", e.stock);
                 c.putInt("sold", e.sold);
                 c.putBoolean("own", pair.getKey().equals(player.getUUID()));
@@ -178,11 +182,27 @@ public final class StallService {
                 result(player, false, "list");
                 return;
             }
-            long price = parsePrice(tag.getString("price"));
-            if (price <= 0L) {
+            PriceSpec spec = parseStallSpecFromTag(tag);
+            if (spec == null || !spec.isValid()
+                    || (spec.mode != CurrencyMode.STAR_ONLY && spec.mode != CurrencyMode.PHYS_ONLY)) {
                 msg(player, "msg.module_shop.invalid_price", ChatFormatting.RED);
                 result(player, false, "list");
                 return;
+            }
+            if (spec.mode == CurrencyMode.STAR_ONLY && spec.starPrice > Config.maxBalanceLimit()) {
+                msg(player, "msg.module_shop.invalid_price", ChatFormatting.RED);
+                result(player, false, "list");
+                return;
+            }
+            if (spec.mode == CurrencyMode.PHYS_ONLY) {
+                PhysicalCurrencyConfig physCfg = PhysicalCurrencyConfig.get();
+                if (!physCfg.isActive()
+                        || physCfg.findResolvedTier(spec.physTierKey, player.level().registryAccess()) == null) {
+                    msg(player, "msg.module_shop.phys_tier_unavailable", ChatFormatting.RED);
+                    result(player, false, "list");
+                    return;
+                }
+                spec = spec.withPhysTierKey(physCfg.canonicalTierKey(spec.physTierKey));
             }
             PlayerAccount account = ShopManager.account(player);
             ShopSavedData data = ShopManager.data(player.server);
@@ -192,29 +212,81 @@ public final class StallService {
                 return;
             }
             double feePercent = Config.INSTANCE.stallListingFeePercent.get();
-            long fee = feePercent <= 0.0D ? 0L : (long) Math.ceil(price * feePercent / 100.0D);
-            if (fee > 0L && account.balance < fee) {
-                msg(player, "msg.module_shop.no_money", ChatFormatting.RED);
-                result(player, false, "list");
-                return;
-            }
-            // ---- 校验完毕：收费 → 取物品 → 入库，中间没有失败分支 ----
-            if (fee > 0L && ShopManager.debit(account, fee, "fee") < 0L) {
-                result(player, false, "list");
-                return;
+            if (spec.mode == CurrencyMode.PHYS_ONLY) {
+                long fee = feePercent <= 0.0D ? 0L : (long) Math.ceil(spec.physCount * feePercent / 100.0D);
+                if (fee > 0L) {
+                    var feePay = CurrencySettlement.payPhysTier(
+                            player, spec.physTierKey, fee, ShopManager.SOURCE_EXCHANGE);
+                    if (!feePay.ok()) {
+                        player.displayClientMessage(
+                                net.minecraft.network.chat.Component.translatableWithFallback(
+                                        feePay.failKey(), feePay.failFallback()).withStyle(ChatFormatting.RED),
+                                false);
+                        result(player, false, "list");
+                        return;
+                    }
+                }
+            } else {
+                long fee = feePercent <= 0.0D ? 0L : (long) Math.ceil(spec.starPrice * feePercent / 100.0D);
+                if (fee > 0L) {
+                    var feePay = CurrencySettlement.payStar(account, fee, "fee");
+                    if (!feePay.ok()) {
+                        msg(player, "msg.module_shop.no_money", ChatFormatting.RED);
+                        result(player, false, "list");
+                        return;
+                    }
+                }
             }
             ItemStack taken = inSlot.split(count);
             inventory.setChanged();
-            StallEntry fresh = new StallEntry(taken.copyWithCount(1), price, data.listingCounter++, count);
+            StallEntry fresh = new StallEntry(taken.copyWithCount(1), spec, data.listingCounter++, count);
             fresh.listedGame = player.server.overworld().getGameTime();
             fresh.listedReal = System.currentTimeMillis();
             account.stall.add(fresh);
             data.setDirty();
-            msg(player, "msg.module_shop.stall_listed", ChatFormatting.GREEN, fresh.stack.getHoverName(), price, count);
+            long eventPrice = spec.supportsStar() ? spec.starPrice : 0L;
+            cn.autoforged.module_shop.api.event.ApiEvents.post(
+                    new cn.autoforged.module_shop.api.event.StallListedEvent(
+                            player.getUUID(), account.stall.size() - 1, fresh.stack, count, eventPrice));
+            if (spec.mode == CurrencyMode.PHYS_ONLY) {
+                msg(player, "msg.module_shop.stall_listed_spec", ChatFormatting.GREEN,
+                        fresh.stack.getHoverName(), CurrencySettlement.formatSpec(spec, player.server), count);
+            } else {
+                msg(player, "msg.module_shop.stall_listed", ChatFormatting.GREEN,
+                        fresh.stack.getHoverName(), spec.starPrice, count);
+            }
             result(player, true, "list");
             ShopManager.sendSnapshot(player, "stall", true);
             ShopManager.broadcastSnapshots(player.server);
         }
+    }
+
+    public static @Nullable PriceSpec parseStallSpecFromTag(CompoundTag tag) {
+        if (tag == null) {
+            return null;
+        }
+        if (tag.contains("priceSpec", net.minecraft.nbt.Tag.TAG_COMPOUND)) {
+            PriceSpec parsed = PriceSpec.fromTag(tag.getCompound("priceSpec"), 0L);
+            if (parsed.mode == CurrencyMode.STAR_ONLY || parsed.mode == CurrencyMode.PHYS_ONLY) {
+                return parsed;
+            }
+            return null;
+        }
+        String tier = tag.getString("physTier").trim();
+        String mode = tag.getString("currencyMode").trim();
+        if ("phys".equalsIgnoreCase(mode) || (!tier.isEmpty() && !"star".equalsIgnoreCase(mode))) {
+            long cnt = tag.contains("physCount", net.minecraft.nbt.Tag.TAG_ANY_NUMERIC)
+                    ? tag.getLong("physCount")
+                    : parsePrice(tag.getString("price"));
+            return cnt > 0L && !tier.isEmpty() ? PriceSpec.phys(tier, cnt) : null;
+        }
+        String rawPrice = tag.getString("price");
+        PriceSpec ruleParsed = PriceSpec.parseRuleText(rawPrice);
+        if (ruleParsed != null && (ruleParsed.mode == CurrencyMode.STAR_ONLY || ruleParsed.mode == CurrencyMode.PHYS_ONLY)) {
+            return ruleParsed;
+        }
+        long star = parsePrice(rawPrice);
+        return star > 0L ? PriceSpec.star(star) : null;
     }
 
     private static long parsePrice(String text) {

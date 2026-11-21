@@ -85,7 +85,7 @@ public class ShippingBinMenu extends AbstractContainerMenu {
         if (slotId >= 0 && slotId < this.binSlots && !this.getCarried().isEmpty()
                 && !ShippingRules.canSell(this.getCarried())
                 && player instanceof net.minecraft.server.level.ServerPlayer server) {
-            cn.autoforged.module_shop.shop.ShopManager.notifyShippingRejected(server);
+            cn.autoforged.module_shop.shop.ShopManager.notifyShippingRejected(server, this.getCarried());
             return;
         }
         super.clicked(slotId, button, type, player);
@@ -109,7 +109,7 @@ public class ShippingBinMenu extends AbstractContainerMenu {
             // 背包 → 出货箱：不在规则里的物品直接拒绝，并给玩家一条说明。
             if (!ShippingRules.canSell(stack)) {
                 if (player instanceof net.minecraft.server.level.ServerPlayer server) {
-                    cn.autoforged.module_shop.shop.ShopManager.notifyShippingRejected(server);
+                    cn.autoforged.module_shop.shop.ShopManager.notifyShippingRejected(server, stack);
                 }
                 return ItemStack.EMPTY;
             }

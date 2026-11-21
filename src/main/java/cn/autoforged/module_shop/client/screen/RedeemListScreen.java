@@ -1,6 +1,8 @@
 package cn.autoforged.module_shop.client.screen;
 
 import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
+import cn.autoforged.module_shop.data.PriceSpec;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
 import java.util.ArrayList;
 import java.util.List;
@@ -197,7 +199,8 @@ public class RedeemListScreen extends SkiaDialog {
         int used = c.getInt("used");
         int total = c.getInt("total");
         String usedText = used + "/" + (total <= 0 ? "∞" : Integer.toString(total));
-        String reward = ClientShopData.money(c.getLong("money")) + " " + c.getString("items");
+        String moneyText = PriceDisplay.formatPlain(PriceSpec.readFromParent(c, "moneySpec", "money"));
+        String reward = moneyText + " " + c.getString("items");
         IOStyle.text(g, this.font, Component.literal(code), x + 14, ry + 6, IOStyle.ORANGE);
         small(g, x + 118, ry + 7, Component.literal(IOStyle.ellipsize(this.font,
                 Component.literal(expire + "   " + scope + "   " + usedText + "   " + reward), 320).getString()),
@@ -289,6 +292,19 @@ public class RedeemListScreen extends SkiaDialog {
             new cn.autoforged.module_shop.client.ui.widget.ScrollController();
     private final cn.autoforged.module_shop.client.ui.widget.ScrollController skClaimScroll =
             new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skSearch;
+    private String skQuery = "";
+
+    @Override
+    protected void initSkia() {
+        this.skSearch = field(48, Component.translatable("gui.module_shop.search.placeholder").getString())
+                .clearable(true);
+        this.skSearch.editBox().setValue(this.skQuery);
+        this.skSearch.onChange(v -> {
+            this.skQuery = v == null ? "" : v;
+            this.skScroll.scrollTo(0, false);
+        });
+    }
 
     @Override
     protected void paint(io.github.humbleui.skija.Canvas c) {
@@ -314,26 +330,45 @@ public class RedeemListScreen extends SkiaDialog {
             small(c, Component.translatable("gui.module_shop.redeem.list.hint").getString(), innerX, y + 13, 140,
                     IOStyle.TEXT_3);
         }
-        float listY = y + HEADER_H + 6;
-        float listH = h - HEADER_H - 6 - PAD;
-        if (CODES.isEmpty()) {
-            center(c, Component.translatable("gui.module_shop.redeem.list.empty").getString(), innerX,
-                    listY + listH / 2, innerW, IOStyle.TEXT_2);
+        if (this.skSearch != null) {
+            this.skSearch.visible(!modal);
+            if (!modal) {
+                this.skSearch.bounds(innerX, y + HEADER_H + 5, innerW, 16);
+            }
+        }
+        List<CompoundTag> filteredCodes = new ArrayList<>();
+        for (CompoundTag tag : CODES) {
+            if (this.skQuery.isBlank() || cn.autoforged.module_shop.client.screen.shop.PageKit.matchesQuery(
+                    this.skQuery,
+                    tag.getString("code"),
+                    tag.getString("items"),
+                    PriceDisplay.formatPlain(PriceSpec.readFromParent(tag, "moneySpec", "money")),
+                    tag.getString("title"))) {
+                filteredCodes.add(tag);
+            }
+        }
+        float listY = y + HEADER_H + 25;
+        float listH = h - HEADER_H - 25 - PAD;
+        if (filteredCodes.isEmpty()) {
+            String emptyMsg = CODES.isEmpty()
+                    ? Component.translatable("gui.module_shop.redeem.list.empty").getString()
+                    : Component.translatable("gui.module_shop.search.empty").getString();
+            center(c, emptyMsg, innerX, listY + listH / 2, innerW, IOStyle.TEXT_2);
         } else {
             float total = 0;
-            float[] heights = new float[CODES.size()];
-            for (int i = 0; i < CODES.size(); i++) {
-                String code = CODES.get(i).getString("code");
+            float[] heights = new float[filteredCodes.size()];
+            for (int i = 0; i < filteredCodes.size(); i++) {
+                String code = filteredCodes.get(i).getString("code");
                 float t = anim("exp:" + code, code.equals(this.expanded), 70.0F);
                 heights[i] = ROW_H + (EXPANDED_H - ROW_H) * t;
                 total += heights[i] + 3;
             }
             float oy = beginList(c, this.skScroll, innerX, listY, innerW, listH, total);
             float ry = oy;
-            for (int i = 0; i < CODES.size(); i++) {
+            for (int i = 0; i < filteredCodes.size(); i++) {
                 float rh = heights[i];
                 if (ry + rh >= listY && ry <= listY + listH) {
-                    skRow(c, innerX, ry, innerW - 8, rh, CODES.get(i), modal);
+                    skRow(c, innerX, ry, innerW - 10, rh, filteredCodes.get(i), modal);
                 }
                 ry += rh + 3;
             }
@@ -362,12 +397,13 @@ public class RedeemListScreen extends SkiaDialog {
         int used = tag.getInt("used");
         int total = tag.getInt("total");
         String usedText = used + "/" + (total <= 0 ? "∞" : Integer.toString(total));
-        String reward = ClientShopData.money(tag.getLong("money")) + " " + tag.getString("items");
+        String moneyText = PriceDisplay.formatPlain(PriceSpec.readFromParent(tag, "moneySpec", "money"));
+        String reward = moneyText + " " + tag.getString("items");
         float cy = ry + ROW_H / 2.0F;
         cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, code,
                 cn.autoforged.module_shop.client.ui.AtomUi.BOLD, cn.autoforged.module_shop.client.ui.render.Text.BODY,
-                IOStyle.ORANGE, x + 8, cy, 100, cn.autoforged.module_shop.client.ui.render.Text.Align.LEFT);
-        small(c, expire + "   " + scope + "   " + usedText + "   " + reward, x + 112, cy, w - 112 - 22,
+                IOStyle.ORANGE, x + 8, cy, 100.5F, cn.autoforged.module_shop.client.ui.render.Text.Align.LEFT);
+        small(c, expire + "   " + scope + "   " + usedText + "   " + reward, x + 112, cy, w - 112 - 22 + 0.5F,
                 IOStyle.TEXT_2);
         float ax = x + w - 11;
         float d = isOpen ? -1.5F : 1.5F;
@@ -477,6 +513,9 @@ public class RedeemListScreen extends SkiaDialog {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (skia() && this.skSearch != null && this.skSearch.editBox().isFocused()) {
+            return super.keyPressed(keyCode, scanCode, modifiers);
+        }
         if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_C
                 && (modifiers & org.lwjgl.glfw.GLFW.GLFW_MOD_CONTROL) != 0) {
             copy(this.expanded.isEmpty() && !CODES.isEmpty() ? CODES.get(0).getString("code") : this.expanded);

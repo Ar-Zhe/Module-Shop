@@ -106,6 +106,7 @@ public class BillScreen extends SkiaDialog {
     /** 当前筛选下的明细列表（最新在前）。 */
     private List<ClientShopData.BillEntry> filtered() {
         List<ClientShopData.BillEntry> list = new ArrayList<>();
+        String q = skia() ? this.skQuery : "";
         for (ClientShopData.BillEntry entry : ClientShopData.bill) {
             if (this.onlyTypes != null && !this.onlyTypes.contains(entry.type)) {
                 continue;
@@ -114,6 +115,11 @@ public class BillScreen extends SkiaDialog {
                 continue;
             }
             if (this.filter == FILTER_IN && entry.amount <= 0L) {
+                continue;
+            }
+            if (!q.isBlank() && !cn.autoforged.module_shop.client.screen.shop.PageKit.matchesQuery(q,
+                    typeName(entry).getString(), entry.party, entry.note,
+                    Long.toString(entry.amount), ClientShopData.money(entry.amount))) {
                 continue;
             }
             list.add(entry);
@@ -356,11 +362,24 @@ public class BillScreen extends SkiaDialog {
 
     private final cn.autoforged.module_shop.client.ui.widget.ScrollController skScroll =
             new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skSearch;
+    private String skQuery = "";
+
+    @Override
+    protected void initSkia() {
+        this.skSearch = field(48, Component.translatable("gui.module_shop.search.placeholder").getString())
+                .clearable(true);
+        this.skSearch.editBox().setValue(this.skQuery);
+        this.skSearch.onChange(v -> {
+            this.skQuery = v == null ? "" : v;
+            this.skScroll.scrollTo(0, false);
+        });
+    }
 
     @Override
     protected void paint(io.github.humbleui.skija.Canvas c) {
-        float w = 380.0F;
-        float h = 256.0F;
+        float w = 392.0F;
+        float h = 258.0F;
         float x = Math.round((this.width - w) / 2.0F);
         float y = Math.round((this.height - h) / 2.0F);
         float innerX = x + PAD;
@@ -369,11 +388,13 @@ public class BillScreen extends SkiaDialog {
         // 汇总卡
         float cardY = y + HEADER_H + 8;
         card(c, innerX, cardY, innerW, 36);
-        small(c, Component.translatable("gui.module_shop.bill.balance").getString(), innerX + 8, cardY + 10, 120,
+        small(c, Component.translatable("gui.module_shop.bill.balance").getString(), innerX + 8, cardY + 10, 80,
                 IOStyle.TEXT_2);
+        small(c, Component.translatable("gui.module_shop.bill.count", ClientShopData.billSize,
+                ClientShopData.billLimit).getString(), innerX + 88, cardY + 10, 108, IOStyle.TEXT_3);
         cn.autoforged.module_shop.client.ui.render.Text.drawLine(c,
                 ClientShopData.money(ClientShopData.billBalance), cn.autoforged.module_shop.client.ui.AtomUi.BOLD,
-                cn.autoforged.module_shop.client.ui.render.Text.TITLE, IOStyle.ORANGE, innerX + 8, cardY + 24, 150,
+                cn.autoforged.module_shop.client.ui.render.Text.TITLE, IOStyle.ORANGE, innerX + 8, cardY + 24, 180,
                 cn.autoforged.module_shop.client.ui.render.Text.Align.LEFT);
         float colX = innerX + innerW - 168;
         small(c, Component.translatable("gui.module_shop.bill.today_in",
@@ -382,31 +403,34 @@ public class BillScreen extends SkiaDialog {
                 ClientShopData.money(ClientShopData.billTodayOut)).getString(), colX, cardY + 18, 160, IOStyle.RED);
         small(c, Component.translatable("gui.module_shop.bill.month", ClientShopData.money(ClientShopData.billMonthOut),
                 ClientShopData.money(ClientShopData.billMonthIn)).getString(), colX, cardY + 28, 160, IOStyle.TEXT_2);
-        // 筛选
+        // 筛选 + 搜索
         String[] keys = {"gui.module_shop.bill.filter_all", "gui.module_shop.bill.filter_out",
                 "gui.module_shop.bill.filter_in"};
         float tabY = cardY + 44;
         float tx = innerX;
         for (int i = 0; i < keys.length; i++) {
             final int idx = i;
-            chip(c, "filter" + i, Component.translatable(keys[i]).getString(), tx, tabY, 52, 16, this.filter == i,
+            chip(c, "filter" + i, Component.translatable(keys[i]).getString(), tx, tabY, 48, 16, this.filter == i,
                     IOStyle.BLUE, () -> {
                         if (this.filter != idx) {
                             this.filter = idx;
                             this.skScroll.reset();
                         }
                     });
-            tx += 56;
+            tx += 52;
         }
-        small(c, Component.translatable("gui.module_shop.bill.count", ClientShopData.billSize,
-                ClientShopData.billLimit).getString(), tx + 4, tabY + 8, innerW - (tx - innerX), IOStyle.TEXT_3);
+        if (this.skSearch != null) {
+            this.skSearch.bounds(tx + 4, tabY, Math.max(80.0F, innerX + innerW - (tx + 4)), 16);
+        }
         // 列表
         buildRows();
         float listY = tabY + 22;
         float listH = y + h - PAD - 20 - 6 - listY;
         if (this.rows.isEmpty()) {
-            center(c, Component.translatable("gui.module_shop.bill.empty").getString(), innerX, listY + 30, innerW,
-                    IOStyle.TEXT_2);
+            String emptyMsg = ClientShopData.bill.isEmpty() || this.skQuery.isBlank()
+                    ? Component.translatable("gui.module_shop.bill.empty").getString()
+                    : Component.translatable("gui.module_shop.search.empty").getString();
+            center(c, emptyMsg, innerX, listY + 30, innerW, IOStyle.TEXT_2);
         } else {
             float contentH = 0;
             for (Row row : this.rows) {
@@ -418,9 +442,9 @@ public class BillScreen extends SkiaDialog {
                 float rh = row.dayHeader() ? DAY_H + 2 : ROW_H;
                 if (cy + rh > listY && cy < listY + listH) {
                     if (row.dayHeader()) {
-                        skDay(c, innerX, cy, innerW - 8, row);
+                        skDay(c, innerX, cy, innerW - 10, row);
                     } else {
-                        skEntry(c, innerX, cy, innerW - 8, row.entry());
+                        skEntry(c, innerX, cy, innerW - 10, row.entry());
                     }
                 }
                 cy += rh;
@@ -463,8 +487,8 @@ public class BillScreen extends SkiaDialog {
         }
         cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x + 2, y + 4, 2.5F, ROW_H - 8, 1.25F, bar);
         String amount = (income ? "+" : "") + ClientShopData.money(entry.amount);
-        float aw = right(c, amount, x, y + 8, w - 6, income ? IOStyle.GREEN : IOStyle.RED);
-        text(c, typeName(entry).getString(), x + 9, y + 8, w - aw - 20, IOStyle.TEXT);
+        float aw = right(c, amount, x, y + 8, w - 6 + 0.5F, income ? IOStyle.GREEN : IOStyle.RED);
+        text(c, typeName(entry).getString(), x + 9, y + 8, Math.max(40.0F, w - aw - 18) + 0.5F, IOStyle.TEXT);
         StringBuilder sub = new StringBuilder();
         if (entry.note != null && !entry.note.isEmpty()) {
             sub.append(entry.note);
@@ -481,8 +505,9 @@ public class BillScreen extends SkiaDialog {
                 "gui.module_shop.bill.balance_after", ClientShopData.money(entry.balanceAfter)).getString();
         float rw = cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, rightText,
                 cn.autoforged.module_shop.client.ui.AtomUi.REGULAR, cn.autoforged.module_shop.client.ui.render.Text.SMALL,
-                IOStyle.TEXT_3, x, y + 18, w - 6, cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
-        small(c, sub.length() == 0 ? "-" : sub.toString(), x + 9, y + 18, w - rw - 24, IOStyle.TEXT_2);
+                IOStyle.TEXT_3, x, y + 18, w - 6 + 0.5F, cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
+        small(c, sub.length() == 0 ? "-" : sub.toString(), x + 9, y + 18, Math.max(40.0F, w - rw - 20) + 0.5F,
+                IOStyle.TEXT_2);
         cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x + 6, y + ROW_H - 0.5F, w - 12, 0.5F, 0, IOStyle.HAIR);
     }
 

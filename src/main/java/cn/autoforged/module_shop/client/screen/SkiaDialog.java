@@ -94,8 +94,19 @@ public abstract class SkiaDialog extends Screen {
         if (!AtomUi.available()) {
             return 1.0F;
         }
-        float gs = (float) net.minecraft.client.Minecraft.getInstance().getWindow().getGuiScale();
-        return gs <= 0 ? 1.0F : Math.min(1.0F, ShellV2.uiScale() / gs);
+        var win = net.minecraft.client.Minecraft.getInstance().getWindow();
+        float gs = (float) win.getGuiScale();
+        if (gs <= 0.0F) {
+            return 1.0F;
+        }
+        float fw = Math.max(1, win.getWidth());
+        float fh = Math.max(1, win.getHeight());
+        // 所有次级弹窗中最大固定尺寸为 420×262（预留外边距按 440×284 保底），确保高字号下也不越出视口或裁切底部按钮
+        float maxUnit = Math.min(fw / 440.0F, fh / 284.0F);
+        float baseUnit = Math.min(gs, ShellV2.baseUiScale());
+        float targetUnit = Math.min(maxUnit, baseUnit * cn.autoforged.module_shop.client.UIFontScale.scale());
+        targetUnit = Math.max(Math.min(1.0F, maxUnit), targetUnit);
+        return targetUnit / gs;
     }
 
     private double u(double gui) {
@@ -125,6 +136,16 @@ public abstract class SkiaDialog extends Screen {
         return false;
     }
 
+    /** 即时控件之外的拖拽（返回 true 表示已处理）。 */
+    protected boolean onDrag(double mx, double my, int button, double dx, double dy) {
+        return false;
+    }
+
+    /** 即时控件之外的松开（返回 true 表示已处理）。 */
+    protected boolean onRelease(double mx, double my, int button) {
+        return false;
+    }
+
     /** 滚轮（返回 true 表示已处理）。 */
     protected boolean onScroll(double mx, double my, double amount) {
         return false;
@@ -144,7 +165,7 @@ public abstract class SkiaDialog extends Screen {
         this.realW = this.width;
         this.realH = this.height;
         this.k = this.skia ? dlgScale() : 1.0F;
-        if (this.k < 1.0F) {
+        if (Math.abs(this.k - 1.0F) > 1.0E-4F) {
             this.width = Math.round(this.realW / this.k);
             this.height = Math.round(this.realH / this.k);
         }
@@ -219,7 +240,7 @@ public abstract class SkiaDialog extends Screen {
                 canvas.restoreToCount(saved);
             }
         };
-        if (kk < 1.0F) {
+        if (Math.abs(kk - 1.0F) > 1.0E-4F) {
             SkiaFrame.drawScaled(g, unit, painter);
         } else {
             SkiaFrame.draw(g, painter);
@@ -242,8 +263,8 @@ public abstract class SkiaDialog extends Screen {
             this.items.flush(g, this.font);
         }
         this.items.setClipScale(1.0F);
-        // 提示框也按界面缩放（略放大一点，保证可读）
-        float tk = Math.min(1.0F, kk * 1.15F);
+        // 提示框也按界面缩放（略放大一点，保证可读；大倍率时跟随弹窗尺度且不超过 1.35×）
+        float tk = Math.min(Math.max(1.0F, kk), kk * 1.15F);
         g.pose().popPose();
         g.pose().pushPose();
         g.pose().scale(tk, tk, 1.0F);
@@ -333,6 +354,7 @@ public abstract class SkiaDialog extends Screen {
         for (Button b : new ArrayList<>(this.frameButtons)) {
             handled |= b.mouseReleased(mx, my, button);
         }
+        handled |= onRelease(mx, my, button);
         return handled;
     }
 
@@ -359,6 +381,9 @@ public abstract class SkiaDialog extends Screen {
                 if (comp.mouseDragged(mx, my, button, dx, dy)) {
                     return true;
                 }
+            }
+            if (onDrag(mx, my, button, dx, dy)) {
+                return true;
             }
             return false;
         }
@@ -391,6 +416,13 @@ public abstract class SkiaDialog extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (this.skia && keyCode == 256) {
+            for (UiComponent comp : this.comps) {
+                if (comp instanceof SkiaTextField tf && tf.handleEscapeKey()) {
+                    return true;
+                }
+            }
+        }
         if (this.skia && (keyCode == 257 || keyCode == 335) && onEnter()) {
             return true;
         }
@@ -548,6 +580,17 @@ public abstract class SkiaDialog extends Screen {
         return y - sc.offset();
     }
 
+    /**
+     * 登记一个由外部自行裁剪与绘制滚动条的可滚动区域（如 {@code AnnouncementBlockRenderer}），
+     * 使其自动接入本底座的滚轮、轨道跳转与滑块鼠标拖拽。
+     */
+    protected final void registerScrollArea(cn.autoforged.module_shop.client.ui.widget.ScrollController sc,
+                                            float x, float y, float w, float h) {
+        if (sc != null && w > 0.0F && h > 0.0F) {
+            this.frameLists.add(new ListArea(sc, x, y, w, h));
+        }
+    }
+
     protected final void endList(Canvas canvas) {
         int[] saved = this.listSaves.poll();
         if (saved != null) {
@@ -563,7 +606,8 @@ public abstract class SkiaDialog extends Screen {
         if (button != 0) {
             return false;
         }
-        for (ListArea area : this.lists) {
+        for (int i = this.lists.size() - 1; i >= 0; i--) {
+            ListArea area = this.lists.get(i);
             if (area.sc.pressBar(mx, my, area.x, area.y, area.w, area.h)) {
                 this.draggingList = area;
                 return true;

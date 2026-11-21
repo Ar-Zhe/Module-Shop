@@ -2,9 +2,12 @@ package cn.autoforged.module_shop.shop;
 
 import cn.autoforged.module_shop.Config;
 import cn.autoforged.module_shop.data.PlayerAccount;
+import cn.autoforged.module_shop.data.PriceSpec;
 import cn.autoforged.module_shop.data.ShopSavedData;
 import cn.autoforged.module_shop.menu.GrantMenu;
 import cn.autoforged.module_shop.network.payload.ClientboundShopSyncPayload;
+import cn.autoforged.module_shop.shop.currency.CurrencySettlement;
+import cn.autoforged.module_shop.shop.currency.PhysicalCurrencyConfig;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -170,8 +173,11 @@ public final class GrantManager {
 
     /** 把可选目标列表下发到客户端（kind=admin_grant），界面打开后也会主动请求一次。 */
     public static void sendTargets(ServerPlayer admin) {
-        // 防御纵深：即使将来有新的调用点忘了校验，也不会把全服名单下发给普通玩家。
-        if (!admin.hasPermissions(2)) {
+        // 防御纵深：即使将来有新的调用点忘了校验，也不会把全服名单下发给普通/未解锁玩家。
+        if (!ShopManager.canEditAdmin(admin)) {
+            if (admin != null && admin.hasPermissions(2)) {
+                ShopManager.promptAdminAuth(admin);
+            }
             return;
         }
         ListTag list = new ListTag();
@@ -193,7 +199,12 @@ public final class GrantManager {
 
     /** 打开发放界面（容器界面：物品真正放在服务端槽位里，关闭时安全退还）。 */
     public static void open(ServerPlayer admin) {
-        if (!admin.hasPermissions(2)) {
+        if (!ShopManager.canEditAdmin(admin)) {
+            if (admin != null && admin.hasPermissions(2)) {
+                notifyPlayer(admin, Component.translatable("msg.module_shop.auth_required")
+                        .withStyle(ChatFormatting.RED));
+                ShopManager.promptAdminAuth(admin);
+            }
             return;
         }
         // 先下发目标列表，再打开界面；界面 init 时还会再请求一次，避免网络时序导致列表为空。
@@ -261,7 +272,12 @@ public final class GrantManager {
 
     /** 处理发放界面的“发送”动作。 */
     public static void send(ServerPlayer admin, CompoundTag tag) {
-        if (!admin.hasPermissions(2)) {
+        if (!ShopManager.canEditAdmin(admin)) {
+            if (admin != null && admin.hasPermissions(2)) {
+                notifyPlayer(admin, Component.translatable("msg.module_shop.auth_required")
+                        .withStyle(ChatFormatting.RED));
+                ShopManager.promptAdminAuth(admin);
+            }
             return;
         }
         if (!(admin.containerMenu instanceof GrantMenu menu)) {
@@ -277,8 +293,28 @@ public final class GrantManager {
                 items.add(stack.copy());
             }
         }
-        // 金额按余额上限夹取：单人要不了更多，同时杜绝任何加法溢出（credit 里还有一层饱和保护）。
-        long amount = Math.min(Math.max(0L, tag.getLong("amount")), Config.maxBalanceLimit());
+        long rawAmount = Math.min(Math.max(0L, tag.getLong("amount")), Config.maxBalanceLimit());
+        PriceSpec rewardSpec = tag.contains("priceSpec", Tag.TAG_COMPOUND)
+                ? PriceSpec.fromTag(tag.getCompound("priceSpec"), rawAmount)
+                : (tag.contains("moneySpec", Tag.TAG_COMPOUND)
+                        ? PriceSpec.fromTag(tag.getCompound("moneySpec"), rawAmount)
+                        : PriceSpec.star(rawAmount));
+        if (rewardSpec.supportsStar() && rewardSpec.starPrice > Config.maxBalanceLimit()) {
+            rewardSpec = rewardSpec.withStarPrice(Config.maxBalanceLimit());
+        }
+        if (rewardSpec.supportsPhys()) {
+            PhysicalCurrencyConfig physCfg = PhysicalCurrencyConfig.get();
+            if (!physCfg.isActive() || physCfg.findResolvedTier(rewardSpec.physTierKey, admin.level().registryAccess()) == null) {
+                notifyPlayer(admin, Component.translatableWithFallback(
+                        "msg.module_shop.phys_tier_unavailable", "所需的实体货币档位未启用或不存在")
+                        .withStyle(ChatFormatting.RED));
+                return;
+            }
+            rewardSpec = rewardSpec.withPhysTierKey(physCfg.canonicalTierKey(rewardSpec.physTierKey));
+        }
+        long amount = rewardSpec.supportsStar() ? rewardSpec.starPrice : 0L;
+        long physCount = rewardSpec.supportsPhys() ? rewardSpec.physCount : 0L;
+        String physTierKey = rewardSpec.supportsPhys() ? rewardSpec.physTierKey : "";
         boolean all = tag.getBoolean("all");
         ShopSavedData data = ShopManager.data(admin.server);
         Set<UUID> targetIds = new LinkedHashSet<>();
@@ -302,7 +338,7 @@ public final class GrantManager {
                     .withStyle(ChatFormatting.RED));
             return;
         }
-        if (items.isEmpty() && amount <= 0L) {
+        if (items.isEmpty() && !rewardSpec.isValid()) {
             notifyPlayer(admin, Component.translatable("msg.module_shop.grant_nothing")
                     .withStyle(ChatFormatting.RED));
             return;
@@ -356,6 +392,12 @@ public final class GrantManager {
                             clamped += giveMoneyLocked(admin.server, data, id, amount).clamped();
                         }
                     }
+                    if (physCount > 0L && !physTierKey.isEmpty()) {
+                        CurrencySettlement.payoutPhysTier(admin.server, id, physTierKey, physCount, SOURCE_ADMIN_GRANT);
+                        TransactionLog.record(admin.server, id, TransactionLog.ADMIN_ITEM, sender, 0L,
+                                data.account(id).balance,
+                                physCount + " " + CurrencySettlement.tierDisplayName(physTierKey, admin.server));
+                    }
                 } catch (RuntimeException ex) {
                     // 单个目标失败不应中断整批发放：统计后继续，最后回报管理员。
                     failed++;
@@ -368,8 +410,8 @@ public final class GrantManager {
         if (!items.isEmpty()) {
             parts.add(Component.translatable("msg.module_shop.grant_sent_items", items.size()).getString());
         }
-        if (amount > 0L) {
-            parts.add(Component.translatable("msg.module_shop.grant_sent_money", amount).getString());
+        if (rewardSpec.isValid()) {
+            parts.add(CurrencySettlement.formatSpec(rewardSpec, admin.server));
         }
         notifyPlayer(admin, Component.translatable("msg.module_shop.grant_sent",
                         Math.max(0, targetIds.size() - failed), String.join("、", parts))

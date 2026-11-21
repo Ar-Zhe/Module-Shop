@@ -1,6 +1,7 @@
 package cn.autoforged.module_shop.client.screen.shop;
 
 import cn.autoforged.module_shop.client.ClickSound;
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState;
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.UIViewMode;
 import cn.autoforged.module_shop.client.screen.IOStyle;
@@ -10,11 +11,16 @@ import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
 import cn.autoforged.module_shop.client.ui.v2.CardGrid;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
 import cn.autoforged.module_shop.client.ui.v2.V2;
+import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
 import cn.autoforged.module_shop.data.DailyBuybackEntry;
+import cn.autoforged.module_shop.data.PriceSpec;
 import io.github.humbleui.skija.Canvas;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import net.minecraft.client.Minecraft;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
@@ -35,7 +41,9 @@ public final class BuybackPage implements ShopPage {
     private static final CardGrid GRID = new CardGrid();
     /** 0 = 全部，1 = 背包里有，2 = 已收满。 */
     private static int filter;
+    private static String query = "";
 
+    private SkiaTextField search;
     private List<Integer> shown = new ArrayList<>();
     private float[][] segRects = new float[0][2];
     private float segY;
@@ -53,18 +61,32 @@ public final class BuybackPage implements ShopPage {
         return Component.translatable(key, args).getString();
     }
 
+    @Override
+    public void init(ShopHost host) {
+        search = new SkiaTextField(host.screen(), host.font(), 48)
+                .placeholder(tr("gui.module_shop.search.placeholder"))
+                .clearable(true)
+                .fontSize(V2.FS_S)
+                .onChange(t -> {
+                    query = t == null ? "" : t;
+                    TABLE.scrollToTop();
+                    GRID.scrollToTop();
+                });
+        search.setValue(query);
+        host.registerInput(search.editBox());
+    }
+
     /** 背包里与收购品同种物品的数量（与服务端 takeMatching 一样只比较物品种类，含护甲 / 副手栏）。 */
     static int countInBag(ItemStack template) {
         var player = Minecraft.getInstance().player;
         if (player == null || template.isEmpty()) {
             return 0;
         }
-        Item item = template.getItem();
         int total = 0;
         var inv = player.getInventory();
         for (int i = 0; i < inv.getContainerSize(); i++) {
             ItemStack s = inv.getItem(i);
-            if (!s.isEmpty() && s.getItem() == item) {
+            if (!s.isEmpty() && s.getItem() == template.getItem()) {
                 total += s.getCount();
             }
         }
@@ -83,7 +105,8 @@ public final class BuybackPage implements ShopPage {
         List<DailyBuybackEntry> list = ClientShopData.dailyBuyback;
         int haveCount = 0;
         int fullCount = 0;
-        long sumGain = 0;
+        long starGain = 0;
+        Map<String, Long> physGain = new LinkedHashMap<>();
         int sumKinds = 0;
         shown = new ArrayList<>();
         for (int i = 0; i < list.size(); i++) {
@@ -98,13 +121,27 @@ public final class BuybackPage implements ShopPage {
             }
             if (sell > 0) {
                 sumKinds++;
-                sumGain += sell * e.price;
+                PriceSpec spec = e.resolvePriceSpec();
+                String ch = resolveSellChannel(spec);
+                if (spec.mode == PriceSpec.CurrencyMode.PHYS_ONLY
+                        || (spec.mode == PriceSpec.CurrencyMode.EITHER && ClientHomeCurrencyState.CHANNEL_PHYS.equals(ch))) {
+                    physGain.merge(spec.physTierKey, spec.physCount * (long) sell, Long::sum);
+                } else {
+                    if (spec.supportsStar()) {
+                        starGain += spec.starPrice * (long) sell;
+                    }
+                    if (spec.mode == PriceSpec.CurrencyMode.BOTH && spec.supportsPhys()) {
+                        physGain.merge(spec.physTierKey, spec.physCount * (long) sell, Long::sum);
+                    }
+                }
             }
-            if (filter == 0 || (filter == 1 && have > 0) || (filter == 2 && e.remaining() <= 0)) {
+            if ((filter == 0 || (filter == 1 && have > 0) || (filter == 2 && e.remaining() <= 0))
+                    && (query.isBlank() || PageKit.matchesItemQuery(e.stack, query))) {
                 shown.add(i);
             }
         }
-        drawToolbar(c, f, list.size(), haveCount, fullCount, sumKinds, sumGain);
+        String gainSummary = PriceDisplay.formatLedgerSummary(starGain, physGain);
+        drawToolbar(c, f, list.size(), haveCount, fullCount, sumKinds, gainSummary);
         float top = f.y() + V2.BAR;
         float bottom = f.y() + f.h() - V2.FOOT;
         if (UIViewMode.isGrid()) {
@@ -118,7 +155,7 @@ public final class BuybackPage implements ShopPage {
         }
     }
 
-    private void drawToolbar(Canvas c, PageFrame f, int all, int have, int full, int kinds, long gain) {
+    private void drawToolbar(Canvas c, PageFrame f, int all, int have, int full, int kinds, String gainSummary) {
         float x = f.x();
         float cy = f.y() + V2.BAR / 2;
         Draw.hairline(c, x, f.y() + V2.BAR - 0.5F, f.w(), IOStyle.BORDER_DIM);
@@ -128,7 +165,7 @@ public final class BuybackPage implements ShopPage {
         segY = cy - V2.CTRL / 2;
         segRects = V2.segmented(c, seg, filter, x + 8 + tw + 10, segY, null);
 
-        // 右侧从右往左：全部卖出 / 刷新 / 管理员奖励设置 / 说明文字
+        // 右侧从右往左：全部卖出 / 刷新 / 管理员奖励设置 / 搜索 / 说明文字
         float right = x + f.w() - 8;
         String sellLabel = tr("gui.module_shop.v2.buyback.sell_all");
         float sw = V2.buttonWidth(sellLabel);
@@ -141,7 +178,7 @@ public final class BuybackPage implements ShopPage {
         String refreshLabel = tr("gui.module_shop.refresh_buyback");
         float rw = V2.buttonWidth(refreshLabel);
         right -= rw + 5;
-        boolean canRefresh = ClientShopData.buybackRefreshCost >= 0L && !ClientShopData.dailyBuyback.isEmpty();
+        boolean canRefresh = ClientShopData.hasBuybackRefreshCost() && !ClientShopData.dailyBuyback.isEmpty();
         float hr = over(f, right, segY, rw, V2.CTRL) ? 1 : 0;
         V2.button(c, refreshLabel, canRefresh ? V2.Btn.NORMAL : V2.Btn.DISABLED, right, segY, rw, V2.CTRL, hr);
         refreshRect = canRefresh ? new float[]{right, segY, rw, V2.CTRL} : null;
@@ -149,7 +186,8 @@ public final class BuybackPage implements ShopPage {
             int left = Math.max(0, ClientShopData.buybackRefreshMax - ClientShopData.buybackRefreshUsed);
             f.host().textTooltip(canRefresh
                     ? Component.translatable("gui.module_shop.refresh_buyback_tooltip",
-                    ClientShopData.money(ClientShopData.buybackRefreshCost), left, ClientShopData.buybackRefreshMax)
+                    PriceDisplay.formatPlain(ClientShopData.resolveBuybackRefreshSpec()), left,
+                    ClientShopData.buybackRefreshMax)
                     : Component.translatable("gui.module_shop.refresh_buyback_tooltip_none", ClientShopData.buybackRefreshMax));
         }
 
@@ -167,20 +205,33 @@ public final class BuybackPage implements ShopPage {
             V2.button(c, bl, V2.Btn.GHOST, right, segY, bw, V2.CTRL, over(f, right, segY, bw, V2.CTRL) ? 1 : 0);
             bonusSetRect = new float[]{right, segY, bw, V2.CTRL};
         }
+        float segEnd = segRects[segRects.length - 1][0] + segRects[segRects.length - 1][1] + 8;
+        float avail = right - 8 - segEnd;
+        float afterSearch = segEnd;
+        if (search != null) {
+            if (avail >= 48.0F) {
+                float srW = Math.min(125.0F, Math.max(48.0F, avail >= 210.0F ? 105.0F : avail));
+                search.visible(true).bounds(segEnd, segY, srW, V2.CTRL);
+                search.render(c, f.mouseX(), f.mouseY(), f.dtMs());
+                afterSearch = segEnd + srW + 8.0F;
+            } else {
+                search.visible(false);
+            }
+        }
         // 说明：全清奖励进度 + 背包可卖合计
         List<String> notes = new ArrayList<>();
-        if (ClientShopData.buybackBonusEnabled && ClientShopData.buybackBonus > 0L) {
+        if (ClientShopData.buybackBonusEnabled && ClientShopData.buybackBonusSpec.isValid()) {
+            String bonusStr = PriceDisplay.formatPlain(ClientShopData.buybackBonusSpec);
             notes.add(ClientShopData.buybackBonusDone
-                    ? tr("gui.module_shop.buyback_bonus_done", ClientShopData.money(ClientShopData.buybackBonus))
-                    : tr("gui.module_shop.buyback_bonus_progress", ClientShopData.money(ClientShopData.buybackBonus),
-                    ClientShopData.buybackLeft));
+                    ? tr("gui.module_shop.buyback_bonus_done", bonusStr)
+                    : tr("gui.module_shop.buyback_bonus_progress", bonusStr, ClientShopData.buybackLeft));
         }
         if (kinds > 0) {
-            notes.add(tr("gui.module_shop.v2.buyback.can_sell", kinds, V2.money(gain)));
+            notes.add(tr("gui.module_shop.v2.buyback.can_sell", kinds, gainSummary));
         }
-        float segEnd = segRects[segRects.length - 1][0] + segRects[segRects.length - 1][1] + 10;
-        if (!notes.isEmpty() && right - 8 > segEnd) {
-            V2.text(c, String.join("  ·  ", notes), V2.FS_XS, IOStyle.TEXT_2, segEnd, cy, right - 8 - segEnd, Text.Align.RIGHT);
+        if (!notes.isEmpty() && right - 8 - afterSearch >= 65.0F) {
+            V2.text(c, String.join("  ·  ", notes), V2.FS_XS, IOStyle.TEXT_2, afterSearch, cy, right - 8 - afterSearch,
+                    Text.Align.RIGHT);
         }
     }
 
@@ -189,7 +240,14 @@ public final class BuybackPage implements ShopPage {
     }
 
     private void drawTable(Canvas c, PageFrame f, float x, float y, float w, float h) {
-        float[][] cols = V2.columns(x, w, 10, 6, 14, 0, 58, 64, 112, 72, 40);
+        String fullLabel = tr("gui.module_shop.v2.buyback.full");
+        float actW = Math.max(40.0F, Math.max(V2.buttonWidth(fullLabel), V2.buttonWidth(tr("gui.module_shop.v2.sell"))));
+        float gap = 5.0F;
+        float[][] baseCols = V2.columns(x, w - actW - gap, 10, gap, 14, 0, 64, 44, 84, 68);
+        float[][] cols = new float[7][2];
+        System.arraycopy(baseCols, 0, cols, 0, 6);
+        cols[6][0] = x + w - 10 - actW;
+        cols[6][1] = actW;
         String[] heads = {"", tr("gui.module_shop.v2.col.buyback_item"), tr("gui.module_shop.v2.col.price"),
                 tr("gui.module_shop.v2.col.have"), tr("gui.module_shop.v2.col.quota"), tr("gui.module_shop.v2.col.gain"), ""};
         Text.Align[] al = {Text.Align.LEFT, Text.Align.LEFT, Text.Align.RIGHT, Text.Align.RIGHT, Text.Align.RIGHT,
@@ -211,24 +269,30 @@ public final class BuybackPage implements ShopPage {
             Draw.fill(cv, cols[0][0] - 5, ry + 3, 1.5F, V2.ROW - 6, 0.75F, IOStyle.rarity(e.rarity));
             f.host().items().add(e.stack, cols[0][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, true);
             float nx = cols[1][0];
+            float tagReserve = full ? (V2.tagWidth(fullLabel) + 5.0F) : 0.0F;
+            float nameMaxW = Math.max(16.0F, cols[1][1] - tagReserve);
             float nw = V2.text(cv, e.stack.getHoverName().getString(), V2.FS, full ? IOStyle.TEXT_3 : IOStyle.TEXT,
-                    nx, cy, cols[1][1] - 60, Text.Align.LEFT);
+                    nx, cy, nameMaxW, Text.Align.LEFT);
             if (full) {
-                V2.tag(cv, tr("gui.module_shop.v2.buyback.full"), IOStyle.TEXT_3, nx + nw + 5, cy);
+                V2.tag(cv, fullLabel, IOStyle.TEXT_3, nx + Math.min(nw, nameMaxW) + 5, cy);
             }
-            V2.bold(cv, V2.money(e.price), V2.FS, IOStyle.ORANGE, cols[2][0], cy, cols[2][1], Text.Align.RIGHT);
+            PriceSpec spec = e.resolvePriceSpec();
+            PriceDisplay.drawCell(cv, f.host().items(), spec, cols[2][0], cy, cols[2][1], Text.Align.RIGHT,
+                    IOStyle.ORANGE, false);
             if (have > 0) {
                 V2.bold(cv, V2.money(have), V2.FS, IOStyle.TEXT, cols[3][0], cy, cols[3][1], Text.Align.RIGHT);
             } else {
                 V2.text(cv, "—", V2.FS, IOStyle.TEXT_3, cols[3][0], cy, cols[3][1], Text.Align.RIGHT);
             }
-            float barW = 34;
+            float barW = Math.min(30.0F, cols[4][1] * 0.34F);
             float pct = e.limit <= 0 ? 1 : e.sold / (float) e.limit;
             String quota = e.sold + " / " + e.limit;
             V2.bar(cv, cols[4][0] + cols[4][1] - barW, cy, barW, pct, IOStyle.BLUE);
-            V2.text(cv, quota, V2.FS_S, IOStyle.TEXT_2, cols[4][0], cy, cols[4][1] - barW - 5, Text.Align.RIGHT);
+            V2.text(cv, quota, V2.FS_S, IOStyle.TEXT_2, cols[4][0], cy, Math.max(12.0F, cols[4][1] - barW - 4),
+                    Text.Align.RIGHT);
             if (sell > 0) {
-                V2.bold(cv, V2.signed(sell * e.price), V2.FS, IOStyle.GREEN, cols[5][0], cy, cols[5][1], Text.Align.RIGHT);
+                PriceDisplay.drawCell(cv, f.host().items(), spec.scale(sell), cols[5][0], cy, cols[5][1],
+                        Text.Align.RIGHT, IOStyle.GREEN, false, "+");
             } else {
                 V2.text(cv, "—", V2.FS, IOStyle.TEXT_3, cols[5][0], cy, cols[5][1], Text.Align.RIGHT);
             }
@@ -272,8 +336,8 @@ public final class BuybackPage implements ShopPage {
 
             V2.text(cv, e.stack.getHoverName().getString(), V2.FS_S, full ? IOStyle.TEXT_3 : IOStyle.TEXT,
                     cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
-            V2.bold(cv, V2.money(e.price), V2.FS, full ? IOStyle.TEXT_3 : IOStyle.ORANGE,
-                    cx + 3, cy + 44.5F, cw - 6, Text.Align.CENTER);
+            PriceDisplay.drawCard(cv, f.host().items(), e.resolvePriceSpec(), cx + 3, cy + 44.5F, cx + cw * 0.5F,
+                    cw - 6, 1.0F, full ? IOStyle.TEXT_3 : IOStyle.ORANGE, full);
             float pct = e.limit <= 0 ? 1.0F : e.sold / (float) e.limit;
             V2.bar(cv, cx + 5, cy + 50.5F, cw - 10, pct, full ? IOStyle.TEXT_3 : (have > 0 ? IOStyle.GREEN : IOStyle.BLUE));
         });
@@ -287,6 +351,12 @@ public final class BuybackPage implements ShopPage {
 
     @Override
     public boolean mouseClicked(PageFrame f, double mx, double my, int button) {
+        if (search != null && search.isVisible() && search.mouseClicked(mx, my, button)) {
+            return true;
+        }
+        if (search != null && search.isFocused()) {
+            search.blur();
+        }
         if (button == 0) {
             for (int i = 0; i < segRects.length; i++) {
                 if (mx >= segRects[i][0] && mx < segRects[i][0] + segRects[i][1] && my >= segY && my < segY + V2.CTRL) {
@@ -376,10 +446,27 @@ public final class BuybackPage implements ShopPage {
         return hit.button() != null;
     }
 
+    private static String resolveSellChannel(PriceSpec spec) {
+        if (spec == null) {
+            return ClientHomeCurrencyState.CHANNEL_STAR;
+        }
+        return switch (spec.mode) {
+            case STAR_ONLY -> ClientHomeCurrencyState.CHANNEL_STAR;
+            case PHYS_ONLY -> ClientHomeCurrencyState.CHANNEL_PHYS;
+            case BOTH -> "both";
+            case EITHER -> ClientHomeCurrencyState.CHANNEL_PHYS.equals(ClientHomeCurrencyState.preferredEitherChannel)
+                    ? ClientHomeCurrencyState.CHANNEL_PHYS
+                    : ClientHomeCurrencyState.CHANNEL_STAR;
+        };
+    }
+
     private static void sendSell(PageFrame f, int index, int quantity) {
         CompoundTag tag = new CompoundTag();
         tag.putInt("index", index);
         tag.putString("quantity", String.valueOf(quantity));
+        if (index >= 0 && index < ClientShopData.dailyBuyback.size()) {
+            tag.putString("pay_channel", resolveSellChannel(ClientShopData.dailyBuyback.get(index).resolvePriceSpec()));
+        }
         f.host().action("sell_buyback", tag);
     }
 
@@ -387,7 +474,8 @@ public final class BuybackPage implements ShopPage {
         List<DailyBuybackEntry> list = ClientShopData.dailyBuyback;
         List<int[]> plan = new ArrayList<>();
         StringBuilder lines = new StringBuilder();
-        long total = 0;
+        long starTotal = 0;
+        Map<String, Long> physTotal = new LinkedHashMap<>();
         for (int i = 0; i < list.size(); i++) {
             DailyBuybackEntry e = list.get(i);
             int sell = sellable(e);
@@ -395,10 +483,26 @@ public final class BuybackPage implements ShopPage {
                 continue;
             }
             plan.add(new int[]{i, sell});
-            total += sell * e.price;
+            PriceSpec unitSpec = e.resolvePriceSpec();
+            PriceSpec rowSpec = unitSpec.scale(sell);
+            String ch = resolveSellChannel(unitSpec);
+            if (unitSpec.mode == PriceSpec.CurrencyMode.PHYS_ONLY
+                    || (unitSpec.mode == PriceSpec.CurrencyMode.EITHER && ClientHomeCurrencyState.CHANNEL_PHYS.equals(ch))) {
+                physTotal.merge(unitSpec.physTierKey, unitSpec.physCount * (long) sell, Long::sum);
+                rowSpec = PriceSpec.phys(unitSpec.physTierKey, unitSpec.physCount * (long) sell);
+            } else {
+                if (unitSpec.supportsStar()) {
+                    starTotal += unitSpec.starPrice * (long) sell;
+                }
+                if (unitSpec.mode == PriceSpec.CurrencyMode.BOTH && unitSpec.supportsPhys()) {
+                    physTotal.merge(unitSpec.physTierKey, unitSpec.physCount * (long) sell, Long::sum);
+                } else if (unitSpec.mode == PriceSpec.CurrencyMode.EITHER) {
+                    rowSpec = PriceSpec.star(unitSpec.starPrice * (long) sell);
+                }
+            }
             if (plan.size() <= 8) {
                 lines.append("\n").append(e.stack.getHoverName().getString()).append(" ×").append(sell)
-                        .append("  +").append(V2.money(sell * e.price));
+                        .append("  +").append(PriceDisplay.formatPlain(rowSpec));
             }
         }
         if (plan.isEmpty()) {
@@ -408,7 +512,7 @@ public final class BuybackPage implements ShopPage {
             lines.append("\n").append(tr("gui.module_shop.v2.buyback.more", plan.size() - 8));
         }
         Component body = Component.translatable("gui.module_shop.v2.buyback.sell_all_body", plan.size(),
-                V2.money(total), lines.toString());
+                PriceDisplay.formatLedgerSummary(starTotal, physTotal), lines.toString());
         ShopHost host = f.host();
         Nav.open(new ShopConfirmScreen(Component.translatable("gui.module_shop.v2.buyback.sell_all_title"), body, ok -> {
             if (ok) {
@@ -416,6 +520,10 @@ public final class BuybackPage implements ShopPage {
                     CompoundTag tag = new CompoundTag();
                     tag.putInt("index", p[0]);
                     tag.putString("quantity", String.valueOf(p[1]));
+                    if (p[0] >= 0 && p[0] < ClientShopData.dailyBuyback.size()) {
+                        tag.putString("pay_channel",
+                                resolveSellChannel(ClientShopData.dailyBuyback.get(p[0]).resolvePriceSpec()));
+                    }
                     host.action("sell_buyback", tag);
                 }
             }
@@ -423,12 +531,25 @@ public final class BuybackPage implements ShopPage {
     }
 
     @Override
+    public void clickedOutside() {
+        if (search != null && search.isFocused()) {
+            search.blur();
+        }
+    }
+
+    @Override
     public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
+        if (search != null) {
+            search.mouseReleased(mx, my, button);
+        }
         return UIViewMode.isGrid() ? GRID.releaseBar() : TABLE.releaseBar();
     }
 
     @Override
     public boolean mouseDragged(PageFrame f, double mx, double my, int button, double dx, double dy) {
+        if (search != null && search.mouseDragged(mx, my, button, dx, dy)) {
+            return true;
+        }
         return UIViewMode.isGrid() ? GRID.dragBar(my) : TABLE.dragBar(my);
     }
 
@@ -439,6 +560,9 @@ public final class BuybackPage implements ShopPage {
 
     @Override
     public void cancelInput() {
+        if (search != null) {
+            search.visible(false);
+        }
         TABLE.releaseBar();
         GRID.releaseBar();
     }

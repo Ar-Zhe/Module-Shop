@@ -2,6 +2,7 @@ package cn.autoforged.module_shop.data;
 
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import net.minecraft.core.HolderLookup;
@@ -44,6 +45,70 @@ public final class PlayerAccount {
 
     /** 出货箱（新增模块）：每个玩家一份独立空间。 */
     public final ShippingBin shipping = new ShippingBin();
+
+    /** 货币兑换每日个人额度追踪（按现实日期刷新）。 */
+    public long exchangeQuotaDay = Long.MIN_VALUE;
+    public final Map<String, Integer> exchangeDepositUsed = new HashMap<>();
+    public final Map<String, Integer> exchangeWithdrawUsed = new HashMap<>();
+
+    /** 实体货币阶梯兑换每日个人额度追踪（按折算基准面值累计）。 */
+    public long physConvertQuotaDay = Long.MIN_VALUE;
+    public long physConvertUsedValue;
+
+    public void ensureExchangeQuotaDay(long day) {
+        if (this.exchangeQuotaDay != day) {
+            this.exchangeQuotaDay = day;
+            this.exchangeDepositUsed.clear();
+            this.exchangeWithdrawUsed.clear();
+        }
+    }
+
+    public int exchangeDepositUsedFor(String key, long day) {
+        ensureExchangeQuotaDay(day);
+        return key == null || key.isEmpty() ? 0 : Math.max(0, this.exchangeDepositUsed.getOrDefault(key, 0));
+    }
+
+    public void addExchangeDepositUsed(String key, long day, int count) {
+        if (key == null || key.isEmpty() || count <= 0) {
+            return;
+        }
+        ensureExchangeQuotaDay(day);
+        this.exchangeDepositUsed.merge(key, count, Integer::sum);
+    }
+
+    public int exchangeWithdrawUsedFor(String key, long day) {
+        ensureExchangeQuotaDay(day);
+        return key == null || key.isEmpty() ? 0 : Math.max(0, this.exchangeWithdrawUsed.getOrDefault(key, 0));
+    }
+
+    public void addExchangeWithdrawUsed(String key, long day, int count) {
+        if (key == null || key.isEmpty() || count <= 0) {
+            return;
+        }
+        ensureExchangeQuotaDay(day);
+        this.exchangeWithdrawUsed.merge(key, count, Integer::sum);
+    }
+
+    public void ensurePhysConvertQuotaDay(long day) {
+        if (this.physConvertQuotaDay != day) {
+            this.physConvertQuotaDay = day;
+            this.physConvertUsedValue = 0L;
+        }
+    }
+
+    public long physConvertUsedFor(long day) {
+        ensurePhysConvertQuotaDay(day);
+        return Math.max(0L, this.physConvertUsedValue);
+    }
+
+    public void addPhysConvertUsed(long day, long value) {
+        if (value <= 0L) {
+            return;
+        }
+        ensurePhysConvertQuotaDay(day);
+        this.physConvertUsedValue = this.physConvertUsedValue > Long.MAX_VALUE - value
+                ? Long.MAX_VALUE : (this.physConvertUsedValue + value);
+    }
 
     public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = new CompoundTag();
@@ -101,6 +166,37 @@ public final class PlayerAccount {
         tag.put("notifications", notificationsTag);
         tag.putLong("lastNotificationReminderMs", lastNotificationReminderMs);
         tag.put("shipping", shipping.save(registries));
+        if (exchangeQuotaDay != Long.MIN_VALUE) {
+            tag.putLong("exchangeQuotaDay", exchangeQuotaDay);
+        }
+        if (!exchangeDepositUsed.isEmpty()) {
+            CompoundTag depTag = new CompoundTag();
+            for (Map.Entry<String, Integer> e : exchangeDepositUsed.entrySet()) {
+                if (e.getKey() != null && !e.getKey().isEmpty() && e.getValue() != null && e.getValue() > 0) {
+                    depTag.putInt(e.getKey(), e.getValue());
+                }
+            }
+            if (!depTag.isEmpty()) {
+                tag.put("exchangeDepositUsed", depTag);
+            }
+        }
+        if (!exchangeWithdrawUsed.isEmpty()) {
+            CompoundTag wdrTag = new CompoundTag();
+            for (Map.Entry<String, Integer> e : exchangeWithdrawUsed.entrySet()) {
+                if (e.getKey() != null && !e.getKey().isEmpty() && e.getValue() != null && e.getValue() > 0) {
+                    wdrTag.putInt(e.getKey(), e.getValue());
+                }
+            }
+            if (!wdrTag.isEmpty()) {
+                tag.put("exchangeWithdrawUsed", wdrTag);
+            }
+        }
+        if (physConvertQuotaDay != Long.MIN_VALUE) {
+            tag.putLong("physConvertQuotaDay", physConvertQuotaDay);
+        }
+        if (physConvertUsedValue > 0L) {
+            tag.putLong("physConvertUsedValue", physConvertUsedValue);
+        }
         return tag;
     }
 
@@ -159,6 +255,27 @@ public final class PlayerAccount {
             account.shipping.lastCount = loaded.lastCount;
             account.shipping.pendingNotice = loaded.pendingNotice;
         }
+        account.exchangeQuotaDay = tag.contains("exchangeQuotaDay") ? tag.getLong("exchangeQuotaDay") : Long.MIN_VALUE;
+        if (tag.contains("exchangeDepositUsed", Tag.TAG_COMPOUND)) {
+            CompoundTag depTag = tag.getCompound("exchangeDepositUsed");
+            for (String key : depTag.getAllKeys()) {
+                int v = depTag.getInt(key);
+                if (v > 0) {
+                    account.exchangeDepositUsed.put(key, v);
+                }
+            }
+        }
+        if (tag.contains("exchangeWithdrawUsed", Tag.TAG_COMPOUND)) {
+            CompoundTag wdrTag = tag.getCompound("exchangeWithdrawUsed");
+            for (String key : wdrTag.getAllKeys()) {
+                int v = wdrTag.getInt(key);
+                if (v > 0) {
+                    account.exchangeWithdrawUsed.put(key, v);
+                }
+            }
+        }
+        account.physConvertQuotaDay = tag.contains("physConvertQuotaDay") ? tag.getLong("physConvertQuotaDay") : Long.MIN_VALUE;
+        account.physConvertUsedValue = Math.max(0L, tag.getLong("physConvertUsedValue"));
         return account;
     }
 }

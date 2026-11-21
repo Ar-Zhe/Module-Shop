@@ -29,7 +29,28 @@ public final class ClientEvents {
             GLFW.GLFW_KEY_K,
             CATEGORY));
 
+    static {
+        cn.autoforged.module_shop.shop.currency.CurrencySettlement.setClientBlockedHook(
+                ClientEvents::isPhysicalCurrencyBlocked);
+    }
+
     private ClientEvents() {
+    }
+
+    private static boolean isPhysicalCurrencyBlocked(net.minecraft.world.item.ItemStack stack) {
+        if (stack == null || stack.isEmpty()
+                || !ClientHomeCurrencyState.physEnabled
+                || !ClientHomeCurrencyState.physBlockBuyback) {
+            return false;
+        }
+        for (var tier : ClientHomeCurrencyState.physTiers) {
+            if (tier != null && !tier.itemStack.isEmpty()
+                    && cn.autoforged.module_shop.shop.currency.PhysicalCurrencyEngine.matchesTier(
+                            stack, tier.itemStack)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @SubscribeEvent
@@ -126,6 +147,7 @@ public final class ClientEvents {
     @SubscribeEvent
     public static void onClientLogout(net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingOut event) {
         cn.autoforged.module_shop.client.screen.Nav.clear();
+        ClientShopData.reset();
         // 拍卖缓存（列表 / 版本号 / 详情）也不能带到下一个服务器或存档
         cn.autoforged.module_shop.client.AuctionClient.reset();
         cn.autoforged.module_shop.client.StallClient.reset();

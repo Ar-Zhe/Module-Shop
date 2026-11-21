@@ -1,5 +1,6 @@
 package cn.autoforged.module_shop.client.screen;
 
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState;
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.menu.BatchAddMenu;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
@@ -101,6 +102,10 @@ public class BatchAddScreen extends AbstractContainerScreen<BatchAddMenu> implem
             drawSmall(g, x + INFO_X, ty, Component.translatable(key), IOStyle.TEXT_2);
             ty += 12;
         }
+        if (ClientHomeCurrencyState.physEnabled) {
+            drawSmall(g, x + INFO_X, ty, Component.literal(ClientHomeCurrencyState.tr(
+                    "gui.module_shop.batch.dual_tip", "点确认后配星币/实体币价格")), IOStyle.ORANGE);
+        }
         // 按钮：确认 / 取消
         int by = y + BatchAddMenu.SLOT_Y + 62;
         boolean canConfirm = getMenu().filled() > 0;
@@ -163,6 +168,12 @@ public class BatchAddScreen extends AbstractContainerScreen<BatchAddMenu> implem
                     "gui.module_shop.batch.tip3"}) {
                 ty += SkiaDialog.paragraph(c, Component.translatable(key).getString(), cardX + 8, ty, cardW - 16,
                         cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_2, 3, false) + 4;
+            }
+            if (ClientHomeCurrencyState.physEnabled) {
+                SkiaDialog.paragraph(c, ClientHomeCurrencyState.tr(
+                        "gui.module_shop.batch.dual_tip", "点确认后配星币/实体币价格"),
+                        cardX + 8, ty, cardW - 16, cn.autoforged.module_shop.client.ui.render.Text.SMALL,
+                        IOStyle.ORANGE, 2, false);
             }
             int by = y + BatchAddMenu.SLOT_Y + 62;
             boolean canConfirm = getMenu().filled() > 0;

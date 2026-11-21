@@ -10,8 +10,11 @@ import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
 import cn.autoforged.module_shop.client.ui.v2.CardGrid;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
 import cn.autoforged.module_shop.client.ui.v2.V2;
+import cn.autoforged.module_shop.client.ui.widget.ScrollController;
 import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
+import cn.autoforged.module_shop.data.PriceSpec;
 import io.github.humbleui.skija.Canvas;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -34,11 +37,12 @@ import net.minecraft.world.item.ItemStack;
  * 过滤 / 排序 / 分类 / 收藏复用 {@link ShopScreen} 的同一份实现，动作字符串与旧界面一致。
  */
 public final class MallPage implements ShopPage {
-    private static final float FILTER_W = 86.0F;
-    /** 跨界面重建保留：表格滚动与客户端附加筛选。 */
+    private static final float FILTER_W = 98.0F;
+    /** 跨界面重建保留：表格、分类筛选滚动与客户端附加筛选。 */
     private static final ListTable TABLE = new ListTable();
     private static final ListTable RECENT = new ListTable();
     private static final CardGrid GRID = new CardGrid();
+    private static final ScrollController CAT_SCROLL = new ScrollController();
     private static boolean onlyStock;
     private static boolean affordable;
 
@@ -46,6 +50,7 @@ public final class MallPage implements ShopPage {
     private List<ClientShopData.MallView> shown = List.of();
     private float[][] segRects = new float[0][2];
     private float segY;
+    private float modBarX, modBarY, modBarW, modBarH;
     private final List<float[]> filterRects = new ArrayList<>();
     private final List<String> filterKeys = new ArrayList<>();
     private final List<float[]> sortPillRects = new ArrayList<>();
@@ -57,14 +62,17 @@ public final class MallPage implements ShopPage {
 
     @Override
     public void init(ShopHost host) {
-        search = new SkiaTextField(host.screen(), host.font(), 32)
+        search = new SkiaTextField(host.screen(), host.font(), 48)
                 .placeholder(Component.translatable("gui.module_shop.mall.search_hint").getString())
+                .clearable(true)
                 .fontSize(V2.FS_S)
                 .onChange(text -> {
                     ClientShopData.mallSearch = text;
                     ClientShopData.mallPage = 0;
                     TABLE.scrollToTop();
                     GRID.scrollToTop();
+                    RECENT.scrollToTop();
+                    CAT_SCROLL.reset();
                 });
         search.setValue(ClientShopData.mallSearch == null ? "" : ClientShopData.mallSearch);
         host.registerInput(search.editBox());
@@ -74,8 +82,7 @@ public final class MallPage implements ShopPage {
         return Component.translatable(key, args).getString();
     }
 
-    private List<ClientShopData.MallView> filtered() {
-        List<ClientShopData.MallView> base = ShopScreen.mallFiltered();
+    private static List<ClientShopData.MallView> applyClientFilters(List<ClientShopData.MallView> base) {
         if (!onlyStock && !affordable) {
             return base;
         }
@@ -84,12 +91,16 @@ public final class MallPage implements ShopPage {
             if (onlyStock && v.soldOut()) {
                 continue;
             }
-            if (affordable && v.price > ClientShopData.balance) {
+            if (affordable && !PriceDisplay.canAfford(v.resolvePriceSpec(), 1)) {
                 continue;
             }
             out.add(v);
         }
         return out;
+    }
+
+    private List<ClientShopData.MallView> filtered() {
+        return applyClientFilters(ShopScreen.mallFiltered());
     }
 
     // ------------------------------------------------------------------ 绘制
@@ -102,7 +113,6 @@ public final class MallPage implements ShopPage {
         float top = f.y() + V2.BAR;
         float bottom = f.y() + f.h() - V2.FOOT;
         if (recent) {
-            search.visible(false);
             drawRecent(c, f, f.x(), top, f.w(), bottom - top);
             return;
         }
@@ -128,11 +138,10 @@ public final class MallPage implements ShopPage {
         Draw.hairline(c, x, y + V2.BAR - 0.5F, f.w(), IOStyle.BORDER_DIM);
         float tw = V2.bold(c, tr("tab.module_shop.mall"), V2.FS_T, IOStyle.TEXT, x + 8, cy, 80, Text.Align.LEFT);
         float sx = x + 8 + tw + 10;
-        if (!recent) {
-            search.visible(true).bounds(sx, cy - V2.CTRL / 2, 140, V2.CTRL);
-            search.render(c, f.mouseX(), f.mouseY(), f.dtMs());
-            sx += 146;
-        }
+        float searchW = Math.min(140.0F, Math.max(90.0F, f.w() * 0.24F));
+        search.visible(true).bounds(sx, cy - V2.CTRL / 2, searchW, V2.CTRL);
+        search.render(c, f.mouseX(), f.mouseY(), f.dtMs());
+        sx += searchW + 6;
         String[] seg = {
                 tr("gui.module_shop.v2.mall.all") + "  " + ClientShopData.mall.size(),
                 tr("gui.module_shop.v2.mall.fav") + "  " + MallFavorites.size(),
@@ -153,8 +162,10 @@ public final class MallPage implements ShopPage {
         }
         if (!notes.isEmpty()) {
             float segEnd = this.segRects[this.segRects.length - 1][0] + this.segRects[this.segRects.length - 1][1] + 12;
-            V2.text(c, String.join(" · ", notes), V2.FS_XS, IOStyle.TEXT_3, segEnd, cy, x + f.w() - 8 - segEnd,
-                    Text.Align.RIGHT);
+            if (x + f.w() - 8 - segEnd > 32) {
+                V2.text(c, String.join(" · ", notes), V2.FS_XS, IOStyle.TEXT_3, segEnd, cy, x + f.w() - 8 - segEnd,
+                        Text.Align.RIGHT);
+            }
         }
     }
 
@@ -162,36 +173,67 @@ public final class MallPage implements ShopPage {
         filterRects.clear();
         filterKeys.clear();
         Draw.fill(c, x + FILTER_W - 0.5F, y, 0.5F, h, 0, IOStyle.BORDER_DIM);
-        // 各模组数量按当前搜索 / 收藏条件统计（不受分类本身影响）
+        // 各模组数量按当前搜索 / 收藏 / 附加条件统计（只读查询，不修改 ClientShopData.mallCategory）
         Map<String, Integer> counts = new LinkedHashMap<>();
-        String savedCat = ClientShopData.mallCategory;
-        ClientShopData.mallCategory = "";
-        List<ClientShopData.MallView> all = ShopScreen.mallFiltered();
-        ClientShopData.mallCategory = savedCat;
+        List<ClientShopData.MallView> all = applyClientFilters(ShopScreen.mallFiltered(""));
         for (ClientShopData.MallView v : all) {
             counts.merge(v.namespace(), 1, Integer::sum);
+        }
+        String activeCat = ClientShopData.mallCategory == null ? "" : ClientShopData.mallCategory;
+        if (!activeCat.isEmpty() && counts.getOrDefault(activeCat, 0) == 0 && !all.isEmpty()) {
+            activeCat = "";
+            ClientShopData.mallCategory = "";
         }
         float cy = y + 8;
         V2.section(c, tr("gui.module_shop.v2.filter.mods"), x + 8, cy, FILTER_W - 12);
         cy += 6;
+        boolean filtering = (ClientShopData.mallSearch != null && !ClientShopData.mallSearch.isBlank())
+                || ClientShopData.mallFavOnly || onlyStock || affordable;
         List<String> mods = new ArrayList<>();
         mods.add("");
-        mods.addAll(ShopScreen.mallCategories());
-        float listBottom = y + h - 64;
-        for (String ns : mods) {
-            if (cy + 13 > listBottom) {
-                break;
+        for (String ns : ShopScreen.mallCategories()) {
+            if (!filtering || counts.getOrDefault(ns, 0) > 0 || ns.equals(activeCat)) {
+                mods.add(ns);
             }
+        }
+        float listTop = cy;
+        float listBottom = y + h - 64;
+        float listH = Math.max(28.0F, listBottom - listTop);
+        float rowH = 13.0F;
+        float pitch = 14.0F;
+        float contentH = mods.isEmpty() ? 0.0F : (mods.size() * pitch - 1.0F);
+        CAT_SCROLL.setContent(contentH, listH);
+        CAT_SCROLL.update();
+        this.modBarX = x;
+        this.modBarY = listTop;
+        this.modBarW = FILTER_W - 1.0F;
+        this.modBarH = listH;
+        float barReserve = CAT_SCROLL.canScroll() ? 6.0F : 0.0F;
+        float itemW = FILTER_W - 8.0F - barReserve;
+        int saved = c.save();
+        Draw.clip(c, x, listTop, FILTER_W - 1.0F, listH);
+        float off = CAT_SCROLL.offset();
+        for (int i = 0; i < mods.size(); i++) {
+            float iy = listTop + i * pitch - off;
+            if (iy + rowH < listTop || iy > listBottom) {
+                continue;
+            }
+            String ns = mods.get(i);
             String label = ns.isEmpty() ? tr("gui.module_shop.mall.cat_all") : ShopScreen.mallModName(ns);
             int n = ns.isEmpty() ? all.size() : counts.getOrDefault(ns, 0);
-            boolean on = ns.equals(ClientShopData.mallCategory);
-            boolean over = f.mouseX() >= x + 4 && f.mouseX() < x + FILTER_W - 4 && f.mouseY() >= cy && f.mouseY() < cy + 13;
-            V2.filterItem(c, label, String.valueOf(n), on, over ? 1 : 0, x + 4, cy, FILTER_W - 8);
-            filterRects.add(new float[]{x + 4, cy, FILTER_W - 8, 13});
+            boolean on = ns.equals(activeCat);
+            float visTop = Math.max(listTop, iy);
+            float visBot = Math.min(listBottom, iy + rowH);
+            boolean over = f.mouseX() >= x + 4 && f.mouseX() < x + 4 + itemW
+                    && f.mouseY() >= visTop && f.mouseY() < visBot;
+            V2.filterItem(c, label, String.valueOf(n), on, over ? 1 : 0, x + 4, iy, itemW);
+            filterRects.add(new float[]{x + 4, visTop, itemW, visBot - visTop});
             filterKeys.add("cat:" + ns);
-            cy += 14;
         }
-        cy += 6;
+        c.restoreToCount(saved);
+        CAT_SCROLL.drawBar(c, this.modBarX, this.modBarY, this.modBarW, this.modBarH, f.mouseX(), f.mouseY(), f.dtMs());
+
+        cy = listBottom + 6;
         Draw.hairline(c, x + 6, cy, FILTER_W - 12, IOStyle.BORDER_DIM);
         cy += 8;
         V2.section(c, tr("gui.module_shop.v2.filter.title"), x + 8, cy, FILTER_W - 12);
@@ -206,7 +248,15 @@ public final class MallPage implements ShopPage {
     }
 
     private void drawTable(Canvas c, PageFrame f, float x, float y, float w, float h) {
-        float[][] cols = V2.columns(x, w, 8, 6, 14, 0, 72, 26, 58, 66, 40);
+        String buyLabel = tr("gui.module_shop.v2.buy");
+        String soldOutLabel = tr("gui.module_shop.v2.sold_out");
+        float btnColW = Math.max(36.0F, Math.max(V2.buttonWidth(buyLabel), V2.buttonWidth(soldOutLabel)) + 6.0F);
+        boolean tight = w < 420.0F;
+        float modW = tight ? 52.0F : 66.0F;
+        float favW = tight ? 18.0F : 22.0F;
+        float priceW = tight ? 68.0F : 84.0F;
+        float stockW = tight ? 48.0F : 60.0F;
+        float[][] cols = V2.columns(x, w, tight ? 6 : 8, tight ? 5 : 6, 14, 0, modW, favW, priceW, stockW, btnColW);
         String[] heads = {"", tr("gui.module_shop.v2.col.item"), tr("gui.module_shop.v2.col.mod"),
                 tr("gui.module_shop.v2.col.fav"), tr("gui.module_shop.v2.col.price"), tr("gui.module_shop.v2.col.stock"), ""};
         Text.Align[] al = {Text.Align.LEFT, Text.Align.LEFT, Text.Align.LEFT, Text.Align.CENTER, Text.Align.RIGHT,
@@ -235,9 +285,12 @@ public final class MallPage implements ShopPage {
             boolean fav = MallFavorites.contains(ShopScreen.mallItemId(v));
             V2.text(cv, fav ? "★" : "☆", V2.FS, fav ? IOStyle.ORANGE : IOStyle.TEXT_3, cols[3][0], cy, cols[3][1],
                     Text.Align.CENTER);
-            V2.bold(cv, V2.money(v.price), V2.FS, sold ? IOStyle.TEXT_3 : IOStyle.ORANGE, cols[4][0], cy, cols[4][1],
-                    Text.Align.RIGHT);
-            int stockColor = sold ? IOStyle.RED : v.unlimited() ? IOStyle.TEXT_2 : IOStyle.TEXT;
+            PriceSpec spec = v.resolvePriceSpec();
+            boolean can = PriceDisplay.canAfford(spec, 1);
+            PriceDisplay.drawCell(cv, f.host().items(), spec, cols[4][0], cy, cols[4][1], Text.Align.RIGHT,
+                    sold ? IOStyle.TEXT_3 : (can ? IOStyle.ORANGE : IOStyle.RED), sold);
+            int stockColor = sold ? IOStyle.RED
+                    : (v.permanentLimit ? IOStyle.EPIC : (v.unlimited() ? IOStyle.TEXT_2 : IOStyle.TEXT));
             V2.text(cv, ShopScreen.mallStockText(v).getString(), V2.FS_S, stockColor, cols[5][0], cy, cols[5][1],
                     Text.Align.RIGHT);
             float right = cols[6][0] + cols[6][1];
@@ -276,8 +329,13 @@ public final class MallPage implements ShopPage {
             CardGrid.star(cv, starCx, starCy, starHover ? 3.8F : 3.2F, fav, fav ? IOStyle.ORANGE : (starHover ? IOStyle.TEXT : IOStyle.TEXT_3));
             GRID.hitZone(card, "star", cx + 1, cy + 1, 13, 13);
 
-            String stockStr = sold ? tr("gui.module_shop.v2.sold_out") : (v.unlimited() ? "∞" : V2.money(v.stock));
-            V2.text(cv, stockStr, V2.FS_XS, sold ? IOStyle.RED : IOStyle.TEXT_3,
+            String stockStr = v.permanentLimit
+                    ? (sold ? Component.translatableWithFallback("gui.module_shop.mall.permanent_sold_out_short", "永久满").getString()
+                    : (v.unlimited() ? "∞" : Component.translatableWithFallback(
+                            "gui.module_shop.mall.permanent_short", "永久 %s", V2.money(v.stock)).getString()))
+                    : (sold ? tr("gui.module_shop.v2.sold_out") : (v.unlimited() ? "∞" : V2.money(v.stock)));
+            int gridStockColor = sold ? IOStyle.RED : (v.permanentLimit ? IOStyle.EPIC : IOStyle.TEXT_3);
+            V2.text(cv, stockStr, V2.FS_XS, gridStockColor,
                     cx + 15.0F, cy + 7.0F, cw - 19.0F, Text.Align.RIGHT);
 
             float iconSize = 16.0F;
@@ -285,14 +343,36 @@ public final class MallPage implements ShopPage {
 
             V2.text(cv, v.stack.getHoverName().getString(), V2.FS_S, sold ? IOStyle.TEXT_3 : IOStyle.TEXT,
                     cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
-            V2.bold(cv, sold ? tr("gui.module_shop.v2.sold_out") : V2.money(v.price), V2.FS,
-                    sold ? IOStyle.TEXT_3 : IOStyle.ORANGE, cx + 3, cy + 45.0F, cw - 6, Text.Align.CENTER);
+            if (sold) {
+                V2.bold(cv, tr("gui.module_shop.v2.sold_out"), V2.FS, IOStyle.TEXT_3,
+                        cx + 3, cy + 45.0F, cw - 6, Text.Align.CENTER);
+            } else {
+                PriceSpec spec = v.resolvePriceSpec();
+                boolean can = PriceDisplay.canAfford(spec, 1);
+                PriceDisplay.drawCard(cv, f.host().items(), spec, cx + 3, cy + 45.0F, cx + cw * 0.5F, cw - 6, 1.0F,
+                        can ? IOStyle.ORANGE : IOStyle.RED, false);
+            }
         });
     }
 
     private void drawRecent(Canvas c, PageFrame f, float x, float y, float w, float h) {
-        List<ClientShopData.MallPurchaseView> list = ClientShopData.mallRecent;
-        float[][] cols = V2.columns(x, w, 8, 6, 70, 90, 14, 0, 48, 64, 72);
+        List<ClientShopData.MallPurchaseView> rawList = ClientShopData.mallRecent;
+        String query = ClientShopData.mallSearch == null ? "" : ClientShopData.mallSearch.trim();
+        List<ClientShopData.MallPurchaseView> list;
+        if (query.isEmpty()) {
+            list = rawList;
+        } else {
+            list = new ArrayList<>();
+            for (ClientShopData.MallPurchaseView r : rawList) {
+                if (PageKit.matchesQuery(query, r.playerName, ShopScreen.mallTimeText(r.time))
+                        || PageKit.matchesItemQuery(r.stack, query)) {
+                    list.add(r);
+                }
+            }
+        }
+        boolean tight = w < 520.0F;
+        float[][] cols = V2.columns(x, w, tight ? 6 : 8, tight ? 5 : 6,
+                tight ? 56 : 68, tight ? 64 : 86, 14, 0, tight ? 36 : 48, tight ? 64 : 76, tight ? 68 : 84);
         String[] heads = {tr("gui.module_shop.v2.col.time"), tr("gui.module_shop.v2.col.player"), "",
                 tr("gui.module_shop.v2.col.item"), tr("gui.module_shop.v2.col.count"), tr("gui.module_shop.v2.col.price"),
                 tr("gui.module_shop.v2.col.total")};
@@ -301,7 +381,8 @@ public final class MallPage implements ShopPage {
         RECENT.layout(x, y, w, h, cols, heads, al, null);
         if (list.isEmpty()) {
             V2.tableHead(c, x, y, w, cols, heads, al, -1, false);
-            V2.empty(c, tr("gui.module_shop.mall.recent_empty"), x, y + V2.HEAD, w, h - V2.HEAD);
+            V2.empty(c, tr(rawList.isEmpty() ? "gui.module_shop.mall.recent_empty" : "gui.module_shop.search.empty"),
+                    x, y + V2.HEAD, w, h - V2.HEAD);
         } else {
             RECENT.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), list.size(), (cv, row, ry, hover) -> {
                 ClientShopData.MallPurchaseView r = list.get(row);
@@ -311,11 +392,16 @@ public final class MallPage implements ShopPage {
                 f.host().items().add(r.stack, cols[2][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, false);
                 V2.text(cv, r.stack.getHoverName().getString(), V2.FS, IOStyle.TEXT, cols[3][0], cy, cols[3][1], Text.Align.LEFT);
                 V2.text(cv, "×" + r.count, V2.FS_S, IOStyle.TEXT_2, cols[4][0], cy, cols[4][1], Text.Align.RIGHT);
-                V2.text(cv, V2.money(r.unitPrice), V2.FS_S, IOStyle.TEXT_2, cols[5][0], cy, cols[5][1], Text.Align.RIGHT);
-                V2.bold(cv, V2.money(r.total), V2.FS, IOStyle.ORANGE, cols[6][0], cy, cols[6][1], Text.Align.RIGHT);
+                PriceDisplay.drawCell(cv, f.host().items(), r.resolveUnitSpec(), cols[5][0], cy, cols[5][1],
+                        Text.Align.RIGHT, IOStyle.TEXT_2, false);
+                PriceDisplay.drawCell(cv, f.host().items(), r.resolveTotalSpec(), cols[6][0], cy, cols[6][1],
+                        Text.Align.RIGHT, IOStyle.ORANGE, false);
             });
         }
-        V2.foot(c, x, y + h, w, tr("gui.module_shop.v2.mall.recent_count", list.size()), null);
+        String footText = !query.isEmpty() && !rawList.isEmpty()
+                ? tr("gui.module_shop.search.match_count", list.size(), rawList.size())
+                : tr("gui.module_shop.v2.mall.recent_count", list.size());
+        V2.foot(c, x, y + h, w, footText, null);
     }
 
     // ------------------------------------------------------------------ 输入
@@ -340,6 +426,9 @@ public final class MallPage implements ShopPage {
             return button == 0 && RECENT.pressBar(mx, my);
         }
         if (button == 0) {
+            if (CAT_SCROLL.pressBar(mx, my, this.modBarX, this.modBarY, this.modBarW, this.modBarH)) {
+                return true;
+            }
             for (int i = 0; i < filterRects.size(); i++) {
                 float[] r = filterRects.get(i);
                 if (mx >= r[0] && mx < r[0] + r[2] && my >= r[1] && my < r[1] + r[3]) {
@@ -386,12 +475,14 @@ public final class MallPage implements ShopPage {
             }
             if (button == 1) {
                 if (!v.soldOut()) {
+                    extra.putString("pay_channel", PriceDisplay.resolveBuyChannel(v.resolvePriceSpec(), 1));
                     ClickSound.play();
                     f.host().action("mall_buy_many", extra);
                 }
                 return true;
             }
             if (button == 0 && !v.soldOut() && ("buy".equals(hit.button()) || hit.button() == null)) {
+                extra.putString("pay_channel", PriceDisplay.resolveBuyChannel(v.resolvePriceSpec(), 1));
                 ClickSound.play();
                 f.host().action("mall_buy", extra);
                 return true;
@@ -427,12 +518,14 @@ public final class MallPage implements ShopPage {
         }
         if (button == 1) {
             if (!v.soldOut()) {
+                extra.putString("pay_channel", PriceDisplay.resolveBuyChannel(v.resolvePriceSpec(), 1));
                 ClickSound.play();
                 f.host().action("mall_buy_many", extra);
             }
             return true;
         }
         if (button == 0 && "buy".equals(hit.button())) {
+            extra.putString("pay_channel", PriceDisplay.resolveBuyChannel(v.resolvePriceSpec(), 1));
             ClickSound.play();
             f.host().action("mall_buy", extra);
             return true;
@@ -497,7 +590,7 @@ public final class MallPage implements ShopPage {
         if (search != null) {
             search.mouseReleased(mx, my, button);
         }
-        return RECENT.releaseBar() | (UIViewMode.isGrid() ? GRID.releaseBar() : TABLE.releaseBar());
+        return CAT_SCROLL.releaseBar() | RECENT.releaseBar() | (UIViewMode.isGrid() ? GRID.releaseBar() : TABLE.releaseBar());
     }
 
     @Override
@@ -505,11 +598,19 @@ public final class MallPage implements ShopPage {
         if (search != null && search.mouseDragged(mx, my, button, dx, dy)) {
             return true;
         }
+        if (!ClientShopData.mallViewRecent && CAT_SCROLL.dragBar(my, this.modBarH)) {
+            return true;
+        }
         return ClientShopData.mallViewRecent ? RECENT.dragBar(my) : (UIViewMode.isGrid() ? GRID.dragBar(my) : TABLE.dragBar(my));
     }
 
     @Override
     public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
+        if (!ClientShopData.mallViewRecent && mx >= this.modBarX && mx < this.modBarX + this.modBarW
+                && my >= this.modBarY && my < this.modBarY + this.modBarH && CAT_SCROLL.canScroll()) {
+            CAT_SCROLL.wheel(scrollY);
+            return true;
+        }
         boolean page = net.minecraft.client.gui.screens.Screen.hasShiftDown();
         return ClientShopData.mallViewRecent ? RECENT.wheel(mx, my, scrollY, page)
                 : (UIViewMode.isGrid() ? GRID.wheel(mx, my, scrollY, page) : TABLE.wheel(mx, my, scrollY, page));
@@ -520,6 +621,7 @@ public final class MallPage implements ShopPage {
         if (search != null) {
             search.visible(false);
         }
+        CAT_SCROLL.releaseBar();
         TABLE.releaseBar();
         GRID.releaseBar();
         RECENT.releaseBar();

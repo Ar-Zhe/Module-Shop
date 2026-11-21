@@ -26,7 +26,7 @@ public final class ClientKeyHandler {
             if (minecraft.screen == null) {
                 CompoundTag tag = new CompoundTag();
                 tag.putString("action", "request_data");
-                tag.putString("tab", "daily");
+                tag.putString("tab", "home");
                 ServerboundShopActionPayload.send(tag);
             }
         }

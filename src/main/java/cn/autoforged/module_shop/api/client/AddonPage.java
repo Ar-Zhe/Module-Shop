@@ -49,4 +49,24 @@ public interface AddonPage {
     /** 切走 / 关闭界面时调用：取消按下中的按钮、让输入框失焦并隐藏。 */
     default void cancelInput() {
     }
+
+    /** 内容区按键按下；返回 true 表示事件已被消费。 */
+    default boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        return false;
+    }
+
+    /** 内容区按键松开；返回 true 表示事件已被消费。 */
+    default boolean keyReleased(int keyCode, int scanCode, int modifiers) {
+        return false;
+    }
+
+    /** 内容区字符输入；返回 true 表示事件已被消费。 */
+    default boolean charTyped(char codePoint, int modifiers) {
+        return false;
+    }
+
+    /** 当前附属页面是否有活跃输入框（为 true 时宿主屏蔽 1~9 切页等全局热键）。 */
+    default boolean isInputFocused() {
+        return false;
+    }
 }
