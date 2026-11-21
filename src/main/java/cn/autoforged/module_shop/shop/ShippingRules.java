@@ -1,6 +1,7 @@
 package cn.autoforged.module_shop.shop;
 
 import cn.autoforged.module_shop.Config;
+import cn.autoforged.module_shop.data.PriceSpec;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -36,8 +37,19 @@ public final class ShippingRules {
     /** 匹配方式。 */
     public enum Kind { ITEM, NAMESPACE, TAG }
 
-    /** 一条规则：原始文本 / 行号 / 匹配方式 / 匹配值 / 单价 / 每日份数上限（0 = 不限）。 */
-    public record Rule(String raw, int line, Kind kind, String value, long price, int dailyMax) {
+    /** 一条规则：原始文本 / 行号 / 匹配方式 / 匹配值 / 单价 / 双独立账本定价规格 / 每日份数上限（0 = 不限）。 */
+    public record Rule(String raw, int line, Kind kind, String value, long price, PriceSpec priceSpec, int dailyMax) {
+        public Rule(String raw, int line, Kind kind, String value, long price, int dailyMax) {
+            this(raw, line, kind, value, price, PriceSpec.star(price), dailyMax);
+        }
+
+        public PriceSpec resolvePriceSpec() {
+            if (priceSpec == null) {
+                return PriceSpec.star(price);
+            }
+            return priceSpec;
+        }
+
         public boolean matches(ItemStack stack) {
             if (stack == null || stack.isEmpty()) {
                 return false;
@@ -146,7 +158,7 @@ public final class ShippingRules {
             }
             String left = eq > 0 ? line.substring(0, eq).trim() : "";
             String right = eq > 0 ? line.substring(eq + 1).trim() : "";
-            long price = 0L;
+            PriceSpec priceSpec = PriceSpec.ZERO;
             int dailyMax = 0;
             if (problem == null) {
                 try {
@@ -157,14 +169,20 @@ public final class ShippingRules {
                         String maxText = right.substring(x + 1).trim().replace(" ", "");
                         dailyMax = maxText.isEmpty() ? 0 : Integer.parseInt(maxText);
                     }
-                    price = Long.parseLong(priceText.trim());
+                    PriceSpec parsedSpec = PriceSpec.parseRuleText(priceText.trim());
+                    if (parsedSpec == null) {
+                        problem = "价格格式错误（可写 100 / phys:档位*数量 / 100|phys:档位*数量 / 100+phys:档位*数量，可附 x64）";
+                    } else {
+                        priceSpec = parsedSpec;
+                    }
                 } catch (NumberFormatException ex) {
-                    problem = "价格必须是整数（可写 100 或 100 x64）";
+                    problem = "每日份数必须是整数（如 x64）";
                 }
             }
-            if (problem == null && price <= 0L) {
-                problem = "价格必须大于 0";
+            if (problem == null && !priceSpec.isValid()) {
+                problem = "价格必须大于 0 且实体货币档位有效";
             }
+            long price = priceSpec.supportsStar() ? priceSpec.starPrice : 0L;
             Kind kind = null;
             String value = null;
             if (problem == null) {
@@ -179,9 +197,24 @@ public final class ShippingRules {
                     value = left;
                 }
                 ResourceLocation id = ResourceLocation.tryParse(value);
-                if (id == null) {
+                if (id == null && kind != Kind.NAMESPACE) {
                     problem = "物品 ID 格式不对（应为 命名空间:路径）";
+                } else if (kind == Kind.NAMESPACE) {
+                    if (value.isEmpty() || ResourceLocation.tryParse(value + ":air") == null) {
+                        problem = "命名空间格式不对：" + value;
+                    } else if (!"minecraft".equals(value)
+                            && net.minecraftforge.fml.ModList.get() != null
+                            && !net.minecraftforge.fml.ModList.get().isLoaded(value)) {
+                        // 软联动支持：对应模组未安装时静默忽略该行，保留配置原文且不报红字错误
+                        continue;
+                    }
                 } else if (kind == Kind.ITEM && !BuiltInRegistries.ITEM.containsKey(id)) {
+                    if (!"minecraft".equals(id.getNamespace())
+                            && net.minecraftforge.fml.ModList.get() != null
+                            && !net.minecraftforge.fml.ModList.get().isLoaded(id.getNamespace())) {
+                        // 软联动支持：第三方可选模组未安装时静默跳过，安装后自动激活
+                        continue;
+                    }
                     problem = "找不到这个物品：" + value;
                 }
             }
@@ -191,22 +224,51 @@ public final class ShippingRules {
                 all.add(new Entry(lineNo, line, null, text));
                 continue;
             }
-            rule = new Rule(line, lineNo, kind, value, price, Math.max(0, dailyMax));
+            rule = new Rule(line, lineNo, kind, value, price, priceSpec, Math.max(0, dailyMax));
             parsed.add(rule);
             all.add(new Entry(lineNo, line, rule, null));
         }
         return new Parsed(List.copyOf(parsed), List.copyOf(all), List.copyOf(problems));
     }
 
-    /** 找出价格与每日份数之间的 'x'（支持 "100 x64" / "100x64"，也兼容大小写 X）。 */
+    /** 找出价格与每日份数之间的 'x'（支持 "100 x64" / "100x64" 与 "phys:...*3 x64"，不误伤物品 ID 里的 x）。 */
     private static int indexOfX(String text) {
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if ((c == 'x' || c == 'X') && i > 0 && Character.isDigit(text.charAt(i - 1))) {
-                return i;
-            }
+        if (text == null || text.isEmpty()) {
+            return -1;
         }
-        return -1;
+        int end = text.length() - 1;
+        while (end >= 0 && Character.isWhitespace(text.charAt(end))) {
+            end--;
+        }
+        int digitEnd = end;
+        while (end >= 0 && Character.isDigit(text.charAt(end))) {
+            end--;
+        }
+        if (end == digitEnd) {
+            return -1;
+        }
+        while (end >= 0 && Character.isWhitespace(text.charAt(end))) {
+            end--;
+        }
+        if (end <= 0) {
+            return -1;
+        }
+        char xChar = text.charAt(end);
+        if (xChar != 'x' && xChar != 'X') {
+            return -1;
+        }
+        int prev = end - 1;
+        boolean hasSpaceBeforeX = Character.isWhitespace(text.charAt(prev));
+        while (prev >= 0 && Character.isWhitespace(text.charAt(prev))) {
+            prev--;
+        }
+        if (prev < 0 || !Character.isDigit(text.charAt(prev))) {
+            return -1;
+        }
+        if (!hasSpaceBeforeX && text.toLowerCase(java.util.Locale.ROOT).contains("phys:")) {
+            return -1;
+        }
+        return end;
     }
 
     private static String problem(int lineNo, String line, String reason) {
@@ -259,7 +321,14 @@ public final class ShippingRules {
     }
 
     public static boolean canSell(ItemStack stack) {
-        return match(stack) != null;
+        Rule r = match(stack);
+        if (r == null) {
+            return false;
+        }
+        if (r.kind() == Kind.ITEM && r.resolvePriceSpec().supportsPhys()) {
+            return true;
+        }
+        return !cn.autoforged.module_shop.shop.currency.CurrencySettlement.isBlockingBuybackAndShipping(stack);
     }
 
     // =========================================================== 游戏内编辑（管理页）
@@ -290,8 +359,25 @@ public final class ShippingRules {
 
     /** 修改第 index 条（<b>按 {@link #entries()} 的下标</b>）的单价；格式错误的行为不可编辑。 */
     public static synchronized boolean updatePrice(int index, long price) {
+        return updatePrice(index, PriceSpec.star(price));
+    }
+
+    public static synchronized boolean updatePrice(int index, PriceSpec spec) {
         List<Entry> list = entries();
-        if (index < 0 || index >= list.size() || price <= 0L) {
+        if (index < 0 || index >= list.size() || spec == null || !spec.isValid()) {
+            return false;
+        }
+        Entry entry = list.get(index);
+        if (entry.rule() == null) {
+            return false;
+        }
+        return updateRule(index, spec, entry.rule().dailyMax());
+    }
+
+    /** 修改第 index 条规则的单价与每日上限（{@code dailyMax <= 0} 表示无限）。 */
+    public static synchronized boolean updateRule(int index, PriceSpec spec, int dailyMax) {
+        List<Entry> list = entries();
+        if (index < 0 || index >= list.size() || spec == null || !spec.isValid()) {
             return false;
         }
         Entry entry = list.get(index);
@@ -306,9 +392,8 @@ public final class ShippingRules {
         String original = current.get(rawIndex);
         int eq = original.indexOf('=');
         String left = eq > 0 ? original.substring(0, eq).trim() : original.trim();
-        // 手写在配置里的 "x每日份数" 保持不变
-        int perDay = entry.rule().dailyMax();
-        current.set(rawIndex, left + "=" + price + (perDay > 0 ? " x" + perDay : ""));
+        int perDay = Math.max(0, dailyMax);
+        current.set(rawIndex, left + "=" + spec.toRuleText() + (perDay > 0 ? " x" + perDay : ""));
         save(current);
         return true;
     }
@@ -331,25 +416,45 @@ public final class ShippingRules {
 
     /** 追加一条规则（管理页幽灵槽添加：物品 + 单价）。 */
     public static synchronized boolean addRule(ItemStack stack, long price) {
-        if (stack == null || stack.isEmpty() || price <= 0L) {
+        return addRule(stack, PriceSpec.star(price));
+    }
+
+    public static synchronized boolean addRule(ItemStack stack, PriceSpec spec) {
+        return addRule(stack, spec, 0);
+    }
+
+    public static synchronized boolean addRule(ItemStack stack, PriceSpec spec, int dailyMax) {
+        if (stack == null || stack.isEmpty() || spec == null || !spec.isValid()) {
             return false;
         }
         ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
         if (id == null) {
             return false;
         }
+        int perDay = Math.max(0, dailyMax);
         List<String> current = new ArrayList<>(rawLines());
-        current.add(id + "=" + price);
+        current.add(id + "=" + spec.toRuleText() + (perDay > 0 ? " x" + perDay : ""));
         save(current);
         return true;
     }
 
     /** 批量追加规则（管理页批量添加：多个物品 + 同一个单价）——只落盘一次。 */
     public static synchronized int addRules(List<ItemStack> stacks, long price) {
-        if (stacks == null || stacks.isEmpty() || price <= 0L) {
+        return addRules(stacks, PriceSpec.star(price));
+    }
+
+    public static synchronized int addRules(List<ItemStack> stacks, PriceSpec spec) {
+        return addRules(stacks, spec, 0);
+    }
+
+    public static synchronized int addRules(List<ItemStack> stacks, PriceSpec spec, int dailyMax) {
+        if (stacks == null || stacks.isEmpty() || spec == null || !spec.isValid()) {
             return 0;
         }
         List<String> current = new ArrayList<>(rawLines());
+        int perDay = Math.max(0, dailyMax);
+        String suffix = perDay > 0 ? " x" + perDay : "";
+        String ruleVal = spec.toRuleText() + suffix;
         int added = 0;
         for (ItemStack stack : stacks) {
             if (stack == null || stack.isEmpty()) {
@@ -359,7 +464,7 @@ public final class ShippingRules {
             if (id == null) {
                 continue;
             }
-            current.add(id + "=" + price);
+            current.add(id + "=" + ruleVal);
             added++;
         }
         if (added == 0) {

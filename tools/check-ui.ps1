@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $screen = Join-Path $root 'src\main\java\cn\autoforged\module_shop\client\screen\ShopScreen.java'
 $menus  = Join-Path $root 'src\main\java\cn\autoforged\module_shop\menu\ModMenus.java'
-$client = Join-Path $root 'src\main\java\cn\autoforged\module_shop\client\ClientEvents.java'
+$client = Join-Path $root 'src\main\java\cn\autoforged\module_shop\client\ClientModEvents.java'
 $zh     = Join-Path $root 'src\main\resources\assets\module_shop\lang\zh_cn.json'
 $en     = Join-Path $root 'src\main\resources\assets\module_shop\lang\en_us.json'
 

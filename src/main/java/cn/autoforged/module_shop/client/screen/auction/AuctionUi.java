@@ -1,12 +1,20 @@
 package cn.autoforged.module_shop.client.screen.auction;
 
 import cn.autoforged.module_shop.client.AuctionClient;
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState;
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState.PhysTierView;
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.screen.AuctionBidScreen;
 import cn.autoforged.module_shop.client.screen.IOStyle;
 import cn.autoforged.module_shop.client.screen.Nav;
 import cn.autoforged.module_shop.client.ui.AtomUi;
+import cn.autoforged.module_shop.client.ui.render.ItemOverlay;
+import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
 import cn.autoforged.module_shop.data.AuctionEntry;
+import cn.autoforged.module_shop.data.PriceSpec;
+import io.github.humbleui.skija.Canvas;
+import javax.annotation.Nullable;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 
@@ -52,8 +60,56 @@ public final class AuctionUi {
         return Component.translatable(key, args).getString();
     }
 
+    public static String tr(String key, String fallback, Object... args) {
+        return ClientHomeCurrencyState.tr(key, fallback, args);
+    }
+
     public static String money(long amount) {
         return ClientShopData.money(amount);
+    }
+
+    public static String money(@Nullable PriceSpec spec) {
+        return PriceDisplay.formatPlain(spec);
+    }
+
+    public static String money(@Nullable ClientShopData.AuctionView view, long amount) {
+        return view == null ? money(amount) : PriceDisplay.formatPlain(view.specOf(amount));
+    }
+
+    public static String money(@Nullable AuctionClient.History history, long amount) {
+        return history == null ? money(amount) : PriceDisplay.formatPlain(history.specOf(amount));
+    }
+
+    public static boolean canAfford(@Nullable ClientShopData.AuctionView view, long needAmount) {
+        if (needAmount <= 0L) {
+            return true;
+        }
+        if (view != null && view.isPhysCurrency()) {
+            return PriceDisplay.canAffordPhys(view.physTierKey, needAmount, 1);
+        }
+        return ClientShopData.balance >= needAmount;
+    }
+
+    public static long buyoutDue(@Nullable ClientShopData.AuctionView view) {
+        if (view == null || view.buyout <= 0L) {
+            return 0L;
+        }
+        long ownEscrow = view.topMe ? Math.max(0L, view.currentBid) : 0L;
+        return Math.max(0L, view.buyout - ownEscrow);
+    }
+
+    public static String ownedLabel(@Nullable ClientShopData.AuctionView view) {
+        if (view != null && view.isPhysCurrency()) {
+            PhysTierView tier = ClientHomeCurrencyState.findTier(view.physTierKey);
+            return PriceDisplay.physPlain(view.physTierKey, tier != null ? tier.ownedCount : 0);
+        }
+        return money(ClientShopData.balance);
+    }
+
+    public static void drawPrice(Canvas c, @Nullable ItemOverlay items, @Nullable ClientShopData.AuctionView view,
+                                 long amount, float x, float cy, float w, Text.Align align, int color) {
+        PriceSpec spec = view == null ? PriceSpec.star(Math.max(0L, amount)) : view.specOf(amount);
+        PriceDisplay.drawCell(c, items, spec, x, cy, w, align, color, false);
     }
 
     /** 剩余时间：>1 天显示「x天x时」，否则 h:mm:ss。 */

@@ -1,7 +1,8 @@
 package cn.autoforged.module_shop;
 
-import net.minecraftforge.common.ForgeConfigSpec;
+import java.util.ArrayList;
 import java.util.List;
+import net.minecraftforge.common.ForgeConfigSpec;
 import org.apache.commons.lang3.tuple.Pair;
 
 /**
@@ -371,33 +372,81 @@ public final class Config {
         return Math.max(1, INSTANCE.shippingLevelSlots.get().size());
     }
 
-    /** 第 level 级（1 起）的槽位数。 */
+    /** 有效出货箱最大等级（兼顾配置槽位列表长度与存档中配置的升级费用表长度）。 */
+    public static int shippingLevels(@javax.annotation.Nullable cn.autoforged.module_shop.data.ShopSavedData data) {
+        int cfgLevels = shippingLevels();
+        int specLevels = (data == null ? shippingUpgradeSpecList().size() : data.resolveShippingUpgradeSpecs().size()) + 1;
+        return Math.max(cfgLevels, specLevels);
+    }
+
+    /** 第 level 级（1 起）的槽位数；超出列表长度时按每级 +9 格自动外推至 54 格上限。 */
     public static int shippingSlotsFor(int level) {
         List<? extends String> list = INSTANCE.shippingLevelSlots.get();
-        int index = Math.max(0, Math.min(list.size() - 1, level - 1));
-        return Math.max(1, Math.min(54, parseIntSafe(list.get(index), 9)));
+        if (list.isEmpty()) {
+            return Math.max(1, Math.min(54, Math.max(1, level) * 9));
+        }
+        if (level <= list.size()) {
+            int index = Math.max(0, level - 1);
+            return Math.max(1, Math.min(54, parseIntSafe(list.get(index), 9)));
+        }
+        int last = Math.max(1, Math.min(54, parseIntSafe(list.get(list.size() - 1), 9)));
+        int extra = Math.max(0, level - list.size());
+        return Math.max(1, Math.min(54, last + extra * 9));
     }
 
-    /** 从 level 升到 level+1 的花费；已满级返回 -1。 */
+    /** 从 level 升到 level+1 的花费（仅星币视角兼容）；已满级返回 -1。 */
     public static long shippingUpgradeCost(int level) {
-        List<? extends String> costs = INSTANCE.shippingUpgradeCosts.get();
-        // 第 1 项对应「1 → 2 级」，第 2 项对应「2 → 3 级」，所以下标是 level-1
-        // （以前写成 level，于是 1→2 级读的是第 2 项、2→3 级直接读不到 → 界面显示"已满级"）。
-        int index = level - 1;
-        if (index < 0 || index >= costs.size()) {
+        cn.autoforged.module_shop.data.PriceSpec spec = shippingUpgradeSpec(level);
+        if (spec == null) {
             return -1L;
         }
-        return Math.max(0L, parseLongSafe(costs.get(index), 0L));
+        return spec.supportsStar() ? spec.starPrice : 0L;
     }
 
-    /** 第 level 级的每日结算上限（0 = 不限 → 返回 Long.MAX_VALUE）。 */
+    public static cn.autoforged.module_shop.data.PriceSpec shippingUpgradeSpec(int level) {
+        List<cn.autoforged.module_shop.data.PriceSpec> list = shippingUpgradeSpecList();
+        int index = level - 1;
+        if (index < 0 || index >= list.size()) {
+            return null;
+        }
+        return list.get(index);
+    }
+
+    public static List<cn.autoforged.module_shop.data.PriceSpec> dailyRefreshSpecList() {
+        return parseSpecList(INSTANCE.dailyRefreshCosts.get());
+    }
+
+    public static List<cn.autoforged.module_shop.data.PriceSpec> buybackRefreshSpecList() {
+        return parseSpecList(INSTANCE.buybackRefreshCosts.get());
+    }
+
+    public static List<cn.autoforged.module_shop.data.PriceSpec> shippingUpgradeSpecList() {
+        return parseSpecList(INSTANCE.shippingUpgradeCosts.get());
+    }
+
+    public static List<cn.autoforged.module_shop.data.PriceSpec> parseSpecList(List<? extends String> raw) {
+        List<cn.autoforged.module_shop.data.PriceSpec> out = new ArrayList<>();
+        if (raw == null) {
+            return out;
+        }
+        for (String entry : raw) {
+            cn.autoforged.module_shop.data.PriceSpec parsed = cn.autoforged.module_shop.data.PriceSpec.parseRuleText(entry);
+            out.add(parsed == null ? cn.autoforged.module_shop.data.PriceSpec.ZERO : parsed);
+        }
+        return out;
+    }
+
+    public static long buybackAllBonus() {
+        return Math.max(0L, INSTANCE.buybackAllBonus.get());
+    }
+
+    /** 第 level 级的每日结算上限（0 = 不限 → 返回 Long.MAX_VALUE；超出列表长度时视为不限）。 */
     public static long shippingDailyLimit(int level) {
         List<? extends String> list = INSTANCE.shippingDailyLimits.get();
-        if (list.isEmpty()) {
+        if (list.isEmpty() || level <= 0 || level > list.size()) {
             return Long.MAX_VALUE;
         }
-        int index = Math.max(0, Math.min(list.size() - 1, level - 1));
-        long value = parseLongSafe(list.get(index), 0L);
+        long value = parseLongSafe(list.get(level - 1), 0L);
         return value <= 0L ? Long.MAX_VALUE : value;
     }
 

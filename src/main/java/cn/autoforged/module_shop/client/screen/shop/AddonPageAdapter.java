@@ -183,6 +183,58 @@ public final class AddonPageAdapter implements ShopPage {
         }
     }
 
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (broken()) {
+            return false;
+        }
+        try {
+            return this.page.keyPressed(keyCode, scanCode, modifiers);
+        } catch (Throwable error) {
+            fail(error);
+            return false;
+        }
+    }
+
+    @Override
+    public boolean keyReleased(int keyCode, int scanCode, int modifiers) {
+        if (broken()) {
+            return false;
+        }
+        try {
+            return this.page.keyReleased(keyCode, scanCode, modifiers);
+        } catch (Throwable error) {
+            fail(error);
+            return false;
+        }
+    }
+
+    @Override
+    public boolean charTyped(char codePoint, int modifiers) {
+        if (broken()) {
+            return false;
+        }
+        try {
+            return this.page.charTyped(codePoint, modifiers);
+        } catch (Throwable error) {
+            fail(error);
+            return false;
+        }
+    }
+
+    @Override
+    public boolean isInputFocused() {
+        if (broken()) {
+            return false;
+        }
+        try {
+            return this.page.isInputFocused();
+        } catch (Throwable error) {
+            fail(error);
+            return false;
+        }
+    }
+
     private static final class Host implements AddonPageHost {
         private final ShopHost shop;
 

@@ -54,7 +54,7 @@ public final class CardGrid {
         return layout(x, y, w, h, UNIFIED_PAD, UNIFIED_GAP, UNIFIED_MIN_W, UNIFIED_H);
     }
 
-    /** 根据可用宽度自动计算列数与卡片宽度（右侧留 5 单位给滚动条）。 */
+    /** 根据可用宽度自动计算列数与卡片宽度（右侧留 9 单位安全槽给滚动条与拖拽热区）。 */
     public CardGrid layout(float x, float y, float w, float h, float pad, float gap, float minCardW, float cardH) {
         this.x = x;
         this.y = y;
@@ -64,7 +64,7 @@ public final class CardGrid {
         this.gap = gap;
         this.cardH = cardH;
         this.count = 0;
-        float innerW = Math.max(40.0F, w - pad * 2.0F - 5.0F);
+        float innerW = Math.max(40.0F, w - pad * 2.0F - 9.0F);
         this.cols = Math.max(1, (int) Math.floor((innerW + gap) / (Math.max(36.0F, minCardW) + gap)));
         this.cardW = (innerW - gap * (this.cols - 1)) / this.cols;
         return this;
@@ -245,9 +245,9 @@ public final class CardGrid {
         }
     }
 
-    /** 点击判定：优先卡内按钮/子区，其次卡片主体；点中缝隙返回 null。 */
+    /** 点击判定：优先卡内按钮/子区，其次卡片主体；点中缝隙或滚动条区返回 null。 */
     public Hit click(double mouseX, double mouseY) {
-        if (!insideViewport(mouseX, mouseY)) {
+        if (!insideViewport(mouseX, mouseY) || overBar(mouseX, mouseY)) {
             return null;
         }
         for (int i = this.hitRects.size() - 1; i >= 0; i--) {
@@ -258,6 +258,14 @@ public final class CardGrid {
         }
         int cell = hitCell((float) mouseX, (float) mouseY, this.scroll.offset());
         return cell >= 0 ? new Hit(cell, null) : null;
+    }
+
+    public boolean overBar(double mouseX, double mouseY) {
+        return this.scroll.overBar(mouseX, mouseY, this.x, this.y, this.w, this.h);
+    }
+
+    public ScrollController scroll() {
+        return this.scroll;
     }
 
     public boolean pressBar(double mouseX, double mouseY) {

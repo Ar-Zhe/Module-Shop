@@ -8,10 +8,14 @@ import cn.autoforged.module_shop.client.screen.SkiaDialog;
 import cn.autoforged.module_shop.client.screen.shop.PageKit;
 import cn.autoforged.module_shop.client.ui.AtomUi;
 import cn.autoforged.module_shop.client.ui.render.Draw;
+import cn.autoforged.module_shop.client.ui.render.ItemOverlay;
 import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
+import cn.autoforged.module_shop.client.ui.v2.V2;
 import cn.autoforged.module_shop.client.ui.widget.Button;
 import cn.autoforged.module_shop.client.ui.widget.ScrollController;
 import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
+import cn.autoforged.module_shop.data.PriceSpec;
 import io.github.humbleui.skija.Canvas;
 import java.util.ArrayList;
 import java.util.List;
@@ -97,8 +101,14 @@ public final class AuctionDetailScreen extends SkiaDialog {
     }
 
     private void bid(AuctionClient.Detail d) {
+        if (d == null || d.view == null || d.view.topMe) {
+            return;
+        }
         long value = AuctionUi.parse(amount.value());
-        if (value <= 0L) {
+        long ownEscrow = d.view.topMe ? Math.max(0L, d.view.currentBid) : 0L;
+        long need = Math.max(0L, value - ownEscrow);
+        if (value < d.view.minNext || !AuctionUi.canAfford(d.view, need)
+                || (d.view.buyout > 0L && value >= d.view.buyout)) {
             return;
         }
         CompoundTag tag = new CompoundTag();
@@ -217,31 +227,69 @@ public final class AuctionDetailScreen extends SkiaDialog {
         float colW = (rw - 12.0F) / 2.0F;
         // 当前价（最醒目）
         boolean hasBid = v.currentBid > 0L;
+        boolean phys = v.isPhysCurrency();
         small(c, AuctionUi.tr(hasBid ? "gui.module_shop.auction.label_current" : "gui.module_shop.auction.label_start"),
                 lx, innerY + 8, colW, IOStyle.TEXT_3);
-        Text.drawLine(c, AuctionUi.money(hasBid ? v.currentBid : v.startPrice), AtomUi.BOLD, Text.TITLE,
-                IOStyle.ORANGE, lx, innerY + 19, colW, Text.Align.LEFT);
+        long headlinePrice = hasBid ? v.currentBid : v.startPrice;
+        if (phys) {
+            PriceDisplay.drawCell(c, items, v.specOf(headlinePrice), lx, innerY + 19, colW - 4.0F,
+                    Text.Align.LEFT, IOStyle.ORANGE, false);
+        } else {
+            Text.drawLine(c, AuctionUi.money(headlinePrice), AtomUi.BOLD, Text.TITLE,
+                    IOStyle.ORANGE, lx, innerY + 19, colW, Text.Align.LEFT);
+        }
         small(c, AuctionUi.tr("gui.module_shop.auction.label_remain"), lx + colW, innerY + 8, colW, IOStyle.TEXT_3);
         String remainText = active ? AuctionUi.remain(remain) : AuctionUi.status(d.status);
         Text.drawLine(c, remainText, AtomUi.BOLD, Text.TITLE, active ? AuctionUi.remainColor(remain)
                 : AuctionUi.statusColor(d.status), lx + colW, innerY + 19, colW, Text.Align.LEFT);
         float gy = innerY + 34.0F;
-        info(c, lx, gy, colW, "gui.module_shop.auction.label_start", AuctionUi.money(v.startPrice), IOStyle.TEXT);
+        if (phys) {
+            infoSpec(c, items, lx, gy, colW, "gui.module_shop.auction.label_start", v.specOf(v.startPrice), IOStyle.TEXT);
+        } else {
+            info(c, lx, gy, colW, "gui.module_shop.auction.label_start", AuctionUi.money(v.startPrice), IOStyle.TEXT);
+        }
         info(c, lx + colW, gy, colW, "gui.module_shop.auction.label_leader",
                 hasBid ? (v.topMe ? AuctionUi.tr("gui.module_shop.auction.you") : v.topBidder)
                         : AuctionUi.tr("gui.module_shop.auction.no_bid"), v.topMe ? IOStyle.GREEN : IOStyle.TEXT);
-        info(c, lx, gy + 14, colW, "gui.module_shop.auction.label_min_next",
-                v.allowBid ? AuctionUi.money(v.minNext) : "-", IOStyle.TEXT);
-        info(c, lx + colW, gy + 14, colW, "gui.module_shop.auction.label_buyout",
-                v.buyout > 0L ? AuctionUi.money(v.buyout) : AuctionUi.tr("gui.module_shop.auction.none"),
-                v.buyout > 0L ? IOStyle.GREEN : IOStyle.TEXT_3);
+        if (v.allowBid) {
+            if (phys) {
+                infoSpec(c, items, lx, gy + 14, colW, "gui.module_shop.auction.label_min_next",
+                        v.specOf(v.minNext), IOStyle.TEXT);
+            } else {
+                info(c, lx, gy + 14, colW, "gui.module_shop.auction.label_min_next",
+                        AuctionUi.money(v.minNext), IOStyle.TEXT);
+            }
+        } else {
+            info(c, lx, gy + 14, colW, "gui.module_shop.auction.label_min_next", "-", IOStyle.TEXT);
+        }
+        if (v.buyout > 0L) {
+            if (phys) {
+                infoSpec(c, items, lx + colW, gy + 14, colW, "gui.module_shop.auction.label_buyout",
+                        v.specOf(v.buyout), IOStyle.GREEN);
+            } else {
+                info(c, lx + colW, gy + 14, colW, "gui.module_shop.auction.label_buyout",
+                        AuctionUi.money(v.buyout), IOStyle.GREEN);
+            }
+        } else {
+            info(c, lx + colW, gy + 14, colW, "gui.module_shop.auction.label_buyout",
+                    AuctionUi.tr("gui.module_shop.auction.none"), IOStyle.TEXT_3);
+        }
         info(c, lx, gy + 28, colW, "gui.module_shop.auction.label_bidders",
                 AuctionUi.tr("gui.module_shop.auction.bidders_value", v.bidders, v.bidCount), IOStyle.TEXT);
-        info(c, lx + colW, gy + 28, colW, "gui.module_shop.auction.label_increment",
-                AuctionUi.money(v.increment), IOStyle.TEXT);
+        if (phys) {
+            infoSpec(c, items, lx + colW, gy + 28, colW, "gui.module_shop.auction.label_increment",
+                    v.specOf(v.increment), IOStyle.TEXT);
+        } else {
+            info(c, lx + colW, gy + 28, colW, "gui.module_shop.auction.label_increment",
+                    AuctionUi.money(v.increment), IOStyle.TEXT);
+        }
         if (!active && d.finalPrice > 0L) {
-            info(c, lx, gy + 42, rw - 12, "gui.module_shop.auction.label_final",
-                    AuctionUi.money(d.finalPrice) + " · " + d.buyerName, IOStyle.GREEN);
+            if (phys) {
+                infoFinal(c, items, lx, gy + 42, rw - 12, v.specOf(d.finalPrice), d.buyerName);
+            } else {
+                info(c, lx, gy + 42, rw - 12, "gui.module_shop.auction.label_final",
+                        AuctionUi.money(d.finalPrice) + " · " + d.buyerName, IOStyle.GREEN);
+            }
         } else if (v.extensions > 0) {
             small(c, AuctionUi.tr("gui.module_shop.auction.extended_times", v.extensions), lx, gy + 46, rw - 12,
                     IOStyle.TEXT_3);
@@ -252,12 +300,19 @@ public final class AuctionDetailScreen extends SkiaDialog {
         boolean canAct = active && remain > 0L && !v.own;
         boolean enabled = AuctionClient.settings.enabled;
         float gap = Math.min(4.0F, Math.max(0.0F, rw * 0.02F));
+        long ownEscrow = v.topMe ? Math.max(0L, v.currentBid) : 0L;
         if (canAct && v.allowBid) {
             String minusLabel = "-" + v.increment;
             String plusLabel = "+" + v.increment;
             String bidLabel = AuctionUi.tr(pending ? "gui.module_shop.auction.submitting" : "gui.module_shop.auction.bid_btn");
-            float stepNeed = Math.max(42.0F, Math.max(Text.width(minusLabel, AtomUi.REGULAR, Text.BODY),
-                    Text.width(plusLabel, AtomUi.REGULAR, Text.BODY)) + 10.0F);
+            float stepNeed;
+            if (phys) {
+                String incNum = PriceDisplay.formatNumber(v.increment, false);
+                stepNeed = Math.max(46.0F, Text.width("+×" + incNum, AtomUi.BOLD, V2.FS) + 22.0F);
+            } else {
+                stepNeed = Math.max(42.0F, Math.max(Text.width(minusLabel, AtomUi.REGULAR, Text.BODY),
+                        Text.width(plusLabel, AtomUi.REGULAR, Text.BODY)) + 10.0F);
+            }
             float bidNeed = Math.max(36.0F, Text.width(bidLabel, AtomUi.REGULAR, Text.BODY) + 10.0F);
             float available = Math.max(0.0F, rw - gap * 3.0F);
             // 顺序为输入框、减、加、出价；空间不足时一起收缩，富余空间只补给输入框
@@ -268,12 +323,26 @@ public final class AuctionDetailScreen extends SkiaDialog {
             float minusW = widths[1];
             float plusW = widths[2];
             float bidW = widths[3];
-            button(c, "minus", minusLabel, rx, ay, minusW, 18, Button.Kind.NORMAL, true, () -> adjust(d, -1));
+            if (phys) {
+                button(c, "minus", "", rx, ay, minusW, 18, Button.Kind.NORMAL, true, () -> adjust(d, -1));
+                PriceDisplay.drawCell(c, items, v.specOf(v.increment), rx + 2.0F, ay + 9.0F, minusW - 4.0F,
+                        Text.Align.CENTER, IOStyle.TEXT, false, "-");
+            } else {
+                button(c, "minus", minusLabel, rx, ay, minusW, 18, Button.Kind.NORMAL, true, () -> adjust(d, -1));
+            }
             amount.bounds(rx + minusW + gap, ay, fieldW, 18).visible(true);
             float plusX = rx + minusW + gap + fieldW + gap;
-            button(c, "plus", plusLabel, plusX, ay, plusW, 18, Button.Kind.NORMAL, true, () -> adjust(d, 1));
+            if (phys) {
+                button(c, "plus", "", plusX, ay, plusW, 18, Button.Kind.NORMAL, true, () -> adjust(d, 1));
+                PriceDisplay.drawCell(c, items, v.specOf(v.increment), plusX + 2.0F, ay + 9.0F, plusW - 4.0F,
+                        Text.Align.CENTER, IOStyle.TEXT, false, "+");
+            } else {
+                button(c, "plus", plusLabel, plusX, ay, plusW, 18, Button.Kind.NORMAL, true, () -> adjust(d, 1));
+            }
             long typed = AuctionUi.parse(amount.value());
-            boolean okAmount = typed >= v.minNext && typed <= d.balance && !v.topMe
+            long needBid = Math.max(0L, typed - ownEscrow);
+            boolean affordBid = typed > 0L && AuctionUi.canAfford(v, needBid);
+            boolean okAmount = typed >= v.minNext && affordBid && !v.topMe
                     && (v.buyout <= 0L || typed < v.buyout);
             button(c, "bid", bidLabel, plusX + plusW + gap, ay, bidW, 18, Button.Kind.ACCENT,
                     okAmount && !pending && enabled, () -> bid(d));
@@ -282,17 +351,25 @@ public final class AuctionDetailScreen extends SkiaDialog {
             if (v.topMe) {
                 hint = AuctionUi.tr("gui.module_shop.auction.hint_leading");
                 hintColor = IOStyle.GREEN;
-            } else if (typed > d.balance) {
-                hint = AuctionUi.tr("gui.module_shop.auction.hint_no_money", AuctionUi.money(d.balance));
+            } else if (typed > 0L && !affordBid) {
+                hint = phys
+                        ? AuctionUi.tr("gui.module_shop.auction.hint_no_phys",
+                                "实体币不足或无法找零（当前 %s）", AuctionUi.ownedLabel(v))
+                        : AuctionUi.tr("gui.module_shop.auction.hint_no_money",
+                                AuctionUi.money(ClientShopData.balance));
                 hintColor = IOStyle.RED;
             } else if (typed > 0L && typed < v.minNext) {
-                hint = AuctionUi.tr("gui.module_shop.bid_min", AuctionUi.money(v.minNext));
+                hint = AuctionUi.tr("gui.module_shop.bid_min", AuctionUi.money(v, v.minNext));
                 hintColor = IOStyle.RED;
             } else if (v.buyout > 0L && typed >= v.buyout) {
                 hint = AuctionUi.tr("gui.module_shop.auction.hint_use_buyout");
                 hintColor = IOStyle.ORANGE;
             } else {
-                hint = AuctionUi.tr("gui.module_shop.auction.hint_rule", AuctionUi.money(d.balance));
+                hint = phys
+                        ? AuctionUi.tr("gui.module_shop.auction.hint_rule_phys",
+                                "出价即扣实体币，被超过退回 · 持有 %s", AuctionUi.ownedLabel(v))
+                        : AuctionUi.tr("gui.module_shop.auction.hint_rule",
+                                AuctionUi.money(ClientShopData.balance));
             }
             small(c, hint, rx + 2, ay + 26, rw - 4, hintColor);
             ay += 34.0F;
@@ -309,16 +386,32 @@ public final class AuctionDetailScreen extends SkiaDialog {
         }
         float btnW = (rw - gap) / 2.0F;
         if (canAct && v.buyout > 0L) {
-            boolean afford = d.balance >= v.buyout - (v.topMe ? v.currentBid : 0L);
-            button(c, "buyout", armedLabel("buyout", AuctionUi.tr("gui.module_shop.auction.buyout_btn",
-                            AuctionUi.money(v.buyout))), rx, ay, rw, 18, Button.Kind.ACCENT,
-                    afford && !pending && enabled, () -> {
-                        if (confirm("buyout")) {
-                            CompoundTag tag = new CompoundTag();
-                            tag.putLong("expect", v.buyout);
-                            submit("auction_buyout", tag);
-                        }
-                    });
+            long needBuyout = AuctionUi.buyoutDue(v);
+            boolean afford = AuctionUi.canAfford(v, needBuyout);
+            boolean buyoutEnabled = afford && !pending && enabled;
+            boolean buyoutArmed = "buyout".equals(armed) && System.currentTimeMillis() - buyoutArmedAt < 3000L;
+            if (phys && !buyoutArmed) {
+                button(c, "buyout", "", rx, ay, rw, 18, Button.Kind.ACCENT, buyoutEnabled, () -> {
+                    if (confirm("buyout")) {
+                        CompoundTag tag = new CompoundTag();
+                        tag.putLong("expect", v.buyout);
+                        submit("auction_buyout", tag);
+                    }
+                });
+                PriceDisplay.drawCell(c, items, v.specOf(v.buyout), rx + 4.0F, ay + 9.0F, rw - 8.0F,
+                        Text.Align.CENTER, 0xFFFFFFFF, !buyoutEnabled,
+                        AuctionUi.tr("gui.module_shop.auction.buyout_btn_prefix", "一口价购买 "));
+            } else {
+                button(c, "buyout", armedLabel("buyout", AuctionUi.tr("gui.module_shop.auction.buyout_btn",
+                                AuctionUi.money(v.buyout))), rx, ay, rw, 18, Button.Kind.ACCENT,
+                        buyoutEnabled, () -> {
+                            if (confirm("buyout")) {
+                                CompoundTag tag = new CompoundTag();
+                                tag.putLong("expect", v.buyout);
+                                submit("auction_buyout", tag);
+                            }
+                        });
+            }
             ay += 22.0F;
         }
         if (d.canCancel) {
@@ -370,8 +463,13 @@ public final class AuctionDetailScreen extends SkiaDialog {
                 int color = i == 0 ? IOStyle.ORANGE : IOStyle.TEXT_2;
                 small(c, (b.me ? AuctionUi.tr("gui.module_shop.auction.you") : b.name), rx + 6, ly, rw * 0.38F,
                         b.me ? IOStyle.GREEN : color);
-                Text.drawLine(c, AuctionUi.money(b.amount), i == 0 ? AtomUi.BOLD : AtomUi.REGULAR, Text.SMALL, color,
-                        rx + rw * 0.38F, ly, rw * 0.34F, Text.Align.RIGHT);
+                if (phys) {
+                    PriceDisplay.drawCell(c, items, v.specOf(b.amount), rx + rw * 0.38F, ly, rw * 0.34F,
+                            Text.Align.RIGHT, color, false);
+                } else {
+                    Text.drawLine(c, AuctionUi.money(b.amount), i == 0 ? AtomUi.BOLD : AtomUi.REGULAR, Text.SMALL, color,
+                            rx + rw * 0.38F, ly, rw * 0.34F, Text.Align.RIGHT);
+                }
                 Text.drawLine(c, AuctionUi.ago(b.ago + since), AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_3,
                         rx + rw * 0.72F, ly, rw * 0.28F - 8.0F, Text.Align.RIGHT);
             }
@@ -388,8 +486,32 @@ public final class AuctionDetailScreen extends SkiaDialog {
     private static void info(Canvas c, float x, float y, float w, String labelKey, String value, int color) {
         String label = AuctionUi.tr(labelKey);
         float lw = Math.min(w * 0.5F, Text.width(label, AtomUi.REGULAR, Text.SMALL) + 4.0F);
-        Text.drawLine(c, label, AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_3, x, y + 5, lw, Text.Align.LEFT);
-        Text.drawLine(c, value, AtomUi.REGULAR, Text.SMALL, color, x + lw, y + 5, w - lw - 4.0F, Text.Align.LEFT);
+        Text.drawLine(c, label, AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_3, x, y + 5, lw + 0.5F, Text.Align.LEFT);
+        Text.drawLine(c, value, AtomUi.REGULAR, Text.SMALL, color, x + lw, y + 5, Math.max(4.0F, w - lw - 4.0F) + 0.5F,
+                Text.Align.LEFT);
+    }
+
+    private static void infoSpec(Canvas c, ItemOverlay items, float x, float y, float w, String labelKey,
+                                 PriceSpec spec, int color) {
+        String label = AuctionUi.tr(labelKey);
+        float lw = Math.min(w * 0.5F, Text.width(label, AtomUi.REGULAR, Text.SMALL) + 4.0F);
+        Text.drawLine(c, label, AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_3, x, y + 5, lw + 0.5F, Text.Align.LEFT);
+        PriceDisplay.drawCell(c, items, spec, x + lw, y + 5, Math.max(4.0F, w - lw - 4.0F) + 0.5F, Text.Align.LEFT,
+                color, false);
+    }
+
+    private static void infoFinal(Canvas c, ItemOverlay items, float x, float y, float w,
+                                  PriceSpec spec, String buyerName) {
+        String label = AuctionUi.tr("gui.module_shop.auction.label_final");
+        float lw = Math.min(w * 0.35F, Text.width(label, AtomUi.REGULAR, Text.SMALL) + 4.0F);
+        Text.drawLine(c, label, AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_3, x, y + 5, lw + 0.5F, Text.Align.LEFT);
+        float avail = Math.max(10.0F, w - lw - 4.0F);
+        String numTxt = "×" + PriceDisplay.formatNumber(spec.physCount, false);
+        float priceW = Math.min(avail * 0.6F, 12.0F + Text.width(numTxt, AtomUi.BOLD, V2.FS) + 2.5F);
+        PriceDisplay.drawCell(c, items, spec, x + lw, y + 5, priceW + 0.5F, Text.Align.LEFT, IOStyle.GREEN, false);
+        String suffix = " · " + (buyerName == null ? "" : buyerName);
+        Text.drawLine(c, suffix, AtomUi.REGULAR, Text.SMALL, IOStyle.GREEN,
+                x + lw + priceW, y + 5, Math.max(4.0F, avail - priceW) + 0.5F, Text.Align.LEFT);
     }
 
     @Override

@@ -4,11 +4,12 @@ import cn.autoforged.module_shop.client.screen.IOStyle;
 import com.atom.lib.design.atomchat.DesignHost;
 
 /**
- * 把 Module-Shop 现有调色板（{@link IOStyle}，OneConfig 深色风格、唯一强调色 #2B4BFF）
- * 接到 AtomLib 设计包上：设计包里的卡片、悬停色等派生色都会跟随本模组的配色。
+ * 旧版 AtomLib {@code DesignHost} 转发实现。
  *
- * <p>颜色仍以 {@link IOStyle} 为唯一来源，这里只做转发，不复制常量。
+ * <p>已不再注入全局 {@code Design.host(...)}（{@code AtomUi} 不再调用它），
+ * 以避免覆盖同进程 {@code AtomChat} 的磨砂玻璃卡片、圆角与主题配色。保留此类仅作向后兼容。
  */
+@Deprecated
 public final class ShopDesign implements DesignHost {
     public static final ShopDesign INSTANCE = new ShopDesign();
 

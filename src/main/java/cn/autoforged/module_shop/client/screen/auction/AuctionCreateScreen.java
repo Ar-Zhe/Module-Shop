@@ -1,6 +1,9 @@
 package cn.autoforged.module_shop.client.screen.auction;
 
 import cn.autoforged.module_shop.client.AuctionClient;
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState;
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState.PhysTierView;
+import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.screen.IOStyle;
 import cn.autoforged.module_shop.client.screen.Nav;
 import cn.autoforged.module_shop.client.screen.SkiaDialog;
@@ -8,14 +11,19 @@ import cn.autoforged.module_shop.client.screen.shop.PageKit;
 import cn.autoforged.module_shop.client.ui.AtomUi;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
+import cn.autoforged.module_shop.client.ui.v2.V2;
 import cn.autoforged.module_shop.client.ui.widget.Button;
 import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
+import cn.autoforged.module_shop.data.PriceSpec;
 import io.github.humbleui.skija.Canvas;
+import java.util.List;
 import javax.annotation.Nullable;
 import net.minecraft.client.Minecraft;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.Mth;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.ItemStack;
 
@@ -36,6 +44,18 @@ public final class AuctionCreateScreen extends SkiaDialog {
     private int slot = -1;
     private boolean allowBid = true;
     private int duration;
+    private String physTierKey = "";
+    private float currencyScrollX;
+    private float currencyMaxScrollX;
+    private float stripX;
+    private float stripY;
+    private float stripW;
+    private float stripH;
+    private float stripInnerW;
+    private float stripNaturalSum;
+    private boolean draggingCurrencyBar;
+    private float currencyDragStartX;
+    private float currencyDragStartScroll;
     private SkiaTextField count;
     private SkiaTextField start;
     private SkiaTextField increment;
@@ -79,6 +99,12 @@ public final class AuctionCreateScreen extends SkiaDialog {
         }
         templateApplied = true;
         allowBid = template.allowBid;
+        if (template.isPhysCurrency() && ClientHomeCurrencyState.physEnabled) {
+            PhysTierView tier = ClientHomeCurrencyState.findTier(template.physTierKey);
+            physTierKey = tier != null ? tier.tierKey() : template.physTierKey;
+        } else {
+            physTierKey = "";
+        }
         start.setValue(template.allowBid ? Long.toString(template.startPrice) : "");
         increment.setValue(template.increment > 0L ? Long.toString(template.increment) : "");
         buyout.setValue(template.buyout > 0L ? Long.toString(template.buyout) : "");
@@ -122,6 +148,31 @@ public final class AuctionCreateScreen extends SkiaDialog {
         }
     }
 
+    private boolean isPhysCurrency() {
+        return ClientHomeCurrencyState.physEnabled && physTierKey != null && !physTierKey.isEmpty();
+    }
+
+    private void selectCurrency(String nextTierKey) {
+        this.physTierKey = nextTierKey == null ? "" : nextTierKey;
+    }
+
+    private static boolean tierMatches(PhysTierView tv, String key) {
+        if (key == null || key.isEmpty()) {
+            return false;
+        }
+        return key.equals(tv.tierKey())
+                || key.equals(tv.id)
+                || key.equalsIgnoreCase(tv.uniqueItemKey())
+                || (!key.contains("|") && key.equalsIgnoreCase(tv.itemId));
+    }
+
+    private static long physListingFee(AuctionClient.Settings s, long startPrice) {
+        if (s.feePercent <= 0.0D || startPrice <= 0L) {
+            return 0L;
+        }
+        return (long) Math.floor(startPrice * s.feePercent / 100.0D);
+    }
+
     /** 当前输入的问题（null = 可以提交）。 */
     @Nullable
     private String problem() {
@@ -144,22 +195,32 @@ public final class AuctionCreateScreen extends SkiaDialog {
         if (n <= 0L || n > maxCount(st)) {
             return AuctionUi.tr("msg.module_shop.auction.err_count", maxCount(st));
         }
+        boolean isPhys = isPhysCurrency();
+        if (isPhys && ClientHomeCurrencyState.findTier(physTierKey) == null) {
+            return AuctionUi.tr("msg.module_shop.phys_tier_unavailable", "所需的实体货币档位未配置或已失效");
+        }
         long b = AuctionUi.parse(buyout.value());
         long inc = AuctionUi.parse(increment.value());
-        if (b < 0L || inc < 0L) {
+        if (b < 0L || inc < 0L || (isPhys && (b > Long.MAX_VALUE / 2L || inc > Long.MAX_VALUE / 2L))) {
             return AuctionUi.tr("msg.module_shop.auction.err_amount");
         }
         if (b > 0L && !s.allowBuyout) {
             return AuctionUi.tr("msg.module_shop.auction.err_buyout_disabled");
         }
+        long minInc = isPhys ? 1L : s.minIncrement;
         long price;
         if (allowBid) {
             price = AuctionUi.parse(start.value());
             if (price <= 0L) {
                 return AuctionUi.tr("gui.module_shop.auction.need_start");
             }
-            if (inc > 0L && inc < s.minIncrement) {
-                return AuctionUi.tr("msg.module_shop.auction.err_increment", s.minIncrement);
+            if (isPhys && price > Long.MAX_VALUE / 2L) {
+                return AuctionUi.tr("msg.module_shop.auction.err_amount");
+            }
+            if (inc > 0L && inc < minInc) {
+                return isPhys
+                        ? AuctionUi.tr("msg.module_shop.auction.err_increment_phys", "加价幅度至少为 %s 枚", minInc)
+                        : AuctionUi.tr("msg.module_shop.auction.err_increment", minInc);
             }
             if (b > 0L && b <= price) {
                 return AuctionUi.tr("msg.module_shop.auction.err_buyout_low");
@@ -170,13 +231,25 @@ public final class AuctionCreateScreen extends SkiaDialog {
             }
             price = b;
         }
-        if (price < s.minStart || (s.maxStart > 0L && price > s.maxStart)) {
-            return AuctionUi.tr("msg.module_shop.auction.err_start_range", s.minStart,
-                    s.maxStart > 0L ? Long.toString(s.maxStart) : "∞");
+        long minStart = isPhys ? 1L : s.minStart;
+        long maxStart = isPhys ? 0L : s.maxStart;
+        if (price < minStart || (maxStart > 0L && price > maxStart)) {
+            return isPhys
+                    ? AuctionUi.tr("msg.module_shop.auction.err_start_range_phys", "起拍枚数至少为 %s 枚", minStart)
+                    : AuctionUi.tr("msg.module_shop.auction.err_start_range", minStart,
+                            maxStart > 0L ? Long.toString(maxStart) : "∞");
         }
-        long fee = s.listingFee(price);
-        if (fee > cn.autoforged.module_shop.client.ClientShopData.balance) {
-            return AuctionUi.tr("msg.module_shop.auction.err_fee", fee);
+        if (isPhys) {
+            long fee = physListingFee(s, price);
+            if (fee > 0L && !PriceDisplay.canAffordPhys(physTierKey, fee, 1)) {
+                return AuctionUi.tr("msg.module_shop.auction.err_fee_phys",
+                        "实体币不足以支付上架费 %s", PriceDisplay.physPlain(physTierKey, fee));
+            }
+        } else {
+            long fee = s.listingFee(price);
+            if (fee > ClientShopData.balance) {
+                return AuctionUi.tr("msg.module_shop.auction.err_fee", fee);
+            }
         }
         if (!s.durations.contains(duration)) {
             return AuctionUi.tr("msg.module_shop.auction.err_duration");
@@ -198,6 +271,7 @@ public final class AuctionCreateScreen extends SkiaDialog {
         tag.putString("increment", increment.value().trim());
         tag.putString("buyout", buyout.value().trim());
         tag.putInt("duration", duration);
+        tag.putString("physTier", isPhysCurrency() ? physTierKey : "");
         pending = true;
         AuctionClient.sendOnce("auction_create", tag);
     }
@@ -216,8 +290,20 @@ public final class AuctionCreateScreen extends SkiaDialog {
         if (duration == 0 || !s.durations.contains(duration)) {
             duration = s.durations.contains(s.defaultDuration) ? s.defaultDuration : s.durations.get(0);
         }
-        float w = Math.min(400.0F, this.width - 16.0F);
-        float h = Math.min(262.0F, this.height - 16.0F);
+        if (!ClientHomeCurrencyState.physEnabled) {
+            physTierKey = "";
+        }
+        boolean isPhys = isPhysCurrency();
+        if (isPhys) {
+            String tierName = PriceDisplay.tierDisplayName(physTierKey);
+            start.placeholder(AuctionUi.tr("gui.module_shop.auction.start_hint_phys", "枚数 (%s)", tierName));
+            increment.placeholder("1");
+        } else {
+            start.placeholder(AuctionUi.tr("gui.module_shop.auction.start_hint"));
+            increment.placeholder(Long.toString(s.minIncrement));
+        }
+        float w = Math.min(418.0F, this.width - 16.0F);
+        float h = Math.min(272.0F, this.height - 16.0F);
         float x = Math.round((this.width - w) / 2.0F);
         float y = Math.round((this.height - h) / 2.0F);
         panel(c, x, y, w, h, this.title.getString());
@@ -274,25 +360,32 @@ public final class AuctionCreateScreen extends SkiaDialog {
         // ---------------- 右：参数 ----------------
         float rx = ix + gridW + 12.0F;
         float rw = iw - gridW - 12.0F;
-        float labelW = Math.min(56.0F, Math.max(28.0F, rw * 0.42F));
+        float labelW = Math.min(54.0F, Math.max(28.0F, rw * 0.40F));
         float fx = rx + labelW;
         float fw = Math.max(1.0F, rw - labelW);
         float ry = iy;
+        if (ClientHomeCurrencyState.physEnabled) {
+            row(c, rx, ry + 3, "gui.module_shop.auction.f_currency", "结算币种", labelW - 2.0F);
+            paintCurrencyStrip(c, fx, ry, fw, 22.0F);
+            ry += 25.0F;
+        } else {
+            this.stripW = 0.0F;
+        }
         row(c, rx, ry, "gui.module_shop.auction.f_count", labelW - 2.0F);
         count.bounds(fx, ry, Math.min(48.0F, fw), 16).visible(true);
-        ry += 22;
+        ry += 20;
         row(c, rx, ry, "gui.module_shop.auction.f_allow_bid", labelW - 2.0F);
         toggle(c, "allowBid", fx, ry + 2, allowBid, () -> allowBid = !allowBid);
         small(c, AuctionUi.tr(allowBid ? "gui.module_shop.auction.allow_bid_on" : "gui.module_shop.auction.allow_bid_off"),
                 fx + 28, ry + 8, fw - 28, IOStyle.TEXT_2);
-        ry += 22;
+        ry += 19;
         if (allowBid) {
             row(c, rx, ry, "gui.module_shop.auction.f_start", labelW - 2.0F);
             start.bounds(fx, ry, fw, 16).visible(true);
-            ry += 22;
+            ry += 20;
             row(c, rx, ry, "gui.module_shop.auction.f_increment", labelW - 2.0F);
             increment.bounds(fx, ry, fw, 16).visible(true);
-            ry += 22;
+            ry += 20;
         } else {
             start.visible(false);
             increment.visible(false);
@@ -301,7 +394,7 @@ public final class AuctionCreateScreen extends SkiaDialog {
             row(c, rx, ry, allowBid ? "gui.module_shop.auction.f_buyout" : "gui.module_shop.auction.f_price",
                     labelW - 2.0F);
             buyout.bounds(fx, ry, fw, 16).visible(true);
-            ry += 22;
+            ry += 20;
         } else {
             buyout.visible(false);
         }
@@ -314,19 +407,42 @@ public final class AuctionCreateScreen extends SkiaDialog {
                     Text.width(label, AtomUi.REGULAR, Text.BODY) + 10.0F));
             if (cx + cw > rx + rw) {
                 cx = fx;
-                cy += 18;
+                cy += 17;
             }
             final int m = minutes;
             chip(c, "dur" + minutes, label, cx, cy, cw, 15, duration == minutes, IOStyle.BLUE, () -> duration = m);
             cx += cw + 3;
         }
-        ry = cy + 22;
+        ry = cy + 20;
         // 费用预览
         long price = allowBid ? Math.max(0L, AuctionUi.parse(start.value())) : Math.max(0L, AuctionUi.parse(buyout.value()));
-        long fee = s.listingFee(price);
-        small(c, AuctionUi.tr("gui.module_shop.auction.fee_preview", AuctionUi.money(fee),
-                trimPercent(s.saleFeePercent)), rx, ry + 4, rw, fee > 0L ? IOStyle.ORANGE : IOStyle.TEXT_2);
-        ry += 12;
+        if (isPhys) {
+            long fee = physListingFee(s, price);
+            boolean affordFee = fee <= 0L || PriceDisplay.canAffordPhys(physTierKey, fee, 1);
+            if (fee <= 0L) {
+                small(c, AuctionUi.tr("gui.module_shop.auction.fee_preview_phys_free",
+                                "上架费 免费（免固定星币费）· 成交手续费 %s%%", trimPercent(s.saleFeePercent)),
+                        rx, ry + 4, rw, IOStyle.TEXT_2);
+            } else {
+                String feePrefix = AuctionUi.tr("gui.module_shop.auction.fee_prefix", "上架费 ");
+                String feeSuffix = AuctionUi.tr("gui.module_shop.auction.fee_suffix_short",
+                        " · 成交 %s%%", trimPercent(s.saleFeePercent));
+                float preW = small(c, feePrefix, rx, ry + 4, rw * 0.35F, affordFee ? IOStyle.ORANGE : IOStyle.RED);
+                float sufW = Math.min(rw * 0.45F, Text.width(feeSuffix, AtomUi.REGULAR, Text.SMALL));
+                float cellW = Math.max(24.0F, rw - preW - sufW - 2.0F);
+                PriceDisplay.drawCell(c, items, PriceSpec.phys(physTierKey, fee), rx + preW, ry + 4, cellW,
+                        Text.Align.LEFT, affordFee ? IOStyle.ORANGE : IOStyle.RED, false);
+                Text.drawLine(c, feeSuffix, AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_2,
+                        rx + preW + cellW + 2.0F, ry + 4, sufW, Text.Align.RIGHT);
+            }
+        } else {
+            long fee = s.listingFee(price);
+            boolean affordFee = fee <= ClientShopData.balance;
+            small(c, AuctionUi.tr("gui.module_shop.auction.fee_preview", AuctionUi.money(fee),
+                            trimPercent(s.saleFeePercent)), rx, ry + 4, rw,
+                    !affordFee ? IOStyle.RED : (fee > 0L ? IOStyle.ORANGE : IOStyle.TEXT_2));
+        }
+        ry += 11;
         if (allowBid) {
             small(c, AuctionUi.tr("gui.module_shop.auction.rule_preview"), rx, ry + 4, rw, IOStyle.TEXT_3);
         }
@@ -342,12 +458,188 @@ public final class AuctionCreateScreen extends SkiaDialog {
                 rx + rw - bw, bottom - 18, bw, 18, Button.Kind.ACCENT, problem == null && !pending, this::submit);
     }
 
+    private void paintCurrencyStrip(Canvas c, float x, float y, float w, float h) {
+        this.stripX = x;
+        this.stripY = y;
+        this.stripW = w;
+        this.stripH = h;
+        Draw.fill(c, x, y, w, h, 3.0F, IOStyle.FIELD_BG);
+        Draw.stroke(c, x, y, w, h, 3.0F, 0.7F, IOStyle.BORDER_DIM);
+
+        List<PhysTierView> tiers = ClientHomeCurrencyState.physTiers;
+        String starName = ClientShopData.currencyName();
+        if (starName.isEmpty()) {
+            starName = AuctionUi.tr("gui.module_shop.currency_star", "星币");
+        }
+        String starPillText = "★ " + starName;
+        float pad = 2.0F;
+        float gap = 3.0F;
+        float innerW = Math.max(20.0F, w - pad * 2.0F);
+        float pillH = h - pad * 2.0F;
+        float py = y + pad;
+
+        int totalCount = 1 + tiers.size();
+        float[] widths = new float[totalCount];
+        widths[0] = Math.max(40.0F, Math.min(72.0F, Text.width(starPillText, AtomUi.BOLD, V2.FS_S) + 10.0F));
+        float naturalSum = widths[0];
+        for (int i = 0; i < tiers.size(); i++) {
+            PhysTierView tv = tiers.get(i);
+            float nameW = Text.width(tv.displayName(), AtomUi.BOLD, V2.FS_S);
+            float cntW = Text.width("×" + tv.ownedCount, AtomUi.REGULAR, V2.FS_XS);
+            widths[i + 1] = Math.max(48.0F, Math.min(82.0F, 18.0F + Math.max(nameW, cntW)));
+            naturalSum += gap + widths[i + 1];
+        }
+        if (naturalSum < innerW && totalCount <= 4) {
+            float extra = (innerW - naturalSum) / totalCount;
+            for (int i = 0; i < widths.length; i++) {
+                widths[i] += extra;
+            }
+            naturalSum = innerW;
+        }
+        this.currencyMaxScrollX = Math.max(0.0F, naturalSum - innerW);
+        this.currencyScrollX = Mth.clamp(this.currencyScrollX, 0.0F, this.currencyMaxScrollX);
+        this.stripInnerW = innerW;
+        this.stripNaturalSum = naturalSum;
+
+        int saved = c.save();
+        Draw.clip(c, x + pad, y + 1.0F, innerW, h - 2.0F);
+        items.pushClip(x + pad, y + 1.0F, innerW, h - 2.0F);
+        pushHitClip(x + pad, y + 1.0F, innerW, h - 2.0F);
+
+        float cursorX = x + pad - this.currencyScrollX;
+        // 星币选项
+        boolean starSel = physTierKey == null || physTierKey.isEmpty();
+        boolean starHov = over(cursorX, py, widths[0], pillH);
+        int starBg = starSel ? Draw.alpha(IOStyle.ORANGE, 0.22F)
+                : (starHov ? IOStyle.ROW_HOVER : Draw.alpha(IOStyle.CARD, 0.9F));
+        int starBorder = starSel ? IOStyle.ORANGE : (starHov ? IOStyle.BORDER_HOVER : IOStyle.BORDER_DIM);
+        Draw.fill(c, cursorX, py, widths[0], pillH, 2.5F, starBg);
+        Draw.stroke(c, cursorX, py, widths[0], pillH, 2.5F, starSel ? 1.0F : 0.6F, starBorder);
+        Text.drawLine(c, starPillText, starSel ? AtomUi.BOLD : AtomUi.REGULAR, V2.FS_S,
+                starSel ? IOStyle.ORANGE : IOStyle.TEXT_2, cursorX + 2.0F, py + pillH * 0.5F,
+                widths[0] - 4.0F, Text.Align.CENTER);
+        if (starHov) {
+            tip(Component.literal(starName + " · "
+                    + AuctionUi.tr("gui.module_shop.auction.star_bal_tip", "余额 %s",
+                    AuctionUi.money(ClientShopData.balance))));
+        }
+        hit(cursorX, py, widths[0], pillH, () -> selectCurrency(""), null);
+        cursorX += widths[0] + gap;
+
+        // 各阶实体货币档位
+        for (int i = 0; i < tiers.size(); i++) {
+            PhysTierView tv = tiers.get(i);
+            float pw = widths[i + 1];
+            if (cursorX + pw >= x + pad && cursorX <= x + pad + innerW) {
+                boolean selItem = tierMatches(tv, physTierKey);
+                boolean hov = over(cursorX, py, pw, pillH);
+                int bg = selItem ? Draw.alpha(IOStyle.BLUE, 0.20F)
+                        : (hov ? IOStyle.ROW_HOVER : Draw.alpha(IOStyle.CARD, 0.9F));
+                int border = selItem ? IOStyle.BLUE : (hov ? IOStyle.BORDER_HOVER : IOStyle.BORDER_DIM);
+                Draw.fill(c, cursorX, py, pw, pillH, 2.5F, bg);
+                Draw.stroke(c, cursorX, py, pw, pillH, 2.5F, selItem ? 1.0F : 0.6F, border);
+                if (!tv.itemStack.isEmpty()) {
+                    items.addNoHover(tv.itemStack.copyWithCount(1), cursorX + 2.5F, py + (pillH - 12.0F) * 0.5F,
+                            12.0F, false);
+                }
+                float tx = cursorX + 16.0F;
+                float tw = Math.max(8.0F, pw - 18.0F);
+                Text.drawLine(c, tv.displayName(), selItem ? AtomUi.BOLD : AtomUi.REGULAR, V2.FS_S,
+                        selItem ? IOStyle.TEXT : IOStyle.TEXT_2, tx, py + 5.5F, tw, Text.Align.LEFT);
+                Text.drawLine(c, "×" + tv.ownedCount, AtomUi.REGULAR, V2.FS_XS,
+                        tv.ownedCount > 0 ? IOStyle.GREEN : IOStyle.TEXT_3, tx, py + 13.0F, tw, Text.Align.LEFT);
+                if (hov) {
+                    tip(Component.literal(tv.displayName() + " · "
+                            + AuctionUi.tr("gui.module_shop.phys_ex.unit_val", "单枚面值 %s",
+                            ClientShopData.money(tv.value))
+                            + " · " + AuctionUi.tr("gui.module_shop.phys_ex.owned_tip", "持有 %s", tv.ownedCount)));
+                }
+                final String chosenKey = tv.tierKey();
+                hit(cursorX, py, pw, pillH, () -> selectCurrency(chosenKey), null);
+            }
+            cursorX += pw + gap;
+        }
+        popHitClip();
+        items.popClip();
+        c.restoreToCount(saved);
+
+        if (this.currencyMaxScrollX > 0.5F) {
+            float barW = Math.max(18.0F, innerW * Math.min(1.0F, innerW / Math.max(innerW + 1.0F, naturalSum)));
+            float barX = x + pad + (innerW - barW) * (this.currencyScrollX / this.currencyMaxScrollX);
+            float barY = y + h - 3.2F;
+            boolean hovBar = this.draggingCurrencyBar || (this.mouseX >= x && this.mouseX <= x + w
+                    && this.mouseY >= y + h - 8.0F && this.mouseY <= y + h);
+            float barH = hovBar ? 2.6F : 1.8F;
+            if (hovBar) {
+                Draw.fill(c, x + pad, barY - (barH - 1.8F) * 0.5F, innerW, barH, barH * 0.5F,
+                        Draw.alpha(IOStyle.HAIR, 0.7F));
+            }
+            Draw.fill(c, barX, barY - (barH - 1.8F) * 0.5F, barW, barH, barH * 0.5F,
+                    Draw.alpha(IOStyle.BLUE, hovBar ? 1.0F : 0.65F));
+        }
+    }
+
+    @Override
+    protected boolean onClick(double mx, double my, int button) {
+        if (button == 0 && this.currencyMaxScrollX > 0.5F && this.stripW > 0.0F
+                && mx >= this.stripX && mx <= this.stripX + this.stripW
+                && my >= this.stripY + this.stripH - 8.0F && my <= this.stripY + this.stripH) {
+            float trackW = Math.max(1.0F, this.stripInnerW);
+            float barW = Math.max(18.0F, trackW * Math.min(1.0F, trackW / Math.max(trackW + 1.0F, this.stripNaturalSum)));
+            float travel = Math.max(1.0F, trackW - barW);
+            float rel = (float) mx - (this.stripX + 2.0F) - barW * 0.5F;
+            this.currencyScrollX = Mth.clamp(rel / travel * this.currencyMaxScrollX, 0.0F, this.currencyMaxScrollX);
+            this.draggingCurrencyBar = true;
+            this.currencyDragStartX = (float) mx;
+            this.currencyDragStartScroll = this.currencyScrollX;
+            return true;
+        }
+        return super.onClick(mx, my, button);
+    }
+
+    @Override
+    protected boolean onDrag(double mx, double my, int button, double dx, double dy) {
+        if (this.draggingCurrencyBar && this.currencyMaxScrollX > 0.5F) {
+            float trackW = Math.max(1.0F, this.stripInnerW);
+            float barW = Math.max(18.0F, trackW * Math.min(1.0F, trackW / Math.max(trackW + 1.0F, this.stripNaturalSum)));
+            float travel = Math.max(1.0F, trackW - barW);
+            float delta = ((float) mx - this.currencyDragStartX) * (this.currencyMaxScrollX / travel);
+            this.currencyScrollX = Mth.clamp(this.currencyDragStartScroll + delta, 0.0F, this.currencyMaxScrollX);
+            return true;
+        }
+        return super.onDrag(mx, my, button, dx, dy);
+    }
+
+    @Override
+    protected boolean onRelease(double mx, double my, int button) {
+        boolean was = this.draggingCurrencyBar;
+        this.draggingCurrencyBar = false;
+        return was;
+    }
+
+    @Override
+    protected boolean onScroll(double mx, double my, double amount) {
+        if (this.stripW > 0.0F && this.currencyMaxScrollX > 0.0F
+                && mx >= this.stripX && mx < this.stripX + this.stripW
+                && my >= this.stripY && my < this.stripY + this.stripH) {
+            this.currencyScrollX = Mth.clamp(this.currencyScrollX - (float) amount * 24.0F, 0.0F,
+                    this.currencyMaxScrollX);
+            return true;
+        }
+        return super.onScroll(mx, my, amount);
+    }
+
     private static String trimPercent(double p) {
         return p == Math.floor(p) ? Long.toString((long) p) : String.format("%.2f", p);
     }
 
     private static void row(Canvas c, float x, float y, String key, float width) {
         Text.drawLine(c, AuctionUi.tr(key), AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_2, x, y + 8,
+                Math.max(1.0F, width), Text.Align.LEFT);
+    }
+
+    private static void row(Canvas c, float x, float y, String key, String fallback, float width) {
+        Text.drawLine(c, AuctionUi.tr(key, fallback), AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_2, x, y + 8,
                 Math.max(1.0F, width), Text.Align.LEFT);
     }
 

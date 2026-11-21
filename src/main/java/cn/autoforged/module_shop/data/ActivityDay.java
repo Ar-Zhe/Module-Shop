@@ -18,6 +18,8 @@ public final class ActivityDay {
     public String note = "";
     /** 当天登录发放的星币（0 = 不发）。 */
     public long money;
+    /** 新双独立账本：当天登录发放的货币规格（星币 / 实体货币 / 组合）。 */
+    public PriceSpec moneySpec = PriceSpec.ZERO;
     /** 是否给离线玩家补发。 */
     public boolean forOffline;
     /** 错过定时点后是否补发（true = 当天任意时刻登录都补发一次）。 */
@@ -40,6 +42,21 @@ public final class ActivityDay {
     public final java.util.List<net.minecraft.world.item.ItemStack> rewards = new java.util.ArrayList<>();
     /** 已经领过奖励物品的玩家 UUID。 */
     public final java.util.Set<java.util.UUID> rewardsGranted = new java.util.HashSet<>();
+
+    public void setMoneySpec(PriceSpec spec) {
+        this.moneySpec = spec == null ? PriceSpec.ZERO : spec;
+        this.money = this.moneySpec.supportsStar() ? this.moneySpec.starPrice : 0L;
+    }
+
+    public PriceSpec resolveMoneySpec() {
+        if (moneySpec == null) {
+            return PriceSpec.star(money);
+        }
+        if (moneySpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && moneySpec.starPrice != money) {
+            return PriceSpec.star(money);
+        }
+        return moneySpec;
+    }
 
     /** 当天要发放的全部物品（新列表优先，老存档回退到 item / gift）。 */
     public java.util.List<net.minecraft.world.item.ItemStack> rewardStacks() {
@@ -73,7 +90,7 @@ public final class ActivityDay {
         tag.putLong("day", day);
         tag.putString("title", title == null ? "" : title);
         tag.putString("note", note == null ? "" : note);
-        tag.putLong("money", money);
+        resolveMoneySpec().writeToParent(tag, "moneySpec", "money");
         tag.putBoolean("forOffline", forOffline);
         tag.putBoolean("catchUp", catchUp);
         CompoundTag itemTag = cn.autoforged.module_shop.data.ShopNbt.saveStack(stack, registries);
@@ -117,7 +134,7 @@ public final class ActivityDay {
         day.day = tag.getLong("day");
         day.title = tag.getString("title");
         day.note = tag.getString("note");
-        day.money = tag.getLong("money");
+        day.setMoneySpec(PriceSpec.readFromParent(tag, "moneySpec", "money"));
         day.forOffline = tag.getBoolean("forOffline");
         day.catchUp = !tag.contains("catchUp") || tag.getBoolean("catchUp");
         day.stack = cn.autoforged.module_shop.data.ShopNbt.loadStack(tag.getCompound("item"), registries);

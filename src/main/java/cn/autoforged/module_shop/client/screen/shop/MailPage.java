@@ -9,6 +9,7 @@ import cn.autoforged.module_shop.client.ui.render.Text;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
 import cn.autoforged.module_shop.client.ui.v2.V2;
 import cn.autoforged.module_shop.client.ui.widget.ScrollController;
+import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
 import cn.autoforged.module_shop.data.MailEntry;
 import cn.autoforged.module_shop.data.MailType;
 import io.github.humbleui.skija.Canvas;
@@ -23,14 +24,17 @@ import net.minecraft.world.item.ItemStack;
  * 右边是选中邮件的详情（正文可滚动、附件格子、星标 / 删除 / 领取）。筛选纯客户端，动作字符串不变。
  */
 public final class MailPage implements ShopPage {
-    private static final float DETAIL_W = 230.0F;
     private static final ListTable TABLE = new ListTable();
     private static int filter;
+    private static String searchText = "";
     private final ScrollController bodyScroll = new ScrollController();
 
+    private SkiaTextField search;
     private List<MailEntry> shown = List.of();
     private float[][] segRects = new float[0][2];
     private float segY;
+    private float lastDetailW = 230.0F;
+    private float bodyBarX, bodyBarY, bodyBarW, bodyBarH;
     private final List<float[]> btnRects = new ArrayList<>();
     private final List<String> btnActions = new ArrayList<>();
     private String bodyKey = "";
@@ -40,6 +44,42 @@ public final class MailPage implements ShopPage {
     @Override
     public String id() {
         return "mail";
+    }
+
+    @Override
+    public void init(ShopHost host) {
+        search = new SkiaTextField(host.screen(), host.font(), 48)
+                .placeholder(tr("gui.module_shop.search.placeholder"))
+                .clearable(true)
+                .fontSize(V2.FS_S)
+                .onChange(text -> {
+                    searchText = text == null ? "" : text;
+                    TABLE.scrollToTop();
+                });
+        search.setValue(searchText);
+        host.registerInput(search.editBox());
+    }
+
+    private static float detailWidth(PageFrame f) {
+        return Math.min(230.0F, Math.max(160.0F, f.w() * 0.36F));
+    }
+
+    private static boolean matchesMail(MailEntry m, String query) {
+        if (query.isEmpty()) {
+            return true;
+        }
+        String sender = m.sender == null ? "" : m.sender;
+        String title = MailFormat.title(m);
+        String content = m.content == null || m.content.isEmpty() ? MailFormat.description(m) : m.content;
+        if (PageKit.matchesQuery(query, title, sender, content)) {
+            return true;
+        }
+        for (ItemStack s : m.itemStacks()) {
+            if (PageKit.matchesItemQuery(s, query)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String tr(String key, Object... args) {
@@ -70,6 +110,7 @@ public final class MailPage implements ShopPage {
         btnRects.clear();
         btnActions.clear();
         List<MailEntry> all = MailFormat.sorted();
+        String query = searchText == null ? "" : searchText.trim();
         int unread = 0;
         int pending = 0;
         int starred = 0;
@@ -86,7 +127,8 @@ public final class MailPage implements ShopPage {
             if (m.starred) {
                 starred++;
             }
-            if (filter == 0 || (filter == 1 && u) || (filter == 2 && p) || (filter == 3 && m.starred)) {
+            boolean tabOk = filter == 0 || (filter == 1 && u) || (filter == 2 && p) || (filter == 3 && m.starred);
+            if (tabOk && matchesMail(m, query)) {
                 list.add(m);
             }
         }
@@ -97,12 +139,31 @@ public final class MailPage implements ShopPage {
         drawToolbar(c, f, all.size(), unread, pending, starred);
         float top = f.y() + V2.BAR;
         float bottom = f.y() + f.h() - V2.FOOT;
-        float tw = f.w() - DETAIL_W;
-        drawTable(c, f, f.x(), top, tw, bottom - top);
-        V2.foot(c, f.x(), bottom, tw, tr("gui.module_shop.v2.mail.count", all.size(), unread),
-                tr("gui.module_shop.v2.mail.hint"));
+        float dw = detailWidth(f);
+        this.lastDetailW = dw;
+        float tw = f.w() - dw;
+        float tableTop = top;
+        if (search != null) {
+            float sw = Math.min(220.0F, Math.max(96.0F, tw - 16.0F));
+            search.visible(true).bounds(f.x() + 8.0F, top + 2.0F, sw, V2.CTRL);
+            search.render(c, f.mouseX(), f.mouseY(), f.dtMs());
+            if (!query.isEmpty() && !all.isEmpty()) {
+                float mx = f.x() + 8.0F + sw + 6.0F;
+                float mw = Math.max(0.0F, f.x() + tw - 8.0F - mx);
+                if (mw > 24.0F) {
+                    V2.text(c, tr("gui.module_shop.search.match_count", list.size(), all.size()),
+                            V2.FS_XS, IOStyle.TEXT_2, mx, top + 2.0F + V2.CTRL * 0.5F, mw, Text.Align.RIGHT);
+                }
+            }
+            tableTop = top + V2.CTRL + 4.0F;
+        }
+        drawTable(c, f, f.x(), tableTop, tw, Math.max(24.0F, bottom - tableTop), all.isEmpty());
+        String footLeft = !query.isEmpty() && !all.isEmpty()
+                ? tr("gui.module_shop.search.match_count", list.size(), all.size())
+                : tr("gui.module_shop.v2.mail.count", all.size(), unread);
+        V2.foot(c, f.x(), bottom, tw, footLeft, tr("gui.module_shop.v2.mail.hint"));
         MailEntry sel = MailFormat.selected(all);
-        drawDetail(c, f, sel, f.x() + tw, top, DETAIL_W, f.y() + f.h() - top);
+        drawDetail(c, f, sel, f.x() + tw, top, dw, f.y() + f.h() - top);
     }
 
     private void drawToolbar(Canvas c, PageFrame f, int all, int unread, int pending, int starred) {
@@ -110,11 +171,11 @@ public final class MailPage implements ShopPage {
         float cy = f.y() + V2.BAR / 2;
         float by = cy - V2.CTRL / 2;
         Draw.hairline(c, x, f.y() + V2.BAR - 0.5F, f.w(), IOStyle.BORDER_DIM);
-        float tw = V2.bold(c, tr("tab.module_shop.mail"), V2.FS_T, IOStyle.TEXT, x + 8, cy, 90, Text.Align.LEFT);
+        float tw = V2.bold(c, tr("tab.module_shop.mail"), V2.FS_T, IOStyle.TEXT, x + 8, cy, 80, Text.Align.LEFT);
         String[] seg = {tr("gui.module_shop.v2.mall.all") + "  " + all, tr("gui.module_shop.v2.mail.unread") + "  " + unread,
                 tr("gui.module_shop.v2.mail.pending") + "  " + pending, tr("gui.module_shop.v2.mail.starred") + "  " + starred};
         segY = by;
-        segRects = V2.segmented(c, seg, filter, x + 8 + tw + 10, by, null);
+        segRects = V2.segmented(c, seg, filter, x + 8 + tw + 8, by, null);
         float right = x + f.w() - 8;
         String[][] btns = {{"claim_all_mail", "gui.module_shop.v2.mail.claim_all"}, {"delete_read_mail", "gui.module_shop.v2.mail.delete_read"},
                 {"open_redeem", "gui.module_shop.v2.mail.redeem"}};
@@ -132,8 +193,14 @@ public final class MailPage implements ShopPage {
         }
     }
 
-    private void drawTable(Canvas c, PageFrame f, float x, float y, float w, float h) {
-        float[][] cols = V2.columns(x, w, 8, 5, 8, 10, 0, 64, 62, 58, 40);
+    private void drawTable(Canvas c, PageFrame f, float x, float y, float w, float h, boolean totalEmpty) {
+        boolean tight = w < 340.0F;
+        float stateW = Math.max(40.0F, Math.max(V2.tagWidth(tr("gui.module_shop.v2.mail.st_unviewed")),
+                V2.tagWidth(tr("gui.module_shop.v2.mail.st_pending"))) + 4.0F);
+        float timeW = tight ? 46.0F : Math.max(54.0F, V2.width("99/99 99:99", V2.FS_XS, false) + 4.0F);
+        float senderW = tight ? 42.0F : 58.0F;
+        float attachW = tight ? 38.0F : 54.0F;
+        float[][] cols = V2.columns(x, w, tight ? 6 : 8, tight ? 4 : 5, 7, 9, 0, senderW, attachW, timeW, stateW);
         String[] heads = {"", "", tr("gui.module_shop.v2.col.title"), tr("gui.module_shop.v2.col.sender"),
                 tr("gui.module_shop.v2.col.attach"), tr("gui.module_shop.v2.col.time"), tr("gui.module_shop.v2.col.state")};
         Text.Align[] al = {Text.Align.LEFT, Text.Align.LEFT, Text.Align.LEFT, Text.Align.LEFT, Text.Align.LEFT,
@@ -141,7 +208,8 @@ public final class MailPage implements ShopPage {
         TABLE.layout(x, y, w, h, cols, heads, al, null);
         if (shown.isEmpty()) {
             V2.tableHead(c, x, y, w, cols, heads, al, -1, false);
-            V2.empty(c, tr("gui.module_shop.mail_empty"), x, y + V2.HEAD, w, h - V2.HEAD);
+            V2.empty(c, tr(totalEmpty ? "gui.module_shop.mail_empty" : "gui.module_shop.search.empty"),
+                    x, y + V2.HEAD, w, h - V2.HEAD);
             return;
         }
         TABLE.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), shown.size(), (cv, row, ry, hover) -> {
@@ -179,7 +247,7 @@ public final class MailPage implements ShopPage {
                     : tr(m.type == MailType.MONEY ? "gui.module_shop.v2.mail.st_viewed" : "gui.module_shop.v2.mail.st_claimed");
             if (u) {
                 float tw = V2.tagWidth(state);
-                V2.tag(cv, state, IOStyle.ORANGE, cols[6][0] + cols[6][1] - tw + 3, cy);
+                V2.tag(cv, state, IOStyle.ORANGE, cols[6][0] + cols[6][1] - tw, cy);
             } else {
                 V2.text(cv, state, V2.FS_XS, IOStyle.TEXT_3, cols[6][0], cy, cols[6][1], Text.Align.RIGHT);
             }
@@ -190,6 +258,7 @@ public final class MailPage implements ShopPage {
         Draw.fill(c, x, y, 0.5F, h, 0, IOStyle.BORDER_DIM);
         Draw.fill(c, x + 0.5F, y, w - 0.5F, h, 0, Draw.alpha(IOStyle.CARD, 0.45F));
         if (sel == null) {
+            this.bodyBarW = 0.0F;
             V2.empty(c, tr("gui.module_shop.mail_empty"), x, y, w, h);
             return;
         }
@@ -245,7 +314,11 @@ public final class MailPage implements ShopPage {
             StyledText.draw(c, bodyLines.get(i), px, ly, V2.FS_S);
         }
         c.restoreToCount(saved);
-        bodyScroll.drawBar(c, px, cy, pw + 4, bodyH, f.mouseX(), f.mouseY(), f.dtMs());
+        this.bodyBarX = px;
+        this.bodyBarY = cy;
+        this.bodyBarW = pw + 4;
+        this.bodyBarH = bodyH;
+        bodyScroll.drawBar(c, this.bodyBarX, this.bodyBarY, this.bodyBarW, this.bodyBarH, f.mouseX(), f.mouseY(), f.dtMs());
         // 附件
         float ay = bodyBottom + 4;
         V2.section(c, tr("gui.module_shop.mail.attachment"), px, ay, 80);
@@ -286,6 +359,12 @@ public final class MailPage implements ShopPage {
 
     @Override
     public boolean mouseClicked(PageFrame f, double mx, double my, int button) {
+        if (search != null && search.isVisible() && search.mouseClicked(mx, my, button)) {
+            return true;
+        }
+        if (search != null && search.isFocused()) {
+            search.blur();
+        }
         if (button == 0) {
             for (int i = 0; i < segRects.length; i++) {
                 if (mx >= segRects[i][0] && mx < segRects[i][0] + segRects[i][1] && my >= segY && my < segY + V2.CTRL) {
@@ -305,6 +384,9 @@ public final class MailPage implements ShopPage {
                     return true;
                 }
             }
+            if (this.bodyBarW > 0.0F && bodyScroll.pressBar(mx, my, this.bodyBarX, this.bodyBarY, this.bodyBarW, this.bodyBarH)) {
+                return true;
+            }
             if (TABLE.pressBar(mx, my)) {
                 return true;
             }
@@ -323,17 +405,27 @@ public final class MailPage implements ShopPage {
 
     @Override
     public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
-        return TABLE.releaseBar() | bodyScroll.releaseBar();
+        boolean handled = TABLE.releaseBar() | bodyScroll.releaseBar();
+        if (search != null) {
+            handled |= search.mouseReleased(mx, my, button);
+        }
+        return handled;
     }
 
     @Override
     public boolean mouseDragged(PageFrame f, double mx, double my, int button, double dx, double dy) {
+        if (search != null && search.mouseDragged(mx, my, button, dx, dy)) {
+            return true;
+        }
+        if (this.bodyBarW > 0.0F && bodyScroll.dragBar(my, this.bodyBarH)) {
+            return true;
+        }
         return TABLE.dragBar(my);
     }
 
     @Override
     public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
-        if (mx >= f.x() + f.w() - DETAIL_W) {
+        if (mx >= f.x() + f.w() - this.lastDetailW) {
             bodyScroll.wheel(scrollY);
             return true;
         }
@@ -341,7 +433,18 @@ public final class MailPage implements ShopPage {
     }
 
     @Override
+    public void clickedOutside() {
+        if (search != null && search.isFocused()) {
+            search.blur();
+        }
+    }
+
+    @Override
     public void cancelInput() {
+        if (search != null) {
+            search.visible(false);
+        }
         TABLE.releaseBar();
+        bodyScroll.releaseBar();
     }
 }

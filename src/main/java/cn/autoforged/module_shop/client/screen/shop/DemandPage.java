@@ -8,8 +8,11 @@ import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
 import cn.autoforged.module_shop.client.ui.v2.CardGrid;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
 import cn.autoforged.module_shop.client.ui.v2.V2;
+import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
 import cn.autoforged.module_shop.data.DemandEntry;
+import cn.autoforged.module_shop.data.PriceSpec;
 import io.github.humbleui.skija.Canvas;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,11 +31,13 @@ public final class DemandPage implements ShopPage {
     private static final CardGrid GRID = new CardGrid();
     private static boolean onlyMine;
     private static String expandedId;
+    private static String query = "";
 
     /** 表格的一行：line = -1 为求购本身，否则为展开后的第 line 种物品。 */
     private record Row(DemandEntry entry, int line) {
     }
 
+    private SkiaTextField search;
     private List<Row> rows = new ArrayList<>();
     private List<DemandEntry> cards = new ArrayList<>();
     private float[][] segRects = new float[0][2];
@@ -49,6 +54,49 @@ public final class DemandPage implements ShopPage {
 
     private static String tr(String key, Object... args) {
         return Component.translatable(key, args).getString();
+    }
+
+    @Override
+    public void init(ShopHost host) {
+        search = new SkiaTextField(host.screen(), host.font(), 48)
+                .placeholder(tr("gui.module_shop.demand.search_hint"))
+                .clearable(true)
+                .fontSize(V2.FS_S)
+                .onChange(t -> {
+                    query = t == null ? "" : t;
+                    TABLE.scrollToTop();
+                    GRID.scrollToTop();
+                });
+        search.setValue(query);
+        host.registerInput(search.editBox());
+    }
+
+    private static boolean matchesDemand(DemandEntry e, String q) {
+        if (q == null || q.isBlank()) {
+            return true;
+        }
+        for (String word : q.trim().split("\\s+")) {
+            if (word.isEmpty()) {
+                continue;
+            }
+            if (PageKit.matchesQuery(word, e.requesterName)) {
+                continue;
+            }
+            if (e.rewardItem != null && !e.rewardItem.isEmpty() && PageKit.matchesItemQuery(e.rewardItem, word)) {
+                continue;
+            }
+            boolean wantHit = false;
+            for (DemandEntry.WantLine wl : e.wants) {
+                if (PageKit.matchesItemQuery(wl.stack, word)) {
+                    wantHit = true;
+                    break;
+                }
+            }
+            if (!wantHit) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static UUID self() {
@@ -83,13 +131,50 @@ public final class DemandPage implements ShopPage {
     }
 
     static String rewardLine(DemandEntry e) {
-        String money = e.rewardMoney > 0L ? ClientShopData.money(e.rewardMoney) : null;
+        PriceSpec spec = e.resolveRewardSpec();
+        String money = spec.isValid() ? PriceDisplay.formatPlain(spec) : null;
         String item = e.rewardItem != null && !e.rewardItem.isEmpty()
-                ? e.rewardItem.getHoverName().getString() + " x" + e.rewardItem.getCount() : null;
+                ? e.rewardItem.getHoverName().getString() + " ×" + e.rewardItem.getCount() : null;
         if (money != null && item != null) {
             return money + " + " + item;
         }
         return money != null ? money : (item != null ? item : "-");
+    }
+
+    static void drawRewardCell(Canvas c, PageFrame f, DemandEntry e, float x, float cy, float w, Text.Align align,
+                               int color) {
+        PriceSpec spec = e.resolveRewardSpec();
+        boolean hasMoney = spec.isValid();
+        boolean hasItem = e.rewardItem != null && !e.rewardItem.isEmpty();
+        if (!hasMoney && !hasItem) {
+            V2.text(c, "—", V2.FS_S, IOStyle.TEXT_3, x, cy, w, align);
+            return;
+        }
+        if (hasMoney && !hasItem) {
+            PriceDisplay.drawCell(c, f.host().items(), spec, x, cy, w, align, color, false);
+            return;
+        }
+        if (!hasMoney) {
+            String cntTxt = "×" + e.rewardItem.getCount();
+            float cntW = V2.width(cntTxt, V2.FS_S, true);
+            float iconSize = 9.0F;
+            float blockW = Math.min(w, iconSize + 2.0F + cntW);
+            float sx = align == Text.Align.RIGHT ? (x + w - blockW) : x;
+            f.host().items().addNoHover(e.rewardItem.copyWithCount(1), sx, cy - iconSize * 0.5F, iconSize, false);
+            V2.bold(c, cntTxt, V2.FS_S, color, sx + iconSize + 1.5F, cy,
+                    Math.max(4.0F, x + w - (sx + iconSize + 1.5F)), Text.Align.LEFT);
+            return;
+        }
+        String itemPart = "×" + e.rewardItem.getCount();
+        float itemW = 9.0F + 1.5F + V2.width(itemPart, V2.FS_S, true);
+        float plusW = V2.width(" + ", V2.FS_S, false);
+        float moneyAvail = Math.max(20.0F, w - itemW - plusW);
+        PriceDisplay.drawCell(c, f.host().items(), spec, x, cy, moneyAvail, Text.Align.RIGHT, color, false);
+        V2.text(c, " + ", V2.FS_S, IOStyle.TEXT_3, x + moneyAvail, cy, plusW, Text.Align.LEFT);
+        float ix = x + moneyAvail + plusW;
+        f.host().items().addNoHover(e.rewardItem.copyWithCount(1), ix, cy - 4.5F, 9.0F, false);
+        V2.bold(c, itemPart, V2.FS_S, color, ix + 10.5F, cy,
+                Math.max(4.0F, x + w - (ix + 10.5F)), Text.Align.LEFT);
     }
 
     private static boolean over(PageFrame f, float x, float y, float w, float h) {
@@ -102,6 +187,9 @@ public final class DemandPage implements ShopPage {
         float cy = f.y() + V2.BAR / 2;
         float by = cy - V2.CTRL / 2;
         if (!ClientShopData.demandEnabled) {
+            if (search != null) {
+                search.visible(false);
+            }
             V2.empty(c, tr("gui.module_shop.demand.disabled"), x, f.y(), f.w(), f.h());
             return;
         }
@@ -115,7 +203,7 @@ public final class DemandPage implements ShopPage {
             if (mine) {
                 mineCount++;
             }
-            if (onlyMine && !mine) {
+            if ((onlyMine && !mine) || !matchesDemand(e, query)) {
                 continue;
             }
             cards.add(e);
@@ -138,10 +226,24 @@ public final class DemandPage implements ShopPage {
         float cx = x + f.w() - 8 - cw;
         V2.button(c, cl, V2.Btn.PRIMARY, cx, by, cw, V2.CTRL, over(f, cx, by, cw, V2.CTRL) ? 1 : 0);
         createRect = new float[]{cx, by, cw, V2.CTRL};
-        float segEnd = segRects[1][0] + segRects[1][1] + 10;
-        V2.text(c, tr("gui.module_shop.v2.demand.rules", mineCount, ClientShopData.demandSlots,
-                        String.format("%.0f", ClientShopData.demandFeePercent), ClientShopData.money(ClientShopData.demandMaxReward)),
-                V2.FS_XS, IOStyle.TEXT_2, segEnd, cy, cx - 8 - segEnd, Text.Align.RIGHT);
+        float segEnd = segRects[1][0] + segRects[1][1] + 8;
+        float avail = cx - 8 - segEnd;
+        float afterSearch = segEnd;
+        if (search != null) {
+            if (avail >= 50.0F) {
+                float sw = Math.min(135.0F, Math.max(50.0F, avail >= 210.0F ? 115.0F : avail));
+                search.visible(true).bounds(segEnd, by, sw, V2.CTRL);
+                search.render(c, f.mouseX(), f.mouseY(), f.dtMs());
+                afterSearch = segEnd + sw + 8.0F;
+            } else {
+                search.visible(false);
+            }
+        }
+        if (cx - 8 - afterSearch >= 65.0F) {
+            V2.text(c, tr("gui.module_shop.v2.demand.rules", mineCount, ClientShopData.demandSlots,
+                            String.format("%.0f", ClientShopData.demandFeePercent), ClientShopData.money(ClientShopData.demandMaxReward)),
+                    V2.FS_XS, IOStyle.TEXT_2, afterSearch, cy, cx - 8 - afterSearch, Text.Align.RIGHT);
+        }
 
         float top = f.y() + V2.BAR;
         float bottom = f.y() + f.h() - V2.FOOT;
@@ -152,7 +254,14 @@ public final class DemandPage implements ShopPage {
             return;
         }
         closeDrawerRect = null;
-        float[][] cols = V2.columns(x, f.w(), 10, 6, 14, 0, 76, 44, 104, 60, 66, 50);
+        float actW = Math.max(46.0F, Math.max(V2.buttonWidth(tr("gui.module_shop.demand.cancel_action")),
+                V2.buttonWidth(tr("gui.module_shop.demand.fulfill_action"))));
+        float gap = 5.0F;
+        float[][] baseCols = V2.columns(x, f.w() - actW - gap, 10, gap, 14, 0, 58, 42, 88, 48, 56);
+        float[][] cols = new float[8][2];
+        System.arraycopy(baseCols, 0, cols, 0, 7);
+        cols[7][0] = x + f.w() - 10 - actW;
+        cols[7][1] = actW;
         String[] heads = {"", tr("gui.module_shop.v2.col.wants"), tr("gui.module_shop.v2.col.requester"), tr("gui.module_shop.v2.col.total_count"),
                 tr("gui.module_shop.v2.col.reward"), tr("gui.module_shop.v2.col.remain"), tr("gui.module_shop.v2.col.can_deliver"), ""};
         Text.Align[] al = {Text.Align.LEFT, Text.Align.LEFT, Text.Align.LEFT, Text.Align.RIGHT, Text.Align.RIGHT, Text.Align.RIGHT,
@@ -160,7 +269,9 @@ public final class DemandPage implements ShopPage {
         TABLE.layout(x, top, f.w(), bottom - top, cols, heads, al, null);
         if (rows.isEmpty()) {
             V2.tableHead(c, x, top, f.w(), cols, heads, al, -1, false);
-            V2.empty(c, tr(onlyMine ? "gui.module_shop.demand.empty_mine" : "gui.module_shop.demand.empty"), x, top + V2.HEAD, f.w(),
+            String emptyKey = !query.isBlank() ? "gui.module_shop.v2.no_match"
+                    : (onlyMine ? "gui.module_shop.demand.empty_mine" : "gui.module_shop.demand.empty");
+            V2.empty(c, tr(emptyKey), x, top + V2.HEAD, f.w(),
                     bottom - top - V2.HEAD);
         } else {
             TABLE.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), rows.size(), (cv, row, ry, hover) -> {
@@ -191,7 +302,7 @@ public final class DemandPage implements ShopPage {
                 V2.text(cv, names.toString(), V2.FS, IOStyle.TEXT, cols[1][0], rcy, cols[1][1], Text.Align.LEFT);
                 V2.text(cv, e.requesterName, V2.FS_S, mine ? IOStyle.BLUE : IOStyle.TEXT_2, cols[2][0], rcy, cols[2][1], Text.Align.LEFT);
                 V2.text(cv, String.valueOf(e.totalCount()), V2.FS_S, IOStyle.TEXT, cols[3][0], rcy, cols[3][1], Text.Align.RIGHT);
-                V2.bold(cv, rewardLine(e), V2.FS_S, IOStyle.ORANGE, cols[4][0], rcy, cols[4][1], Text.Align.RIGHT);
+                drawRewardCell(cv, f, e, cols[4][0], rcy, cols[4][1], Text.Align.RIGHT, IOStyle.ORANGE);
                 String remain = PageKit.remainText(ClientShopData.demandExpireMode, ClientShopData.demandExpireAmount, e.createdGame,
                         e.createdReal);
                 V2.text(cv, remain == null ? tr("gui.module_shop.v2.stall.permanent") : remain, V2.FS_S,
@@ -224,7 +335,9 @@ public final class DemandPage implements ShopPage {
         float gridH = h - drawerH;
         GRID.layoutUnified(x, top, w, gridH);
         if (cards.isEmpty()) {
-            V2.empty(c, tr(onlyMine ? "gui.module_shop.demand.empty_mine" : "gui.module_shop.demand.empty"), x, top, w, gridH);
+            String emptyKey = !query.isBlank() ? "gui.module_shop.v2.no_match"
+                    : (onlyMine ? "gui.module_shop.demand.empty_mine" : "gui.module_shop.demand.empty");
+            V2.empty(c, tr(emptyKey), x, top, w, gridH);
         } else {
             GRID.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), cards.size(), (cv, card, cx, cy, cw, ch, hover) -> {
                 DemandEntry e = cards.get(card);
@@ -250,8 +363,13 @@ public final class DemandPage implements ShopPage {
                             cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
                 }
 
-                String moneyStr = e.rewardMoney > 0L ? V2.money(e.rewardMoney) : rewardLine(e);
-                V2.bold(cv, moneyStr, V2.FS, IOStyle.ORANGE, cx + 3, cy + 45.0F, cw - 6, Text.Align.CENTER);
+                PriceSpec rewardSpec = e.resolveRewardSpec();
+                if (rewardSpec.isValid()) {
+                    PriceDisplay.drawCard(cv, f.host().items(), rewardSpec, cx + 3, cy + 45.0F, cx + cw * 0.5F,
+                            cw - 6, 1.0F, IOStyle.ORANGE, false);
+                } else {
+                    V2.bold(cv, rewardLine(e), V2.FS, IOStyle.ORANGE, cx + 3, cy + 45.0F, cw - 6, Text.Align.CENTER);
+                }
             });
         }
         if (expanded != null && drawerH > 0.0F) {
@@ -330,6 +448,12 @@ public final class DemandPage implements ShopPage {
 
     @Override
     public boolean mouseClicked(PageFrame f, double mx, double my, int button) {
+        if (search != null && search.isVisible() && search.mouseClicked(mx, my, button)) {
+            return true;
+        }
+        if (search != null && search.isFocused()) {
+            search.blur();
+        }
         if (button != 0) {
             return false;
         }
@@ -403,12 +527,25 @@ public final class DemandPage implements ShopPage {
     }
 
     @Override
+    public void clickedOutside() {
+        if (search != null && search.isFocused()) {
+            search.blur();
+        }
+    }
+
+    @Override
     public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
+        if (search != null) {
+            search.mouseReleased(mx, my, button);
+        }
         return UIViewMode.isGrid() ? GRID.releaseBar() : TABLE.releaseBar();
     }
 
     @Override
     public boolean mouseDragged(PageFrame f, double mx, double my, int button, double dx, double dy) {
+        if (search != null && search.mouseDragged(mx, my, button, dx, dy)) {
+            return true;
+        }
         return UIViewMode.isGrid() ? GRID.dragBar(my) : TABLE.dragBar(my);
     }
 
@@ -419,6 +556,9 @@ public final class DemandPage implements ShopPage {
 
     @Override
     public void cancelInput() {
+        if (search != null) {
+            search.visible(false);
+        }
         TABLE.releaseBar();
         GRID.releaseBar();
     }

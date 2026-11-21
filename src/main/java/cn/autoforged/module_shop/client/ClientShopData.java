@@ -4,6 +4,7 @@ import cn.autoforged.module_shop.data.ConfiguredOffer;
 import cn.autoforged.module_shop.data.DailyBuybackEntry;
 import cn.autoforged.module_shop.data.DailyShopEntry;
 import cn.autoforged.module_shop.data.MailEntry;
+import cn.autoforged.module_shop.data.PriceSpec;
 import cn.autoforged.module_shop.data.Rarity;
 import cn.autoforged.module_shop.data.ShopNbt;
 import cn.autoforged.module_shop.data.StallEntry;
@@ -12,6 +13,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import javax.annotation.Nullable;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -32,8 +34,20 @@ public final class ClientShopData {
     /** 需求 6：金钱显示统一追加的后缀（如“星币”），颜色与金额一致。 */
     public static String moneySuffix = "";
     public static boolean canAdmin;
-    public static String defaultTab = "daily";
+    /** 管理员密码锁状态（由服务端快照与解锁回执实时同步）。 */
+    public static boolean adminLockEnabled;
+    public static boolean adminUnlocked;
+    public static int adminSessionTimeout = 30;
+    public static String defaultTab = "home";
     public static String playerName = "";
+
+    public static boolean canEditAdmin() {
+        return canAdmin && (!adminLockEnabled || adminUnlocked);
+    }
+
+    public static boolean isAdminLocked() {
+        return canAdmin && adminLockEnabled && !adminUnlocked;
+    }
 
     // ---- 玩家交易（kind=trade）----
     public static String tradeSelfName = "";
@@ -76,6 +90,8 @@ public final class ClientShopData {
     public static int mallVersion;
     /** 购物城：管理员可编辑的货架（amount 复用为库存，-1 = 无限）。 */
     public static List<ConfiguredOffer> adminMall = new ArrayList<>();
+    /** 与 adminMall 一一对应的“每人永久限购（不随刷新补货）”标记。 */
+    public static List<Boolean> adminMallPermanent = new ArrayList<>();
     /** 出货箱：管理员可编辑的「兑换规则」（amount 复用为每日份数，0 = 不限）。 */
     public static List<ConfiguredOffer> adminShipping = new ArrayList<>();
     /** 出货箱规则的原文与格式错误原因（与 adminShipping 一一对应；错误为空表示这条正常）。 */
@@ -111,11 +127,19 @@ public final class ClientShopData {
     public static int shipItems;
     /** 本次结算能拿到的金额（已按今日剩余额度截断）。 */
     public static long shipValue;
+    /** 本次结算双账本预估总额（星币 + 实体货币映射）。 */
+    public static PriceSpec shipValueSpec = PriceSpec.ZERO;
+    public static Map<String, Long> shipPhysValues = new java.util.LinkedHashMap<>();
     /** 今日已结算金额与每日上限（0 = 不限）。 */
     public static long shipSoldToday;
     public static long shipLimit;
     /** 升级花费；-1 = 已满级 / 无法升级。 */
     public static long shipUpgradeCost = -1L;
+    /** 升级花费规格；null = 已满级 / 无法升级。 */
+    @Nullable
+    public static PriceSpec shipUpgradeSpec;
+    /** OP 可配置等级升级费用列表（同步供设置弹窗回填）。 */
+    public static List<PriceSpec> shippingUpgradeSpecs = List.of();
     /** 每天结算的游戏刻（0 = 早上 6:00）。 */
     public static int shipSettleTick;
     /** 额度重置时间（现实时间 HH:mm；展示与「每日额度」弹窗回填用）。 */
@@ -169,8 +193,15 @@ public final class ClientShopData {
     public static String shipRuleErrorText = "";
     /** 生效的规则原文（换行分隔）：出货箱界面用它本地计算"本次结算金额"。 */
     public static String shipRulesText = "";
+    /** 出货箱今日按规则行号已结算份数（line -> used）。 */
+    public static Map<Integer, Integer> shipRuleUsed = new HashMap<>();
+
+    public static int shipRuleUsedCount(int line) {
+        return line <= 0 ? 0 : Math.max(0, shipRuleUsed.getOrDefault(line, 0));
+    }
     /** 货币兑换：管理员配置的「1 个物品 = N 星币」列表。 */
     public static List<ExchangeView> exchange = new ArrayList<>();
+
     /** 管理员发放界面的可选玩家（在线优先，含历史离线玩家）。 */
     public static List<GrantTarget> grantTargets = new ArrayList<>();
 
@@ -179,6 +210,8 @@ public final class ClientShopData {
     public static String redeemDraftItems = "";
     /** 草稿星币金额。 */
     public static long redeemDraftMoney;
+    /** 草稿双账本金额/实体币奖励规格。 */
+    public static PriceSpec redeemDraftSpec = PriceSpec.ZERO;
     /** 草稿指定的玩家名（展示用；勾选状态按名字回填）。 */
     public static List<String> redeemDraftPlayers = new ArrayList<>();
     /** 「查看」兑换码时服务端回传的领取名单（name + 次数）。 */
@@ -193,6 +226,9 @@ public final class ClientShopData {
     public static int refreshMax;
     /** 下一次付费刷新的花费；-1 表示今日次数已用完。 */
     public static long refreshCost = -1L;
+    @Nullable
+    public static PriceSpec refreshSpec;
+    public static List<PriceSpec> dailyRefreshSpecs = List.of();
     // ---- 每日收购付费刷新（与商店完全分开计数 / 定价）----
     /** 今日已付费刷新每日收购的次数。 */
     public static int buybackRefreshUsed;
@@ -200,8 +236,12 @@ public final class ClientShopData {
     public static int buybackRefreshMax;
     /** 下一次付费刷新每日收购的花费；-1 表示今日次数已用完。 */
     public static long buybackRefreshCost = -1L;
+    @Nullable
+    public static PriceSpec buybackRefreshSpec;
+    public static List<PriceSpec> buybackRefreshSpecs = List.of();
     /** 当日收购清单全部完成的奖励金额（0=关闭）。 */
     public static long buybackBonus;
+    public static PriceSpec buybackBonusSpec = PriceSpec.ZERO;
     /** 收购全清奖励是否开启（关闭时每日收购底部不再显示奖励提示）。 */
     public static boolean buybackBonusEnabled = true;
 
@@ -210,7 +250,9 @@ public final class ClientShopData {
     public static boolean signInAuto = true;
     public static boolean signInCumulative = true;
     public static long signInBase;
+    public static PriceSpec signInBaseSpec = PriceSpec.ZERO;
     public static long signInMakeupCost;
+    public static PriceSpec signInMakeupSpec = PriceSpec.ZERO;
     public static int signInMakeupDays;
     public static long signInToday;
     public static boolean signInDone;
@@ -219,8 +261,10 @@ public final class ClientShopData {
     public static List<Long> signInDays = new ArrayList<>();
     public static int[] signInTierDays = {3, 5, 7};
     public static long[] signInTierBonus = {5L, 7L, 10L};
+    public static List<PriceSpec> signInTierBonusSpecs = List.of();
     public static int[] signInMileDays = {3, 5, 7};
     public static long[] signInMileMoney = {100L, 300L, 800L};
+    public static List<PriceSpec> signInMileSpecs = List.of();
     /** 里程轮次长度（默认 7 天一轮）：进度条按「本轮第几天」画，满一轮就重新从 0 开始。 */
     public static int signInCycleDays = 7;
     /** 活动日（需求 7）：日期 epochDay → {标题, 公告, 金额, 是否已领}。 */
@@ -249,6 +293,8 @@ public final class ClientShopData {
     public static java.util.Map<String, String> sidebarNames = new java.util.LinkedHashMap<>();
     /** 商店主标题（左上角）；空 = 用默认「模块商店」。 */
     public static String shopTitle = "";
+    /** 商店左上角自定义图标媒体 ID（SHA-256；空 = 使用默认渐变+首字图标）。 */
+    public static String brandIconId = "";
 
     /** 某个模块的自定义名；没改过返回 {@code null}。 */
     public static String sidebarNameOf(String id) {
@@ -282,7 +328,7 @@ public final class ClientShopData {
 
     // ---- 界面状态（跨界面重建保留）----
     // 服务端在每次操作后会重建商店界面；若不在客户端记住页数，编辑条目/买卖后就会被弹回第一页。
-    public static String lastTab = "daily";
+    public static String lastTab = "home";
     public static int lastAuctionPage;
     public static int lastAdminPage;
     public static int lastMailPage;
@@ -352,7 +398,9 @@ public final class ClientShopData {
         view.day = day;
         view.title = c.getString("title");
         view.note = c.getString("note");
-        view.money = c.getLong("money");
+        PriceSpec moneySpec = PriceSpec.readFromParent(c, "moneySpec", "money");
+        view.moneySpec = moneySpec;
+        view.money = moneySpec.supportsStar() ? moneySpec.starPrice : c.getLong("money");
         view.forOffline = c.getBoolean("forOffline");
         view.granted = false;
         view.catchUp = !c.contains("catchUp") || c.getBoolean("catchUp");
@@ -390,6 +438,11 @@ public final class ClientShopData {
         // 管理员改过货币名时，把语言表里写死的「星币」统一换掉（聊天与界面文案一起生效）。
         CurrencyNames.apply(moneySuffix);
         canAdmin = tag.getBoolean("canAdmin");
+        adminLockEnabled = tag.getBoolean("adminLockEnabled");
+        adminUnlocked = !adminLockEnabled || tag.getBoolean("adminUnlocked");
+        if (tag.contains("adminSessionTimeout")) {
+            adminSessionTimeout = Math.max(0, tag.getInt("adminSessionTimeout"));
+        }
         defaultTab = tag.getString("defaultTab");
         playerName = tag.getString("playerName");
         if (tag.contains("adminEditType")) {
@@ -399,16 +452,23 @@ public final class ClientShopData {
         refreshUsed = tag.getInt("refreshUsed");
         refreshMax = tag.getInt("refreshMax");
         refreshCost = tag.contains("refreshCost") ? tag.getLong("refreshCost") : -1L;
+        refreshSpec = readOptionalCostSpec(tag, "refreshSpec", refreshCost);
+        dailyRefreshSpecs = readSpecList(tag.getList("dailyRefreshSpecs", Tag.TAG_COMPOUND));
         buybackRefreshUsed = tag.getInt("buybackRefreshUsed");
         buybackRefreshMax = tag.getInt("buybackRefreshMax");
         buybackRefreshCost = tag.contains("buybackRefreshCost") ? tag.getLong("buybackRefreshCost") : -1L;
-        buybackBonus = tag.getLong("buybackBonus");
+        buybackRefreshSpec = readOptionalCostSpec(tag, "buybackRefreshSpec", buybackRefreshCost);
+        buybackRefreshSpecs = readSpecList(tag.getList("buybackRefreshSpecs", Tag.TAG_COMPOUND));
+        buybackBonusSpec = PriceSpec.readFromParent(tag, "buybackBonusSpec", "buybackBonus");
+        buybackBonus = buybackBonusSpec.supportsStar() ? buybackBonusSpec.starPrice : tag.getLong("buybackBonus");
         buybackBonusEnabled = !tag.contains("buybackBonusEnabled") || tag.getBoolean("buybackBonusEnabled");
         signInEnabled = !tag.contains("signInEnabled") || tag.getBoolean("signInEnabled");
         signInAuto = !tag.contains("signInAuto") || tag.getBoolean("signInAuto");
         signInCumulative = !tag.contains("signInCumulative") || tag.getBoolean("signInCumulative");
-        signInBase = tag.getLong("signInBase");
-        signInMakeupCost = tag.getLong("signInMakeupCost");
+        signInBaseSpec = PriceSpec.readFromParent(tag, "signInBaseSpec", "signInBase");
+        signInBase = signInBaseSpec.supportsStar() ? signInBaseSpec.starPrice : tag.getLong("signInBase");
+        signInMakeupSpec = PriceSpec.readFromParent(tag, "signInMakeupSpec", "signInMakeupCost");
+        signInMakeupCost = signInMakeupSpec.supportsStar() ? signInMakeupSpec.starPrice : tag.getLong("signInMakeupCost");
         signInMakeupDays = tag.getInt("signInMakeupDays");
         signInToday = tag.getLong("signInToday");
         signInDone = tag.getBoolean("signInDone");
@@ -427,7 +487,10 @@ public final class ClientShopData {
             view.day = c.getLong("day");
             view.title = c.getString("title");
             view.note = c.getString("note");
-            view.money = c.getLong("money");
+            view.moneySpec = c.contains("moneySpec", Tag.TAG_COMPOUND)
+                    ? PriceSpec.readFromParent(c, "moneySpec", "money")
+                    : PriceSpec.readFromParent(c, "priceSpec", "money");
+            view.money = view.moneySpec.supportsStar() ? view.moneySpec.starPrice : c.getLong("money");
             view.forOffline = c.getBoolean("forOffline");
             view.granted = c.getBoolean("granted");
             view.catchUp = !c.contains("catchUp") || c.getBoolean("catchUp");
@@ -453,8 +516,14 @@ public final class ClientShopData {
         }
         // 模块自定义名（改名后所有界面都用它显示）
         sidebarNames = new java.util.LinkedHashMap<>();
-        shopTitle = tag.getCompound("sidebarLayout").getString("title");
-        CompoundTag nameTag = tag.getCompound("sidebarLayout").getCompound("names");
+        CompoundTag layoutTag = tag.getCompound("sidebarLayout");
+        shopTitle = layoutTag.getString("title");
+        String icon = layoutTag.getString("brandIconId");
+        if (icon.isEmpty() && tag.contains("brandIconId")) {
+            icon = tag.getString("brandIconId");
+        }
+        brandIconId = icon == null ? "" : icon.trim();
+        CompoundTag nameTag = layoutTag.getCompound("names");
         for (String key : nameTag.getAllKeys()) {
             String value = nameTag.getString(key);
             if (value != null && !value.isBlank()) {
@@ -485,10 +554,12 @@ public final class ClientShopData {
         if (td.length > 0) { signInTierDays = td; }
         long[] tb = tag.getLongArray("signInTierBonus");
         if (tb.length > 0) { signInTierBonus = tb; }
+        signInTierBonusSpecs = readSpecList(tag.getList("signInTierBonusSpecs", Tag.TAG_COMPOUND));
         int[] md = tag.getIntArray("signInMileDays");
         if (md.length > 0) { signInMileDays = md; }
         long[] mm = tag.getLongArray("signInMileMoney");
         if (mm.length > 0) { signInMileMoney = mm; }
+        signInMileSpecs = readSpecList(tag.getList("signInMileSpecs", Tag.TAG_COMPOUND));
         signInCycleDays = tag.contains("signInCycleDays") ? Math.max(1, tag.getInt("signInCycleDays")) : 7;
         buybackBonusDone = tag.getBoolean("buybackBonusDone");
         buybackLeft = tag.getInt("buybackLeft");
@@ -553,6 +624,8 @@ public final class ClientShopData {
             view.own = c.getBoolean("own");
             // 我是不是当前最高出价者（用于“最高：你”提示）。
             view.topMe = c.getBoolean("topMe");
+            String pt = c.getString("physTier");
+            view.physTierKey = pt.isEmpty() ? c.getString("physTierKey") : pt;
             newAuctions.add(view);
         }
         auctions = newAuctions;
@@ -594,7 +667,13 @@ public final class ClientShopData {
 
         adminShop = parseOffers(tag.getList("adminShop", Tag.TAG_COMPOUND), registries);
         adminBuyback = parseOffers(tag.getList("adminBuyback", Tag.TAG_COMPOUND), registries);
-        adminMall = parseOffers(tag.getList("adminMall", Tag.TAG_COMPOUND), registries);
+        ListTag adminMallTag = tag.getList("adminMall", Tag.TAG_COMPOUND);
+        adminMall = parseOffers(adminMallTag, registries);
+        List<Boolean> nextAdminMallPerm = new ArrayList<>(adminMallTag.size());
+        for (int i = 0; i < adminMallTag.size(); i++) {
+            nextAdminMallPerm.add(adminMallTag.getCompound(i).getBoolean("permanentLimit"));
+        }
+        adminMallPermanent = nextAdminMallPerm;
         adminShipping = parseOffers(tag.getList("adminShipping", Tag.TAG_COMPOUND), registries);
         List<String> rawRules = new ArrayList<>();
         ListTag rawTag = tag.getList("adminShippingRaw", Tag.TAG_STRING);
@@ -617,10 +696,12 @@ public final class ClientShopData {
             MallView view = new MallView();
             view.shelf = newMall.size();
             view.stack = ShopNbt.loadStack(c, registries);
-            view.price = c.getLong("price");
+            view.priceSpec = PriceSpec.readFromParent(c, "priceSpec", "price");
+            view.price = view.priceSpec.supportsStar() ? view.priceSpec.starPrice : c.getLong("price");
             view.rarity = Rarity.byId(c.getString("rarity"));
             view.stock = c.contains("stock") ? c.getInt("stock") : -1;
             view.sort = c.getInt("sort");
+            view.permanentLimit = c.getBoolean("permanentLimit");
             if (!view.stack.isEmpty()) {
                 newMall.add(view);
             }
@@ -638,8 +719,12 @@ public final class ClientShopData {
             view.stack = ShopNbt.loadStack(c, registries);
             view.playerName = c.getString("player");
             view.count = Math.max(1, c.getInt("count"));
-            view.unitPrice = c.getLong("unit");
-            view.total = c.getLong("total");
+            view.unitSpec = c.contains("unitSpec", Tag.TAG_COMPOUND)
+                    ? PriceSpec.readFromParent(c, "unitSpec", "unit")
+                    : PriceSpec.readFromParent(c, "priceSpec", "unit");
+            view.unitPrice = view.unitSpec.supportsStar() ? view.unitSpec.starPrice : c.getLong("unit");
+            view.totalSpec = PriceSpec.readFromParent(c, "totalSpec", "total");
+            view.total = view.totalSpec.supportsStar() ? view.totalSpec.starPrice : c.getLong("total");
             view.time = c.getLong("time");
             newRecent.add(view);
         }
@@ -651,10 +736,30 @@ public final class ClientShopData {
         shipMaxLevel = Math.max(1, tag.contains("shipMaxLevel") ? tag.getInt("shipMaxLevel") : 3);
         shipSlots = Math.max(1, tag.contains("shipSlots") ? tag.getInt("shipSlots") : 9);
         shipItems = tag.getInt("shipItems");
-        shipValue = tag.getLong("shipValue");
+        shipValueSpec = tag.contains("shipValueSpec", Tag.TAG_COMPOUND)
+                ? PriceSpec.readFromParent(tag, "shipValueSpec", "shipValue")
+                : PriceSpec.star(tag.getLong("shipValue"));
+        shipValue = tag.contains("shipValue") ? tag.getLong("shipValue") : shipValueSpec.starPrice;
+        Map<String, Long> nextShipPhys = new java.util.LinkedHashMap<>();
+        CompoundTag physValTag = tag.contains("shipPhysValue", Tag.TAG_COMPOUND)
+                ? tag.getCompound("shipPhysValue")
+                : (tag.contains("shipValuePhys", Tag.TAG_COMPOUND) ? tag.getCompound("shipValuePhys") : null);
+        if (physValTag != null) {
+            for (String key : physValTag.getAllKeys()) {
+                long v = physValTag.getLong(key);
+                if (v > 0L) {
+                    nextShipPhys.put(key, v);
+                }
+            }
+        } else if (shipValueSpec.supportsPhys()) {
+            nextShipPhys.put(shipValueSpec.physTierKey, shipValueSpec.physCount);
+        }
+        shipPhysValues = nextShipPhys;
         shipSoldToday = tag.getLong("shipSoldToday");
         shipLimit = tag.getLong("shipLimit");
         shipUpgradeCost = tag.contains("shipUpgradeCost") ? tag.getLong("shipUpgradeCost") : -1L;
+        shipUpgradeSpec = readOptionalCostSpec(tag, "shipUpgradeSpec", shipUpgradeCost);
+        shippingUpgradeSpecs = readSpecList(tag.getList("shippingUpgradeSpecs", Tag.TAG_COMPOUND));
         shipSettleTick = tag.getInt("shipSettleTick");
         shipResetTimeText = tag.contains("shipResetTime") ? tag.getString("shipResetTime") : "00:00";
         mallRestockOn = tag.getBoolean("mallRestockOn");
@@ -685,6 +790,21 @@ public final class ClientShopData {
         shipRuleErrors = tag.getInt("shipRuleErrors");
         shipRuleErrorText = tag.getString("shipRuleErrorText");
         shipRulesText = tag.getString("shipRulesText");
+        Map<Integer, Integer> nextRuleUsed = new HashMap<>();
+        if (tag.contains("shipRuleUsed", Tag.TAG_COMPOUND)) {
+            CompoundTag usedTag = tag.getCompound("shipRuleUsed");
+            for (String key : usedTag.getAllKeys()) {
+                try {
+                    int line = Integer.parseInt(key);
+                    int count = Math.max(0, usedTag.getInt(key));
+                    if (count > 0) {
+                        nextRuleUsed.put(line, count);
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        shipRuleUsed = nextRuleUsed;
         java.util.List<Long> limits = new java.util.ArrayList<>();
         for (long value : tag.getLongArray("shipDailyLimits")) {
             limits.add(value);
@@ -699,12 +819,17 @@ public final class ClientShopData {
             view.stack = ShopNbt.loadStack(c, registries);
             view.value = c.getLong("value");
             view.owned = c.getInt("owned");
+            view.dailyDepositLimit = Math.max(0, c.getInt("dailyDepositLimit"));
+            view.depositUsedToday = Math.max(0, c.getInt("depositUsedToday"));
+            view.dailyWithdrawLimit = Math.max(0, c.getInt("dailyWithdrawLimit"));
+            view.withdrawUsedToday = Math.max(0, c.getInt("withdrawUsedToday"));
             newExchange.add(view);
         }
         exchange = newExchange;
         if (lastExchangeOpen >= exchange.size()) {
             lastExchangeOpen = -1;
         }
+        ClientHomeCurrencyState.readSnapshot(tag, registries);
     }
 
     /** 单独更新交易面板数据（kind=trade）。 */
@@ -747,7 +872,8 @@ public final class ClientShopData {
     /** 兑换码奖励草稿（kind=redeem_draft）：生成器上的「奖励内容」摘要与编辑界面的回填都用它。 */
     public static void applyRedeemDraft(CompoundTag tag) {
         redeemDraftItems = tag.getString("items");
-        redeemDraftMoney = Math.max(0L, tag.getLong("money"));
+        redeemDraftSpec = PriceSpec.readFromParent(tag, "moneySpec", "money");
+        redeemDraftMoney = Math.max(0L, redeemDraftSpec.supportsStar() ? redeemDraftSpec.starPrice : tag.getLong("money"));
         List<String> names = new ArrayList<>();
         ListTag list = tag.getList("players", Tag.TAG_STRING);
         for (int i = 0; i < list.size(); i++) {
@@ -836,6 +962,142 @@ public final class ClientShopData {
         tradeRequester = false;
     }
 
+    /** 退出世界 / 切换服务器时重置客户端缓存与默认首页，避免跨存档串台。 */
+    public static void reset() {
+        balance = 0L;
+        maxBalance = 0L;
+        currency = "";
+        symbol = "";
+        moneySuffix = "";
+        canAdmin = false;
+        adminLockEnabled = false;
+        adminUnlocked = false;
+        adminSessionTimeout = 30;
+        defaultTab = "home";
+        lastTab = "home";
+        lastAuctionPage = 0;
+        lastAdminPage = 0;
+        lastMailPage = 0;
+        lastAdminMode = "shop";
+        lastExchangeOpen = -1;
+        lastExchangeScrollRow = 0;
+        refreshSpec = null;
+        buybackRefreshSpec = null;
+        shipUpgradeSpec = null;
+        buybackBonusSpec = PriceSpec.ZERO;
+        signInBaseSpec = PriceSpec.ZERO;
+        signInMakeupSpec = PriceSpec.ZERO;
+        signInTierBonusSpecs = List.of();
+        signInMileSpecs = List.of();
+        dailyRefreshSpecs = List.of();
+        buybackRefreshSpecs = List.of();
+        shippingUpgradeSpecs = List.of();
+        shipValueSpec = PriceSpec.ZERO;
+        shipPhysValues = new java.util.LinkedHashMap<>();
+        shipRuleUsed = new HashMap<>();
+        redeemDraftSpec = PriceSpec.ZERO;
+        signInDone = false;
+        signInStreak = 0;
+        signInBest = 0;
+        signInDays = new ArrayList<>();
+        activityDays = new ArrayList<>();
+        activityDraft = null;
+        bill = new ArrayList<>();
+        billBalance = 0L;
+        billTodayIn = 0L;
+        billTodayOut = 0L;
+        billMonthIn = 0L;
+        billMonthOut = 0L;
+        billUpdatedAt = 0L;
+        sidebarOrder = new ArrayList<>();
+        sidebarHidden = new ArrayList<>();
+        sidebarNames = new java.util.LinkedHashMap<>();
+        shopTitle = "";
+        brandIconId = "";
+        cn.autoforged.module_shop.client.media.ClientMediaCache.clearMemory();
+        ClientAdminAuth.clearState();
+        clearTrade();
+        ClientHomeCurrencyState.reset();
+    }
+
+    public static boolean hasRefreshCost() {
+        return refreshSpec != null || refreshCost >= 0L;
+    }
+
+    public static PriceSpec resolveRefreshSpec() {
+        if (refreshSpec != null) {
+            return refreshSpec;
+        }
+        return PriceSpec.star(Math.max(0L, refreshCost));
+    }
+
+    public static boolean hasBuybackRefreshCost() {
+        return buybackRefreshSpec != null || buybackRefreshCost >= 0L;
+    }
+
+    public static PriceSpec resolveBuybackRefreshSpec() {
+        if (buybackRefreshSpec != null) {
+            return buybackRefreshSpec;
+        }
+        return PriceSpec.star(Math.max(0L, buybackRefreshCost));
+    }
+
+    public static boolean hasShipUpgradeCost() {
+        return shipUpgradeSpec != null || shipUpgradeCost >= 0L;
+    }
+
+    public static PriceSpec resolveShipUpgradeSpec() {
+        if (shipUpgradeSpec != null) {
+            return shipUpgradeSpec;
+        }
+        return PriceSpec.star(Math.max(0L, shipUpgradeCost));
+    }
+
+    public static PriceSpec signInTierSpec(int idx) {
+        if (idx >= 0 && idx < signInTierBonusSpecs.size()) {
+            PriceSpec s = signInTierBonusSpecs.get(idx);
+            if (s != null) {
+                return s;
+            }
+        }
+        long v = idx >= 0 && idx < signInTierBonus.length ? signInTierBonus[idx] : 0L;
+        return PriceSpec.star(Math.max(0L, v));
+    }
+
+    public static PriceSpec signInMileSpec(int idx) {
+        if (idx >= 0 && idx < signInMileSpecs.size()) {
+            PriceSpec s = signInMileSpecs.get(idx);
+            if (s != null) {
+                return s;
+            }
+        }
+        long v = idx >= 0 && idx < signInMileMoney.length ? signInMileMoney[idx] : 0L;
+        return PriceSpec.star(Math.max(0L, v));
+    }
+
+    @Nullable
+    private static PriceSpec readOptionalCostSpec(CompoundTag parent, String specKey, long legacyCost) {
+        if (parent.contains(specKey, Tag.TAG_COMPOUND)) {
+            PriceSpec spec = PriceSpec.fromTag(parent.getCompound(specKey), Math.max(0L, legacyCost));
+            if (legacyCost < 0L && spec.isZero()) {
+                return null;
+            }
+            return spec;
+        }
+        return legacyCost >= 0L ? PriceSpec.star(legacyCost) : null;
+    }
+
+    private static List<PriceSpec> readSpecList(ListTag list) {
+        if (list == null || list.isEmpty()) {
+            return List.of();
+        }
+        List<PriceSpec> out = new ArrayList<>(list.size());
+        for (int i = 0; i < list.size(); i++) {
+            out.add(PriceSpec.fromTag(list.getCompound(i), 0L));
+        }
+        return out;
+    }
+
     private static List<ItemStack> parseItems(ListTag list, RegistryAccess registries) {
         List<ItemStack> result = new ArrayList<>();
         for (int i = 0; i < list.size(); i++) {
@@ -887,6 +1149,21 @@ public final class ClientShopData {
         public String searchText;
         /** 分类缓存。 */
         public cn.autoforged.module_shop.shop.auction.AuctionCategory category;
+        /** 非空时表示本场拍卖使用该实体货币档位结算。 */
+        public String physTierKey = "";
+
+        public boolean isPhysCurrency() {
+            return physTierKey != null && !physTierKey.isBlank();
+        }
+
+        public PriceSpec specOf(long amount) {
+            long safe = Math.max(0L, amount);
+            return isPhysCurrency() ? PriceSpec.phys(physTierKey, safe) : PriceSpec.star(safe);
+        }
+
+        public PriceSpec effectiveSpec() {
+            return specOf(effectivePrice());
+        }
 
         public long remainingNow() {
             return receivedAt > 0L ? Math.max(0L, remaining - (System.currentTimeMillis() - receivedAt)) : remaining;
@@ -926,6 +1203,17 @@ public final class ClientShopData {
         public String title = "";
         public String note = "";
         public long money;
+        public PriceSpec moneySpec = PriceSpec.ZERO;
+
+        public PriceSpec resolveMoneySpec() {
+            if (moneySpec == null) {
+                return PriceSpec.star(money);
+            }
+            if (moneySpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && moneySpec.starPrice != money) {
+                return PriceSpec.star(money);
+            }
+            return moneySpec;
+        }
         public boolean forOffline;
         public boolean granted;
         /** 错过定时点后是否补发（true = 当天任意时刻登录都补发一次）。 */
@@ -942,13 +1230,19 @@ public final class ClientShopData {
         public String itemIds = "";
     }
 
-    /** 货币兑换界面的一行：模板物品 + 汇率 + 玩家背包里的持有量。 */
+    /** 货币兑换界面的一行：模板物品 + 汇率 + 玩家背包里的持有量 + 每日限额与已用额度。 */
     public static final class ExchangeView {
         public ItemStack stack = ItemStack.EMPTY;
         /** 1 个该物品 = value 星币。 */
         public long value;
         /** 玩家背包中该物品的数量（服务端统计，界面展示用）。 */
         public int owned;
+        /** 每人每日存入（物品→星币）上限（0 = 不限）及今日已用。 */
+        public int dailyDepositLimit;
+        public int depositUsedToday;
+        /** 每人每日取出（星币→物品）上限（0 = 不限）及今日已用。 */
+        public int dailyWithdrawLimit;
+        public int withdrawUsedToday;
     }
 
     /** 购物城货架上的一件商品。 */
@@ -957,11 +1251,24 @@ public final class ClientShopData {
         public int shelf = -1;
         public ItemStack stack = ItemStack.EMPTY;
         public long price;
+        public PriceSpec priceSpec = PriceSpec.ZERO;
         public Rarity rarity = Rarity.COMMON;
+
+        public PriceSpec resolvePriceSpec() {
+            if (priceSpec == null) {
+                return PriceSpec.star(price);
+            }
+            if (priceSpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && priceSpec.starPrice != price) {
+                return PriceSpec.star(price);
+            }
+            return priceSpec;
+        }
         /** 库存：-1 = 无限；0 = 售罄；>0 = 剩余数量。 */
         public int stock = -1;
         /** 上架顺序（默认排序用）。 */
         public int sort;
+        /** 是否每人永久限购（不随商城刷新补货）。 */
+        public boolean permanentLimit;
 
         public boolean unlimited() {
             return stock < 0;
@@ -984,8 +1291,24 @@ public final class ClientShopData {
         public ItemStack stack = ItemStack.EMPTY;
         public int count = 1;
         public long unitPrice;
+        public PriceSpec unitSpec = PriceSpec.ZERO;
         public long total;
+        public PriceSpec totalSpec = PriceSpec.ZERO;
         public long time;
+
+        public PriceSpec resolveUnitSpec() {
+            if (unitSpec == null || (unitSpec.isZero() && unitPrice > 0L)) {
+                return PriceSpec.star(unitPrice);
+            }
+            return unitSpec;
+        }
+
+        public PriceSpec resolveTotalSpec() {
+            if (totalSpec == null || (totalSpec.isZero() && total > 0L)) {
+                return PriceSpec.star(total);
+            }
+            return totalSpec;
+        }
     }
 
     /** 需求 1：一条待处理的交易请求。 */

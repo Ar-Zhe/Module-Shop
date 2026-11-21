@@ -1,19 +1,24 @@
 package cn.autoforged.module_shop.client.screen.shop;
 
 import cn.autoforged.module_shop.client.ClickSound;
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState;
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.screen.IOStyle;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
 import cn.autoforged.module_shop.client.ui.v2.V2;
+import cn.autoforged.module_shop.data.PriceSpec;
 import io.github.humbleui.skija.Canvas;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.TextStyle;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
 
@@ -23,11 +28,14 @@ import net.minecraft.network.chat.Component;
  */
 public final class SignInPage implements ShopPage {
     private static final float STATS_H = 36.0F;
-    private static final float CAL_W = 196.0F;
     private static final ListTable TABLE = new ListTable();
     private final SignInCalendar calendar = new SignInCalendar(false, true);
     private float[] signRect;
     private List<LocalDate> days = new ArrayList<>();
+
+    private static float calW(PageFrame f) {
+        return Math.min(196.0F, Math.max(174.0F, f.w() * 0.36F));
+    }
 
     @Override
     public String id() {
@@ -69,9 +77,10 @@ public final class SignInPage implements ShopPage {
         drawToolbar(c, f);
         drawStats(c, f, x, y + V2.BAR, f.w());
         float top = y + V2.BAR + STATS_H;
+        float cw = calW(f);
         // 左：月历
-        Draw.fill(c, x + CAL_W - 0.5F, top, 0.5F, f.h() - V2.BAR - STATS_H, 0, IOStyle.BORDER_DIM);
-        calendar.render(c, f, x + 6, top + 6, CAL_W - 12);
+        Draw.fill(c, x + cw - 0.5F, top, 0.5F, f.h() - V2.BAR - STATS_H, 0, IOStyle.BORDER_DIM);
+        calendar.render(c, f, x + 6, top + 6, cw - 12);
         // 右：本月逐日
         YearMonth ym = SignInCalendar.shownMonth();
         days = new ArrayList<>();
@@ -79,8 +88,8 @@ public final class SignInPage implements ShopPage {
             days.add(ym.atDay(d));
         }
         float bottom = y + f.h() - V2.FOOT;
-        drawTable(c, f, x + CAL_W, top, f.w() - CAL_W, bottom - top);
-        V2.foot(c, x + CAL_W, bottom, f.w() - CAL_W, tr("gui.module_shop.v2.signin.month", ym.getYear(), ym.getMonthValue()),
+        drawTable(c, f, x + cw, top, f.w() - cw, bottom - top);
+        V2.foot(c, x + cw, bottom, f.w() - cw, tr("gui.module_shop.v2.signin.month", ym.getYear(), ym.getMonthValue()),
                 tr("gui.module_shop.v2.signin.hint"));
     }
 
@@ -92,8 +101,8 @@ public final class SignInPage implements ShopPage {
         float tw = V2.bold(c, tr("tab.module_shop.signin"), V2.FS_T, IOStyle.TEXT, x + 8, cy, 90, Text.Align.LEFT);
         boolean done = ClientShopData.signInDone;
         boolean can = !done && ClientShopData.signInEnabled;
-        long gain = ClientShopData.signInBase + SignInPageTier.at(ClientShopData.signInStreak + (done ? 0 : 1));
-        String label = done ? tr("gui.module_shop.signin.done") : tr("gui.module_shop.v2.signin.do", V2.money(gain));
+        String gainText = formatDailyGain(ClientShopData.signInStreak + (done ? 0 : 1));
+        String label = done ? tr("gui.module_shop.signin.done") : tr("gui.module_shop.v2.signin.do", gainText);
         float w = V2.buttonWidth(label) + 10;
         float bx = x + f.w() - 8 - w;
         V2.button(c, label, can ? V2.Btn.PRIMARY : V2.Btn.DISABLED, bx, by, w, V2.CTRL, over(f, bx, by, w, V2.CTRL) ? 1 : 0);
@@ -102,8 +111,9 @@ public final class SignInPage implements ShopPage {
         if (ClientShopData.signInCumulative && ClientShopData.signInTierDays.length > 0) {
             StringBuilder sb = new StringBuilder(tr("gui.module_shop.v2.signin.tiers"));
             for (int i = 0; i < ClientShopData.signInTierDays.length; i++) {
-                long b = i < ClientShopData.signInTierBonus.length ? ClientShopData.signInTierBonus[i] : 0;
-                sb.append(' ').append(ClientShopData.signInTierDays[i]).append(tr("gui.module_shop.v2.signin.day_unit")).append(" +").append(b);
+                PriceSpec tierSpec = ClientShopData.signInTierSpec(i);
+                sb.append(' ').append(ClientShopData.signInTierDays[i]).append(tr("gui.module_shop.v2.signin.day_unit"))
+                        .append(" +").append(PriceDisplay.formatCompact(tierSpec));
             }
             notes.add(sb.toString());
         }
@@ -135,7 +145,8 @@ public final class SignInPage implements ShopPage {
                 {tr("gui.module_shop.v2.signin.this_month"), monthSigned + " / " + LocalDate.now().getDayOfMonth(), ""},
                 {tr("gui.module_shop.v2.signin.mile"), tr("gui.module_shop.v2.signin.round", round, inCycle, cycle), ""},
                 {tr("gui.module_shop.v2.signin.makeup"), ClientShopData.signInMakeupDays > 0
-                        ? V2.money(ClientShopData.signInMakeupCost) : tr("gui.module_shop.v2.signin.makeup_off"),
+                        ? PriceDisplay.formatCompact(ClientShopData.signInMakeupSpec)
+                        : tr("gui.module_shop.v2.signin.makeup_off"),
                         ClientShopData.signInMakeupDays > 0 ? tr("gui.module_shop.v2.signin.makeup_range", ClientShopData.signInMakeupDays) : ""}};
         float cw = w / cells.length;
         for (int i = 0; i < cells.length; i++) {
@@ -159,7 +170,14 @@ public final class SignInPage implements ShopPage {
     }
 
     private void drawTable(Canvas c, PageFrame f, float x, float y, float w, float h) {
-        float[][] cols = V2.columns(x, w, 8, 6, 40, 30, 56, 40, 52, 0, 52);
+        float actW = Math.max(40.0F, Math.max(V2.buttonWidth(tr("gui.module_shop.v2.signin.sign")),
+                V2.buttonWidth(tr("gui.module_shop.v2.signin.makeup_btn")))) + 4.0F;
+        float gap = 5.0F;
+        float[][] baseCols = V2.columns(x, w - actW - gap, 8, gap, 34, 22, 44, 44, 44, 0);
+        float[][] cols = new float[7][2];
+        System.arraycopy(baseCols, 0, cols, 0, 6);
+        cols[6][0] = x + w - 8 - actW;
+        cols[6][1] = actW;
         String[] heads = {tr("gui.module_shop.v2.col.date"), tr("gui.module_shop.v2.col.weekday"), tr("gui.module_shop.v2.col.state"),
                 tr("gui.module_shop.v2.col.base"), tr("gui.module_shop.v2.col.tier"), tr("gui.module_shop.v2.col.activity"), ""};
         Text.Align[] al = {Text.Align.LEFT, Text.Align.LEFT, Text.Align.LEFT, Text.Align.RIGHT, Text.Align.RIGHT,
@@ -198,14 +216,18 @@ public final class SignInPage implements ShopPage {
                 sc = IOStyle.TEXT_3;
             }
             V2.tag(cv, state, sc, cols[2][0], cy);
-            V2.text(cv, V2.money(ClientShopData.signInBase), V2.FS_S, ed > today ? IOStyle.TEXT_3 : IOStyle.TEXT, cols[3][0], cy,
-                    cols[3][1], Text.Align.RIGHT);
+            PriceDisplay.drawCell(cv, f.host().items(), ClientShopData.signInBaseSpec, cols[3][0], cy, cols[3][1],
+                    Text.Align.RIGHT, ed > today ? IOStyle.TEXT_3 : IOStyle.TEXT, ed > today);
             // 累计加成：已签的日子按当时（近似为今天的连签推算）不好还原，这里只对今天及以后给出预计值
             if (ed >= today && ClientShopData.signInCumulative) {
                 int dayStreak = ClientShopData.signInStreak + (int) (ed - today) + (ClientShopData.signInDone ? 0 : 1);
-                long bonus = SignInPageTier.at(dayStreak);
-                V2.text(cv, bonus > 0 ? "+" + V2.money(bonus) : "—", V2.FS_S, bonus > 0 ? IOStyle.GREEN : IOStyle.TEXT_3,
-                        cols[4][0], cy, cols[4][1], Text.Align.RIGHT);
+                PriceSpec bonusSpec = tierBonusSpecAt(dayStreak);
+                if (bonusSpec.isValid()) {
+                    PriceDisplay.drawCell(cv, f.host().items(), bonusSpec, cols[4][0], cy, cols[4][1],
+                            Text.Align.RIGHT, IOStyle.GREEN, false, "+");
+                } else {
+                    V2.text(cv, "—", V2.FS_S, IOStyle.TEXT_3, cols[4][0], cy, cols[4][1], Text.Align.RIGHT);
+                }
             } else {
                 V2.text(cv, "—", V2.FS_S, IOStyle.TEXT_3, cols[4][0], cy, cols[4][1], Text.Align.RIGHT);
             }
@@ -215,8 +237,9 @@ public final class SignInPage implements ShopPage {
                 float ax = cols[5][0];
                 Draw.fill(cv, ax, cy - 2, 4, 4, 2, a.color != 0 ? (0xFF000000 | a.color) : IOStyle.BLUE);
                 StringBuilder sb = new StringBuilder(a.title == null ? "" : a.title);
-                if (a.money > 0) {
-                    sb.append("  +").append(V2.money(a.money));
+                PriceSpec actSpec = a.resolveMoneySpec();
+                if (actSpec.isValid()) {
+                    sb.append("  +").append(PriceDisplay.formatPlain(actSpec));
                 }
                 if (a.itemText != null && !a.itemText.isEmpty()) {
                     sb.append("  ").append(a.itemText);
@@ -261,6 +284,7 @@ public final class SignInPage implements ShopPage {
         } else if ("makeup".equals(hit.button())) {
             CompoundTag extra = new CompoundTag();
             extra.putLong("day", days.get(hit.row()).toEpochDay());
+            extra.putString("pay_channel", PriceDisplay.resolveBuyChannel(ClientShopData.signInMakeupSpec, 1));
             f.host().action("signin_makeup", extra);
         }
         return true;
@@ -291,6 +315,38 @@ public final class SignInPage implements ShopPage {
         static long at(int day) {
             return tierBonusAt(day);
         }
+    }
+
+    static String formatDailyGain(int dayStreak) {
+        PriceSpec base = ClientShopData.signInBaseSpec;
+        PriceSpec bonus = tierBonusSpecAt(dayStreak);
+        if (!bonus.isValid()) {
+            return PriceDisplay.formatCompact(base);
+        }
+        long[] star = {0L};
+        Map<String, Long> phys = new LinkedHashMap<>();
+        PriceDisplay.addTotals(base, 1, star, phys);
+        PriceDisplay.addTotals(bonus, 1, star, phys);
+        if (phys.isEmpty()) {
+            return V2.money(star[0]);
+        }
+        return PriceDisplay.formatLedgerSummary(star[0], phys);
+    }
+
+    static PriceSpec tierBonusSpecAt(int day) {
+        if (!ClientShopData.signInCumulative) {
+            return PriceSpec.ZERO;
+        }
+        PriceSpec chosen = PriceSpec.ZERO;
+        for (int i = 0; i < ClientShopData.signInTierDays.length; i++) {
+            if (day >= ClientShopData.signInTierDays[i]) {
+                PriceSpec candidate = ClientShopData.signInTierSpec(i);
+                if (candidate.isValid()) {
+                    chosen = candidate;
+                }
+            }
+        }
+        return chosen;
     }
 
     /** 指定天数对应的累计签到加成（取不超过该天数的最高档位；关闭累计签到时为 0）。 */

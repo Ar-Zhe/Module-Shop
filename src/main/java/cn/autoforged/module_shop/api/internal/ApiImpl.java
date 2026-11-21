@@ -580,35 +580,43 @@ public final class ApiImpl {
                 return ApiResult.fail(ApiErrorCode.SOLD_OUT, "该商品今天已买满");
             }
             int buyCount = Math.min(count, offer.remaining());
-            long total = priceTimes(offer.price, buyCount);
-            if (total <= 0L) {
+            cn.autoforged.module_shop.data.PriceSpec unitSpec = offer.resolvePriceSpec();
+            cn.autoforged.module_shop.data.PriceSpec totalSpec = unitSpec.scale(buyCount);
+            if (!totalSpec.isValid()) {
                 return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "价格非法");
             }
-            ApiResult<Void> priceGuard = checkPrice(expectedPrice, offer.price);
-            if (priceGuard != null) {
-                return priceGuard;
+            if (unitSpec.supportsStar()) {
+                ApiResult<Void> priceGuard = checkPrice(expectedPrice, offer.price);
+                if (priceGuard != null) {
+                    return priceGuard;
+                }
             }
             ServerPlayer online = onlineOf(server, playerId);
             if (online == null) {
                 return ApiResult.fail(ApiErrorCode.PLAYER_OFFLINE, "购买需要玩家在线");
             }
-            if (account.balance < total) {
-                return ApiResult.fail(ApiErrorCode.INSUFFICIENT_FUNDS,
-                        "余额不足：需要 " + total + "，现有 " + account.balance);
+            var plan = cn.autoforged.module_shop.shop.currency.CurrencySettlement.planSpec(
+                    online, account, unitSpec, buyCount, null);
+            if (!plan.ok()) {
+                return ApiResult.fail(ApiErrorCode.INSUFFICIENT_FUNDS, plan.failFallback());
             }
-            long before = account.balance;
+            long balBefore = Math.max(0L, account.balance);
+            int beforeBought = offer.bought;
             String itemId = "daily-" + index;
             ItemStack bought = offer.stack.copy();
-            int boughtCount = buyCount;
             ShopManager.buyShop(online, index, count);
-            long paid = before - account.balance;
-            if (paid <= 0L) {
-                // 内部方法没有成交（可能刚被买满/价格变动）
+            int deltaBought = Math.max(0, offer.bought - beforeBought);
+            if (deltaBought <= 0) {
+                // 内部方法没有成交（可能刚被买满 / 价格变动 / 防套利保护）
                 return ApiResult.fail(ApiErrorCode.SOLD_OUT, "未成交（可能刚被买满）");
+            }
+            long paid = Math.max(0L, balBefore - Math.max(0L, account.balance));
+            if (paid <= 0L && unitSpec.mode == cn.autoforged.module_shop.data.PriceSpec.CurrencyMode.STAR_ONLY) {
+                paid = offer.price * (long) deltaBought;
             }
             cn.autoforged.module_shop.api.event.ApiEvents.post(
                     new cn.autoforged.module_shop.api.event.PurchaseCompletedEvent(
-                            playerId, "daily", itemId, bought, boughtCount, paid));
+                            playerId, "daily", itemId, bought, deltaBought, paid));
             return ApiResult.ok();
         }
 
@@ -639,29 +647,47 @@ public final class ApiImpl {
                 return ApiResult.fail(ApiErrorCode.SOLD_OUT, "该商品已售罄");
             }
             int buyCount = item.unlimited() ? count : Math.min(count, item.available());
-            long total = priceTimes(item.price, buyCount);
-            if (total <= 0L) {
+            cn.autoforged.module_shop.data.PriceSpec unitSpec = item.resolvePriceSpec();
+            cn.autoforged.module_shop.data.PriceSpec totalSpec = unitSpec.scale(buyCount);
+            if (!totalSpec.isValid()) {
                 return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "价格非法");
             }
-            ApiResult<Void> priceGuard = checkPrice(expectedPrice, item.price);
-            if (priceGuard != null) {
-                return priceGuard;
+            if (unitSpec.supportsStar()) {
+                ApiResult<Void> priceGuard = checkPrice(expectedPrice, item.price);
+                if (priceGuard != null) {
+                    return priceGuard;
+                }
             }
             ServerPlayer online = onlineOf(server, playerId);
             if (online == null) {
                 return ApiResult.fail(ApiErrorCode.PLAYER_OFFLINE, "购买需要玩家在线");
             }
-            if (account.balance < total) {
-                return ApiResult.fail(ApiErrorCode.INSUFFICIENT_FUNDS,
-                        "余额不足：需要 " + total + "，现有 " + account.balance);
+            var plan = cn.autoforged.module_shop.shop.currency.CurrencySettlement.planSpec(
+                    online, account, totalSpec, 1, null);
+            if (!plan.ok()) {
+                return ApiResult.fail(ApiErrorCode.INSUFFICIENT_FUNDS, plan.failFallback());
             }
-            long before = account.balance;
+            long balBefore = Math.max(0L, account.balance);
+            int stockBefore = Config.mallStockPersonal() && !item.unlimited()
+                    ? item.remainingFor(playerId) : item.available();
+            long lastMallRecentTs = data(server).mallRecent.isEmpty()
+                    ? 0L : data(server).mallRecent.get(data(server).mallRecent.size() - 1).time;
+            int mallRecentCountBefore = data(server).mallRecent.size();
             String itemId = "mall-" + index;
             ItemStack bought = item.stack.copy();
             ShopManager.buyMall(online, index, count);
-            long paid = before - account.balance;
-            if (paid <= 0L) {
+            int stockAfter = Config.mallStockPersonal() && !item.unlimited()
+                    ? item.remainingFor(playerId) : item.available();
+            boolean boughtAny = (!item.unlimited() && stockAfter < stockBefore)
+                    || (!data(server).mallRecent.isEmpty()
+                    && (data(server).mallRecent.size() > mallRecentCountBefore
+                    || data(server).mallRecent.get(data(server).mallRecent.size() - 1).time != lastMallRecentTs));
+            if (!boughtAny) {
                 return ApiResult.fail(ApiErrorCode.SOLD_OUT, "未成交（可能刚被买空）");
+            }
+            long paid = Math.max(0L, balBefore - Math.max(0L, account.balance));
+            if (paid <= 0L && totalSpec.mode == cn.autoforged.module_shop.data.PriceSpec.CurrencyMode.STAR_ONLY) {
+                paid = totalSpec.starPrice;
             }
             cn.autoforged.module_shop.api.event.ApiEvents.post(
                     new cn.autoforged.module_shop.api.event.PurchaseCompletedEvent(
@@ -699,17 +725,22 @@ public final class ApiImpl {
             if (online == null) {
                 return ApiResult.fail(ApiErrorCode.PLAYER_OFFLINE, "出售需要玩家在线");
             }
-            long before = account.balance;
+            long balBefore = Math.max(0L, account.balance);
+            int soldBefore = offer.sold;
             String itemId = "buyback-" + index;
             ItemStack sold = offer.stack.copy();
             ShopManager.sellBuyback(online, index, count);
-            long earned = account.balance - before;
-            if (earned <= 0L) {
+            int deltaSold = Math.max(0, offer.sold - soldBefore);
+            if (deltaSold <= 0) {
                 return ApiResult.fail(ApiErrorCode.SOLD_OUT, "未成交（可能背包里没有该物品）");
+            }
+            long earned = Math.max(0L, Math.max(0L, account.balance) - balBefore);
+            if (earned <= 0L && offer.resolvePriceSpec().mode == cn.autoforged.module_shop.data.PriceSpec.CurrencyMode.STAR_ONLY) {
+                earned = offer.price * (long) deltaSold;
             }
             cn.autoforged.module_shop.api.event.ApiEvents.post(
                     new cn.autoforged.module_shop.api.event.SellCompletedEvent(
-                            playerId, "buyback", itemId, sold, count, earned));
+                            playerId, "buyback", itemId, sold, deltaSold, earned));
             return ApiResult.ok();
         }
 
@@ -799,26 +830,32 @@ public final class ApiImpl {
                 return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT,
                         "出价过低：至少要 " + floor + "，当前 " + target.currentBid);
             }
-            if (account.balance < amount) {
-                return ApiResult.fail(ApiErrorCode.INSUFFICIENT_FUNDS,
-                        "余额不足：需要 " + amount + "，现有 " + account.balance);
-            }
             ServerPlayer online = onlineOf(server, playerId);
             if (online == null) {
                 return ApiResult.fail(ApiErrorCode.PLAYER_OFFLINE, "出价需要玩家在线");
             }
-            long before = account.balance;
+            long needAmount = playerId.equals(target.topBidder)
+                    ? Math.max(0L, amount - target.currentBid) : amount;
+            if (target.isPhysical()) {
+                var physPlan = cn.autoforged.module_shop.shop.currency.CurrencySettlement.planSpec(
+                        online, account, target.specOf(needAmount), 1, "phys");
+                if (!physPlan.ok()) {
+                    return ApiResult.fail(ApiErrorCode.INSUFFICIENT_FUNDS, physPlan.failFallback());
+                }
+            } else if (account.balance < needAmount) {
+                return ApiResult.fail(ApiErrorCode.INSUFFICIENT_FUNDS,
+                        "余额不足：需要 " + needAmount + "，现有 " + account.balance);
+            }
             CompoundTag tag = new CompoundTag();
             tag.putLong("id", auctionId);
             tag.putString("amount", Long.toString(amount));
             ShopManager.placeBid(online, tag);
-            long paid = before - account.balance;
-            if (paid <= 0L) {
+            if (!playerId.equals(target.topBidder) || target.currentBid < amount) {
                 return ApiResult.fail(ApiErrorCode.INTERNAL_ERROR, "出价未成交（服务端拒绝）");
             }
             cn.autoforged.module_shop.api.event.ApiEvents.post(
                     new cn.autoforged.module_shop.api.event.AuctionBidPlacedEvent(
-                            playerId, auctionId, paid));
+                            playerId, auctionId, amount));
             return ApiResult.ok();
         }
 
@@ -861,7 +898,7 @@ public final class ApiImpl {
                 return ApiResult.fail(ApiErrorCode.PLAYER_OFFLINE, "发布求购需要玩家在线");
             }
             int countBefore = data(server).demands.size();
-            long moneyBefore = account.balance;
+            long moneyBefore = Math.max(0L, account.balance);
             CompoundTag tag = new CompoundTag();
             tag.putString("action", "demand_create");
             net.minecraft.nbt.ListTag list = new net.minecraft.nbt.ListTag();
@@ -886,9 +923,10 @@ public final class ApiImpl {
                     newId = entry.id;
                 }
             }
+            long moneyAfter = Math.max(0L, account.balance);
             cn.autoforged.module_shop.api.event.ApiEvents.post(
                     new cn.autoforged.module_shop.api.event.DemandCreatedEvent(
-                            playerId, newId, Math.max(0L, moneyBefore - account.balance), clean.size()));
+                            playerId, newId, Math.max(0L, moneyBefore - moneyAfter), clean.size()));
             return ApiResult.ok(newId);
         }
 

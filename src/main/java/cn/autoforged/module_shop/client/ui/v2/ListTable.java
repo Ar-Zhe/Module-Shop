@@ -28,6 +28,8 @@ public final class ListTable {
     public record Hit(int row, String button) {
     }
 
+    private static final float BAR_GUTTER = 12.0F;
+
     private final ScrollController scroll = new ScrollController();
     private final List<float[]> buttonRects = new ArrayList<>();
     private final List<String> buttonIds = new ArrayList<>();
@@ -159,9 +161,10 @@ public final class ListTable {
     public float button(Canvas c, int row, String id, String label, V2.Btn kind, float right, float rowY, float rowHover) {
         float bw = V2.buttonWidth(label);
         float bh = Math.min(11.0F, this.rowH - 4);
-        float bx = right - bw;
+        float safeRight = this.scroll.canScroll() ? Math.min(right, this.x + this.w - BAR_GUTTER) : right;
+        float bx = safeRight - bw;
         float by = rowY + (this.rowH - bh) / 2;
-        boolean over = this.mx >= bx && this.mx < bx + bw && this.my >= by && this.my < by + bh;
+        boolean over = !overBar(this.mx, this.my) && this.mx >= bx && this.mx < bx + bw && this.my >= by && this.my < by + bh;
         V2.Btn k = kind;
         if (kind == V2.Btn.NORMAL && rowHover > 0.5F && over) {
             k = V2.Btn.PRIMARY;
@@ -192,7 +195,11 @@ public final class ListTable {
             }
         }
         float top = listTop();
-        if (mouseX < this.x || mouseX >= this.x + this.w || mouseY < top || mouseY >= top + listHeight()) {
+        float lh = listHeight();
+        if (mouseX < this.x || mouseX >= this.x + this.w || mouseY < top || mouseY >= top + lh) {
+            return null;
+        }
+        if (this.scroll.overBar(mouseX, mouseY, this.x, top, this.w, lh)) {
             return null;
         }
         for (int i = 0; i < this.buttonRects.size(); i++) {
@@ -203,6 +210,14 @@ public final class ListTable {
         }
         int r = (int) Math.floor((mouseY - top + this.scroll.offset()) / this.rowH);
         return r >= 0 && r < this.rows ? new Hit(r, null) : null;
+    }
+
+    public boolean overBar(double mouseX, double mouseY) {
+        return this.scroll.overBar(mouseX, mouseY, this.x, listTop(), this.w, listHeight());
+    }
+
+    public ScrollController scroll() {
+        return this.scroll;
     }
 
     /** 滚动条按下（拖拽开始）。 */

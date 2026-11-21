@@ -90,16 +90,24 @@ public final class ShopSavedData extends SavedData {
     public boolean signInCumulative = true;
     /** 每日基础签到奖励。 */
     public long signInBaseDaily = 10L;
+    public PriceSpec signInBaseSpec = PriceSpec.star(10L);
     /** 补签花费（0 = 免费）。 */
     public long signInMakeupCost = 100L;
+    public PriceSpec signInMakeupSpec = PriceSpec.star(100L);
     /** 允许补签的天数范围（今天之前 N 天内）。 */
     public int signInMakeupDays = 2;
     /** 累计签到档位天数与对应每日加成（默认 3 天 +5、5 天 +7、7 天 +10）。 */
     public final int[] signInTierDays = {3, 5, 7};
     public final long[] signInTierBonus = {5L, 7L, 10L};
+    public final PriceSpec[] signInTierBonusSpecs = {
+            PriceSpec.star(5L), PriceSpec.star(7L), PriceSpec.star(10L)
+    };
     /** 连续签到里程奖励天数与金额（默认 3 天 100、5 天 300、7 天 800）。 */
     public final int[] signInMileDays = {3, 5, 7};
     public final long[] signInMileMoney = {100L, 300L, 800L};
+    public final PriceSpec[] signInMileSpecs = {
+            PriceSpec.star(100L), PriceSpec.star(300L), PriceSpec.star(800L)
+    };
 
     // ===== 刷新参数（需求 8）：每日商店与每日收购各自一套 =====
     /** 品质权重（传说/史诗/稀有/普通）。 */
@@ -146,6 +154,149 @@ public final class ShopSavedData extends SavedData {
     }
     /** 收购全清奖励金额覆盖值（-1 = 使用配置默认值 buybackAllBonus）。 */
     public long buybackBonusOverride = -1L;
+    /** 双独立账本：收购全清奖励覆盖规格（null = 回退使用 Config.buybackAllBonus）。 */
+    public PriceSpec buybackBonusSpec;
+    /** OP 界面可覆盖的系统定额费用（空列表 = 回退使用 Config 默认配置）。 */
+    public final List<PriceSpec> dailyRefreshSpecs = new ArrayList<>();
+    public final List<PriceSpec> buybackRefreshSpecs = new ArrayList<>();
+    public final List<PriceSpec> shippingUpgradeSpecs = new ArrayList<>();
+
+    public void setSignInBaseSpec(PriceSpec spec) {
+        this.signInBaseSpec = spec == null ? PriceSpec.ZERO : spec;
+        this.signInBaseDaily = this.signInBaseSpec.supportsStar() ? this.signInBaseSpec.starPrice : 0L;
+    }
+
+    public PriceSpec resolveSignInBaseSpec() {
+        if (signInBaseSpec == null) {
+            return PriceSpec.star(signInBaseDaily);
+        }
+        if (signInBaseSpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && signInBaseSpec.starPrice != signInBaseDaily) {
+            return PriceSpec.star(signInBaseDaily);
+        }
+        return signInBaseSpec;
+    }
+
+    public void setSignInMakeupSpec(PriceSpec spec) {
+        this.signInMakeupSpec = spec == null ? PriceSpec.ZERO : spec;
+        this.signInMakeupCost = this.signInMakeupSpec.supportsStar() ? this.signInMakeupSpec.starPrice : 0L;
+    }
+
+    public PriceSpec resolveSignInMakeupSpec() {
+        if (signInMakeupSpec == null) {
+            return PriceSpec.star(signInMakeupCost);
+        }
+        if (signInMakeupSpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && signInMakeupSpec.starPrice != signInMakeupCost) {
+            return PriceSpec.star(signInMakeupCost);
+        }
+        return signInMakeupSpec;
+    }
+
+    public void setSignInTierSpec(int idx, PriceSpec spec) {
+        if (idx < 0 || idx >= signInTierBonusSpecs.length) {
+            return;
+        }
+        PriceSpec clean = spec == null ? PriceSpec.ZERO : spec;
+        signInTierBonusSpecs[idx] = clean;
+        signInTierBonus[idx] = clean.supportsStar() ? clean.starPrice : 0L;
+    }
+
+    public PriceSpec resolveSignInTierSpec(int idx) {
+        if (idx < 0 || idx >= signInTierBonusSpecs.length) {
+            return PriceSpec.ZERO;
+        }
+        PriceSpec spec = signInTierBonusSpecs[idx];
+        long legacy = signInTierBonus[idx];
+        if (spec == null) {
+            return PriceSpec.star(Math.max(0L, legacy));
+        }
+        if (spec.mode == PriceSpec.CurrencyMode.STAR_ONLY && spec.starPrice != legacy) {
+            return PriceSpec.star(Math.max(0L, legacy));
+        }
+        return spec;
+    }
+
+    public void setSignInMileSpec(int idx, PriceSpec spec) {
+        if (idx < 0 || idx >= signInMileSpecs.length) {
+            return;
+        }
+        PriceSpec clean = spec == null ? PriceSpec.ZERO : spec;
+        signInMileSpecs[idx] = clean;
+        signInMileMoney[idx] = clean.supportsStar() ? clean.starPrice : 0L;
+    }
+
+    public PriceSpec resolveSignInMileSpec(int idx) {
+        if (idx < 0 || idx >= signInMileSpecs.length) {
+            return PriceSpec.ZERO;
+        }
+        PriceSpec spec = signInMileSpecs[idx];
+        long legacy = signInMileMoney[idx];
+        if (spec == null) {
+            return PriceSpec.star(Math.max(0L, legacy));
+        }
+        if (spec.mode == PriceSpec.CurrencyMode.STAR_ONLY && spec.starPrice != legacy) {
+            return PriceSpec.star(Math.max(0L, legacy));
+        }
+        return spec;
+    }
+
+    public void setBuybackBonusSpec(PriceSpec spec) {
+        this.buybackBonusSpec = spec;
+        if (spec == null) {
+            this.buybackBonusOverride = -1L;
+        } else if (spec.isZero()) {
+            this.buybackBonusOverride = 0L;
+            this.buybackBonusEnabled = false;
+        } else {
+            this.buybackBonusOverride = spec.supportsStar() ? spec.starPrice : 0L;
+            this.buybackBonusEnabled = true;
+        }
+    }
+
+    public PriceSpec resolveBuybackBonusSpec() {
+        if (buybackBonusSpec != null) {
+            return buybackBonusSpec;
+        }
+        if (buybackBonusOverride >= 0L) {
+            return PriceSpec.star(buybackBonusOverride);
+        }
+        return PriceSpec.star(cn.autoforged.module_shop.Config.buybackAllBonus());
+    }
+
+    public List<PriceSpec> resolveDailyRefreshSpecs() {
+        return dailyRefreshSpecs.isEmpty()
+                ? cn.autoforged.module_shop.Config.dailyRefreshSpecList()
+                : new ArrayList<>(dailyRefreshSpecs);
+    }
+
+    public List<PriceSpec> resolveBuybackRefreshSpecs() {
+        return buybackRefreshSpecs.isEmpty()
+                ? cn.autoforged.module_shop.Config.buybackRefreshSpecList()
+                : new ArrayList<>(buybackRefreshSpecs);
+    }
+
+    public List<PriceSpec> resolveShippingUpgradeSpecs() {
+        return shippingUpgradeSpecs.isEmpty()
+                ? cn.autoforged.module_shop.Config.shippingUpgradeSpecList()
+                : new ArrayList<>(shippingUpgradeSpecs);
+    }
+
+    public PriceSpec nextRefreshSpec(PlayerAccount account, boolean shop) {
+        List<PriceSpec> list = shop ? resolveDailyRefreshSpecs() : resolveBuybackRefreshSpecs();
+        int used = account == null ? 0 : (shop ? account.dailyShopRefreshUsed : account.dailyBuybackRefreshUsed);
+        if (used < 0 || used >= list.size()) {
+            return null;
+        }
+        return list.get(used);
+    }
+
+    public PriceSpec shippingUpgradeSpecFor(int level) {
+        List<PriceSpec> list = resolveShippingUpgradeSpecs();
+        int index = level - 1;
+        if (index < 0 || index >= list.size()) {
+            return null;
+        }
+        return list.get(index);
+    }
     public long listingCounter = 1L;
     public long nextAuctionId = 1L;
     /** 求购单号自增（用来生成短 id）。 */
@@ -303,14 +454,30 @@ public final class ShopSavedData extends SavedData {
         tag.putBoolean("signInEnabled", signInEnabled);
         tag.putBoolean("signInAuto", signInAuto);
         tag.putBoolean("signInCumulative", signInCumulative);
-        tag.putLong("signInBaseDaily", signInBaseDaily);
-        tag.putLong("signInMakeupCost", signInMakeupCost);
+        resolveSignInBaseSpec().writeToParent(tag, "signInBaseSpec", "signInBaseDaily");
+        resolveSignInMakeupSpec().writeToParent(tag, "signInMakeupSpec", "signInMakeupCost");
         tag.putInt("signInMakeupDays", signInMakeupDays);
         tag.putIntArray("signInTierDays", signInTierDays);
         tag.putLongArray("signInTierBonus", signInTierBonus);
+        List<PriceSpec> tierSpecs = new ArrayList<>(signInTierBonusSpecs.length);
+        for (int i = 0; i < signInTierBonusSpecs.length; i++) {
+            tierSpecs.add(resolveSignInTierSpec(i));
+        }
+        writeSpecList(tag, "signInTierBonusSpecs", tierSpecs);
         tag.putIntArray("signInMileDays", signInMileDays);
         tag.putLongArray("signInMileMoney", signInMileMoney);
+        List<PriceSpec> mileSpecs = new ArrayList<>(signInMileSpecs.length);
+        for (int i = 0; i < signInMileSpecs.length; i++) {
+            mileSpecs.add(resolveSignInMileSpec(i));
+        }
+        writeSpecList(tag, "signInMileSpecs", mileSpecs);
         tag.putLong("buybackBonusOverride", buybackBonusOverride);
+        if (buybackBonusSpec != null) {
+            tag.put("buybackBonusSpec", buybackBonusSpec.toTag());
+        }
+        writeSpecList(tag, "dailyRefreshSpecs", dailyRefreshSpecs);
+        writeSpecList(tag, "buybackRefreshSpecs", buybackRefreshSpecs);
+        writeSpecList(tag, "shippingUpgradeSpecs", shippingUpgradeSpecs);
         tag.put("sidebarLayout", sidebarLayout.save());
         return tag;
     }
@@ -343,7 +510,7 @@ public final class ShopSavedData extends SavedData {
         ListTag mallList = tag.getList("mallPool", Tag.TAG_COMPOUND);
         for (int i = 0; i < mallList.size(); i++) {
             MallItem item = MallItem.load(mallList.getCompound(i), registries);
-            if (item.stack != null && !item.stack.isEmpty() && item.price > 0L) {
+            if (item.stack != null && !item.stack.isEmpty() && item.resolvePriceSpec().isValid()) {
                 data.mallPool.add(item);
             }
         }
@@ -402,8 +569,8 @@ public final class ShopSavedData extends SavedData {
         }
         // 老存档没有这两个标签时按「开启 + 用配置默认金额」处理。
         if (tag.contains("shopSlotCount")) {
-            data.shopSlotCount = Math.max(1, Math.min(12, tag.getInt("shopSlotCount")));
-            data.buybackSlotCount = Math.max(1, Math.min(12, tag.getInt("buybackSlotCount")));
+            data.shopSlotCount = Math.max(1, Math.min(64, tag.getInt("shopSlotCount")));
+            data.buybackSlotCount = Math.max(1, Math.min(64, tag.getInt("buybackSlotCount")));
             copyInts(tag.getIntArray("shopWeights"), data.shopWeights);
             copyInts(tag.getIntArray("shopGuarantee"), data.shopGuarantee);
             copyInts(tag.getIntArray("buybackWeights"), data.buybackWeights);
@@ -432,20 +599,47 @@ public final class ShopSavedData extends SavedData {
             data.signInEnabled = tag.getBoolean("signInEnabled");
             data.signInAuto = tag.getBoolean("signInAuto");
             data.signInCumulative = tag.getBoolean("signInCumulative");
-            data.signInBaseDaily = tag.getLong("signInBaseDaily");
-            data.signInMakeupCost = tag.getLong("signInMakeupCost");
+            data.setSignInBaseSpec(PriceSpec.readFromParent(tag, "signInBaseSpec", "signInBaseDaily"));
+            data.setSignInMakeupSpec(PriceSpec.readFromParent(tag, "signInMakeupSpec", "signInMakeupCost"));
             data.signInMakeupDays = tag.getInt("signInMakeupDays");
             int[] td = tag.getIntArray("signInTierDays");
             long[] tb = tag.getLongArray("signInTierBonus");
             if (td.length > 0) { System.arraycopy(td, 0, data.signInTierDays, 0, Math.min(td.length, data.signInTierDays.length)); }
-            if (tb.length > 0) { System.arraycopy(tb, 0, data.signInTierBonus, 0, Math.min(tb.length, data.signInTierBonus.length)); }
+            if (tb.length > 0) {
+                for (int i = 0; i < Math.min(tb.length, data.signInTierBonus.length); i++) {
+                    data.setSignInTierSpec(i, PriceSpec.star(Math.max(0L, tb[i])));
+                }
+            }
+            List<PriceSpec> loadedTierSpecs = new ArrayList<>();
+            readSpecList(tag, "signInTierBonusSpecs", loadedTierSpecs);
+            for (int i = 0; i < Math.min(loadedTierSpecs.size(), data.signInTierBonusSpecs.length); i++) {
+                data.setSignInTierSpec(i, loadedTierSpecs.get(i));
+            }
             int[] md = tag.getIntArray("signInMileDays");
             long[] mm = tag.getLongArray("signInMileMoney");
             if (md.length > 0) { System.arraycopy(md, 0, data.signInMileDays, 0, Math.min(md.length, data.signInMileDays.length)); }
-            if (mm.length > 0) { System.arraycopy(mm, 0, data.signInMileMoney, 0, Math.min(mm.length, data.signInMileMoney.length)); }
+            if (mm.length > 0) {
+                for (int i = 0; i < Math.min(mm.length, data.signInMileMoney.length); i++) {
+                    data.setSignInMileSpec(i, PriceSpec.star(Math.max(0L, mm[i])));
+                }
+            }
+            List<PriceSpec> loadedMileSpecs = new ArrayList<>();
+            readSpecList(tag, "signInMileSpecs", loadedMileSpecs);
+            for (int i = 0; i < Math.min(loadedMileSpecs.size(), data.signInMileSpecs.length); i++) {
+                data.setSignInMileSpec(i, loadedMileSpecs.get(i));
+            }
         }
         data.buybackBonusEnabled = !tag.contains("buybackBonusEnabled") || tag.getBoolean("buybackBonusEnabled");
         data.buybackBonusOverride = tag.contains("buybackBonusOverride") ? tag.getLong("buybackBonusOverride") : -1L;
+        if (tag.contains("buybackBonusSpec", Tag.TAG_COMPOUND)) {
+            data.buybackBonusSpec = PriceSpec.fromTag(tag.getCompound("buybackBonusSpec"),
+                    Math.max(0L, data.buybackBonusOverride));
+        } else if (data.buybackBonusOverride >= 0L) {
+            data.buybackBonusSpec = PriceSpec.star(data.buybackBonusOverride);
+        }
+        readSpecList(tag, "dailyRefreshSpecs", data.dailyRefreshSpecs);
+        readSpecList(tag, "buybackRefreshSpecs", data.buybackRefreshSpecs);
+        readSpecList(tag, "shippingUpgradeSpecs", data.shippingUpgradeSpecs);
         data.listingCounter = tag.getLong("listingCounter");        if (data.listingCounter <= 0) {
             data.listingCounter = 1L;
         }
@@ -465,6 +659,12 @@ public final class ShopSavedData extends SavedData {
         SidebarLayout layout = SidebarLayout.load(tag.getCompound("sidebarLayout"));
         data.sidebarLayout.clear();
         data.sidebarLayout.setOrder(layout.order());
+        data.sidebarLayout.setHidden(layout.hidden());
+        for (Map.Entry<String, String> entry : layout.names().entrySet()) {
+            data.sidebarLayout.setName(entry.getKey(), entry.getValue());
+        }
+        data.sidebarLayout.setShopTitle(layout.shopTitle());
+        data.sidebarLayout.setBrandIconId(layout.brandIconId());
 
         data.seedDefaultsIfEmpty();
         return data;
@@ -525,6 +725,28 @@ public final class ShopSavedData extends SavedData {
         System.arraycopy(from, 0, to, 0, Math.min(from.length, to.length));
     }
 
+    private static void writeSpecList(CompoundTag tag, String key, List<PriceSpec> specs) {
+        if (specs == null || specs.isEmpty()) {
+            return;
+        }
+        ListTag list = new ListTag();
+        for (PriceSpec spec : specs) {
+            list.add((spec == null ? PriceSpec.ZERO : spec).toTag());
+        }
+        tag.put(key, list);
+    }
+
+    private static void readSpecList(CompoundTag tag, String key, List<PriceSpec> out) {
+        out.clear();
+        if (!tag.contains(key, Tag.TAG_LIST)) {
+            return;
+        }
+        ListTag list = tag.getList(key, Tag.TAG_COMPOUND);
+        for (int i = 0; i < list.size(); i++) {
+            out.add(PriceSpec.fromTag(list.getCompound(i), 0L));
+        }
+    }
+
     private static ShopSavedData create() {
         ShopSavedData data = new ShopSavedData();
         data.seedDefaultsIfEmpty();
@@ -556,6 +778,9 @@ public final class ShopSavedData extends SavedData {
         }
         if (!java.util.Arrays.equals(shopGuarantee, fresh.shopGuarantee)
                 || !java.util.Arrays.equals(buybackGuarantee, fresh.buybackGuarantee)) {
+            return false;
+        }
+        if (!mallPool.isEmpty() || !exchangePool.isEmpty()) {
             return false;
         }
         return sameIds(shopPool, fresh.shopPool) && sameIds(buybackPool, fresh.buybackPool);

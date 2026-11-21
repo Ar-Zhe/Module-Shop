@@ -1,13 +1,18 @@
 package cn.autoforged.module_shop.client.screen.shop;
 
 import cn.autoforged.module_shop.client.ClickSound;
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState;
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.screen.IOStyle;
+import cn.autoforged.module_shop.client.screen.Nav;
+import cn.autoforged.module_shop.client.screen.PhysicalCurrencyExchangeScreen;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
 import cn.autoforged.module_shop.client.ui.v2.V2;
+import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
 import io.github.humbleui.skija.Canvas;
+import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
@@ -18,7 +23,12 @@ import net.minecraft.network.chat.Component;
  */
 public final class ExchangePage implements ShopPage {
     private static final ListTable TABLE = new ListTable();
+    private static String query = "";
+
+    private SkiaTextField search;
+    private List<Integer> shown = List.of();
     private float[] addRect;
+    private float[] physExRect;
 
     @Override
     public String id() {
@@ -30,6 +40,20 @@ public final class ExchangePage implements ShopPage {
     }
 
     @Override
+    public void init(ShopHost host) {
+        search = new SkiaTextField(host.screen(), host.font(), 48)
+                .placeholder(tr("gui.module_shop.search.placeholder"))
+                .clearable(true)
+                .fontSize(V2.FS_S)
+                .onChange(t -> {
+                    query = t == null ? "" : t;
+                    TABLE.scrollToTop();
+                });
+        search.setValue(query);
+        host.registerInput(search.editBox());
+    }
+
+    @Override
     public void render(Canvas c, PageFrame f) {
         float x = f.x();
         float cy = f.y() + V2.BAR / 2;
@@ -38,6 +62,7 @@ public final class ExchangePage implements ShopPage {
         float tw = V2.bold(c, tr("tab.module_shop.exchange"), V2.FS_T, IOStyle.TEXT, x + 8, cy, 90, Text.Align.LEFT);
         float right = x + f.w() - 8;
         addRect = null;
+        physExRect = null;
         if (ClientShopData.canAdmin) {
             String al = tr("gui.module_shop.v2.exchange.add");
             float aw = V2.buttonWidth(al);
@@ -45,32 +70,80 @@ public final class ExchangePage implements ShopPage {
             boolean hv = f.mouseX() >= right && f.mouseX() < right + aw && f.mouseY() >= by && f.mouseY() < by + V2.CTRL;
             V2.button(c, al, V2.Btn.NORMAL, right, by, aw, V2.CTRL, hv ? 1 : 0);
             addRect = new float[]{right, by, aw, V2.CTRL};
-            right -= 8;
+            right -= 6;
         }
+        if (ClientHomeCurrencyState.physEnabled) {
+            String pl = tr("gui.module_shop.exchange.phys_btn");
+            float pw = V2.buttonWidth(pl);
+            right -= pw;
+            boolean hv = f.mouseX() >= right && f.mouseX() < right + pw && f.mouseY() >= by && f.mouseY() < by + V2.CTRL;
+            V2.button(c, pl, V2.Btn.PRIMARY, right, by, pw, V2.CTRL, hv ? 1 : 0);
+            physExRect = new float[]{right, by, pw, V2.CTRL};
+            right -= 6;
+        }
+        List<ClientShopData.ExchangeView> list = ClientShopData.exchange;
+        List<Integer> nextShown = new ArrayList<>();
         long total = 0;
-        for (ClientShopData.ExchangeView v : ClientShopData.exchange) {
+        for (int i = 0; i < list.size(); i++) {
+            ClientShopData.ExchangeView v = list.get(i);
             total += v.owned * v.value;
+            if (query.isBlank() || PageKit.matchesItemQuery(v.stack, query)) {
+                nextShown.add(i);
+            }
         }
+        shown = nextShown;
+        float sx = x + 8 + tw + 10;
+        float avail = right - 8 - sx;
+        float afterSearch = sx;
+        if (search != null) {
+            if (avail >= 52.0F) {
+                float sw = Math.min(145.0F, Math.max(52.0F, avail >= 220.0F ? 120.0F : avail));
+                search.visible(true).bounds(sx, by, sw, V2.CTRL);
+                search.render(c, f.mouseX(), f.mouseY(), f.dtMs());
+                afterSearch = sx + sw + 8.0F;
+            } else {
+                search.visible(false);
+            }
+        }
+        String topInfo = "";
         if (total > 0) {
-            V2.text(c, tr("gui.module_shop.v2.exchange.total", V2.money(total)), V2.FS_XS, IOStyle.TEXT_2, x + 8 + tw + 12,
-                    cy, right - (x + 8 + tw + 12), Text.Align.RIGHT);
+            topInfo = tr("gui.module_shop.v2.exchange.total", V2.money(total));
+        } else if (ClientHomeCurrencyState.physEnabled) {
+            topInfo = ClientHomeCurrencyState.tr("gui.module_shop.v2.exchange.dual_note",
+                    "星币物品兑换与实体货币账本相互独立");
+        }
+        if (!topInfo.isEmpty() && right - 8 - afterSearch >= 65.0F) {
+            V2.text(c, topInfo, V2.FS_XS, IOStyle.TEXT_2, afterSearch,
+                    cy, right - 8 - afterSearch, Text.Align.RIGHT);
         }
 
         float top = f.y() + V2.BAR;
         float bottom = f.y() + f.h() - V2.FOOT;
-        List<ClientShopData.ExchangeView> list = ClientShopData.exchange;
-        float[][] cols = V2.columns(x, f.w(), 10, 6, 14, 0, 90, 64, 84, 84, ClientShopData.canAdmin ? 170 : 92);
+        float actW = V2.buttonWidth(tr("gui.module_shop.v2.exchange.withdraw"))
+                + V2.buttonWidth(tr("gui.module_shop.v2.exchange.deposit")) + 3.0F;
+        if (ClientShopData.canAdmin) {
+            actW += V2.buttonWidth(tr("gui.module_shop.v2.remove"))
+                    + V2.buttonWidth(tr("gui.module_shop.v2.edit")) + 6.0F;
+        }
+        actW += 2.0F;
+        float gap = 5.0F;
+        float[][] baseCols = V2.columns(x, f.w() - actW - gap, 10, gap, 14, 0, 68, 44, 60, 62);
+        float[][] cols = new float[7][2];
+        System.arraycopy(baseCols, 0, cols, 0, 6);
+        cols[6][0] = x + f.w() - 10 - actW;
+        cols[6][1] = actW;
         String[] heads = {"", tr("gui.module_shop.v2.col.currency_item"), tr("gui.module_shop.v2.col.rate"),
                 tr("gui.module_shop.v2.col.have"), tr("gui.module_shop.v2.col.exchange_all"), tr("gui.module_shop.v2.col.withdrawable"), ""};
         Text.Align[] al = {Text.Align.LEFT, Text.Align.LEFT, Text.Align.RIGHT, Text.Align.RIGHT, Text.Align.RIGHT,
                 Text.Align.RIGHT, Text.Align.RIGHT};
         TABLE.layout(x, top, f.w(), bottom - top, cols, heads, al, null);
-        if (list.isEmpty()) {
+        if (shown.isEmpty()) {
             V2.tableHead(c, x, top, f.w(), cols, heads, al, -1, false);
-            V2.empty(c, tr("gui.module_shop.exchange.empty"), x, top + V2.HEAD, f.w(), bottom - top - V2.HEAD);
+            V2.empty(c, tr(list.isEmpty() ? "gui.module_shop.exchange.empty" : "gui.module_shop.v2.no_match"),
+                    x, top + V2.HEAD, f.w(), bottom - top - V2.HEAD);
         } else {
-            TABLE.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), list.size(), (cv, row, ry, hover) -> {
-                ClientShopData.ExchangeView v = list.get(row);
+            TABLE.render(c, f.host().items(), f.mouseX(), f.mouseY(), f.dtMs(), shown.size(), (cv, row, ry, hover) -> {
+                ClientShopData.ExchangeView v = list.get(shown.get(row));
                 float ry2 = ry + V2.ROW / 2;
                 f.host().items().add(v.stack, cols[0][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, false);
                 V2.text(cv, v.stack.getHoverName().getString(), V2.FS, IOStyle.TEXT, cols[1][0], ry2, cols[1][1], Text.Align.LEFT);
@@ -84,7 +157,15 @@ public final class ExchangePage implements ShopPage {
                     V2.text(cv, "—", V2.FS, IOStyle.TEXT_3, cols[4][0], ry2, cols[4][1], Text.Align.RIGHT);
                 }
                 long can = v.value <= 0 ? 0 : ClientShopData.balance / v.value;
-                V2.text(cv, tr("gui.module_shop.v2.exchange.pieces", V2.money(can)), V2.FS_S, IOStyle.TEXT_2, cols[5][0], ry2,
+                if (v.dailyWithdrawLimit > 0) {
+                    can = Math.min(can, Math.max(0, v.dailyWithdrawLimit - v.withdrawUsedToday));
+                }
+                boolean depBlocked = v.dailyDepositLimit > 0 && v.depositUsedToday >= v.dailyDepositLimit;
+                String canText = v.dailyWithdrawLimit > 0
+                        ? tr("gui.module_shop.v2.exchange.pieces_limit", V2.money(can),
+                                Math.max(0, v.dailyWithdrawLimit - v.withdrawUsedToday), v.dailyWithdrawLimit)
+                        : tr("gui.module_shop.v2.exchange.pieces", V2.money(can));
+                V2.text(cv, canText, V2.FS_S, IOStyle.TEXT_2, cols[5][0], ry2,
                         cols[5][1], Text.Align.RIGHT);
                 float bx = cols[6][0] + cols[6][1];
                 if (ClientShopData.canAdmin) {
@@ -94,14 +175,23 @@ public final class ExchangePage implements ShopPage {
                 bx = TABLE.button(cv, row, "withdraw", tr("gui.module_shop.v2.exchange.withdraw"),
                         can > 0 ? V2.Btn.NORMAL : V2.Btn.DISABLED, bx, ry, hover);
                 TABLE.button(cv, row, "deposit", tr("gui.module_shop.v2.exchange.deposit"),
-                        v.owned > 0 ? V2.Btn.NORMAL : V2.Btn.DISABLED, bx, ry, hover);
+                        v.owned > 0 && !depBlocked ? V2.Btn.NORMAL : V2.Btn.DISABLED, bx, ry, hover);
             });
         }
-        V2.foot(c, x, bottom, f.w(), tr("gui.module_shop.v2.exchange.count", list.size()), tr("gui.module_shop.v2.exchange.hint"));
+        String footLeft = query.isBlank()
+                ? tr("gui.module_shop.v2.exchange.count", list.size())
+                : tr("gui.module_shop.v2.showing", TABLE.firstVisible(), TABLE.lastVisible(), shown.size());
+        V2.foot(c, x, bottom, f.w(), footLeft, tr("gui.module_shop.v2.exchange.hint"));
     }
 
     @Override
     public boolean mouseClicked(PageFrame f, double mx, double my, int button) {
+        if (search != null && search.isVisible() && search.mouseClicked(mx, my, button)) {
+            return true;
+        }
+        if (search != null && search.isFocused()) {
+            search.blur();
+        }
         if (button != 0) {
             return false;
         }
@@ -110,15 +200,22 @@ public final class ExchangePage implements ShopPage {
             f.host().action("admin_exchange_add", null);
             return true;
         }
+        if (physExRect != null && mx >= physExRect[0] && mx < physExRect[0] + physExRect[2]
+                && my >= physExRect[1] && my < physExRect[1] + physExRect[3]) {
+            ClickSound.play();
+            net.minecraft.client.Minecraft.getInstance().execute(
+                    () -> Nav.open(new PhysicalCurrencyExchangeScreen()));
+            return true;
+        }
         if (TABLE.pressBar(mx, my)) {
             return true;
         }
         ListTable.Hit hit = TABLE.click(mx, my);
-        if (hit == null || hit.button() == null || hit.row() < 0) {
+        if (hit == null || hit.button() == null || hit.row() < 0 || hit.row() >= shown.size()) {
             return hit != null;
         }
         CompoundTag tag = new CompoundTag();
-        tag.putInt("index", hit.row());
+        tag.putInt("index", shown.get(hit.row()));
         String action = switch (hit.button()) {
             case "deposit" -> "exchange_deposit_gui";
             case "withdraw" -> "exchange_withdraw_gui";
@@ -134,12 +231,25 @@ public final class ExchangePage implements ShopPage {
     }
 
     @Override
+    public void clickedOutside() {
+        if (search != null && search.isFocused()) {
+            search.blur();
+        }
+    }
+
+    @Override
     public boolean mouseReleased(PageFrame f, double mx, double my, int button) {
+        if (search != null) {
+            search.mouseReleased(mx, my, button);
+        }
         return TABLE.releaseBar();
     }
 
     @Override
     public boolean mouseDragged(PageFrame f, double mx, double my, int button, double dx, double dy) {
+        if (search != null && search.mouseDragged(mx, my, button, dx, dy)) {
+            return true;
+        }
         return TABLE.dragBar(my);
     }
 
@@ -150,6 +260,9 @@ public final class ExchangePage implements ShopPage {
 
     @Override
     public void cancelInput() {
+        if (search != null) {
+            search.visible(false);
+        }
         TABLE.releaseBar();
     }
 }

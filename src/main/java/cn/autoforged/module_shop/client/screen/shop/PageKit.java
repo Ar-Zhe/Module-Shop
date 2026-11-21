@@ -1,14 +1,19 @@
 package cn.autoforged.module_shop.client.screen.shop;
 
 import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.ModNames;
 import cn.autoforged.module_shop.client.screen.IOStyle;
 import cn.autoforged.module_shop.client.ui.AtomUi;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
 import com.atom.lib.design.atomchat.SkiaDraw;
 import io.github.humbleui.skija.Canvas;
+import java.util.Locale;
+import javax.annotation.Nullable;
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 
 /** 各页面共用的小工具：卡片、物品槽、空状态、底部渐隐、物品纯名称、剩余时间文字。 */
@@ -186,5 +191,76 @@ public final class PageKit {
     /** {@link #distribute} 的无最小宽度版本。 */
     public static float[] distribute(float total, float[] ideal) {
         return distribute(total, ideal, null);
+    }
+
+    // ------------------------------------------------------------------ 搜索匹配
+
+    /**
+     * 多词空白分词 AND 匹配任意文本字段（大小写不敏感）。空查询返回 {@code true}。
+     */
+    public static boolean matchesQuery(@Nullable String query, @Nullable String... fields) {
+        if (query == null || query.isBlank()) {
+            return true;
+        }
+        if (fields == null || fields.length == 0) {
+            return false;
+        }
+        String[] lowerFields = new String[fields.length];
+        int count = 0;
+        for (String f : fields) {
+            if (f != null && !f.isEmpty()) {
+                lowerFields[count++] = f.toLowerCase(Locale.ROOT);
+            }
+        }
+        if (count == 0) {
+            return false;
+        }
+        for (String word : query.trim().toLowerCase(Locale.ROOT).split("\\s+")) {
+            if (word.isEmpty()) {
+                continue;
+            }
+            boolean hit = false;
+            for (int i = 0; i < count; i++) {
+                if (lowerFields[i].contains(word)) {
+                    hit = true;
+                    break;
+                }
+            }
+            if (!hit) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 物品全维度检索：多词空白分词 AND 匹配去格式码译名、完整注册名 {@code modid:path}、
+     * 下划线转空格路径以及模组显示名/原名/命名空间（{@link ModNames#matchesQuery}）。
+     */
+    public static boolean matchesItemQuery(@Nullable ItemStack stack, @Nullable String query) {
+        if (query == null || query.isBlank()) {
+            return true;
+        }
+        if (stack == null || stack.isEmpty()) {
+            return false;
+        }
+        String name = plainName(stack).toLowerCase(Locale.ROOT);
+        ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        String fullId = id == null ? "" : id.toString().toLowerCase(Locale.ROOT);
+        String pathWords = id == null ? "" : id.getPath().replace('_', ' ').toLowerCase(Locale.ROOT);
+        String ns = id == null ? "" : id.getNamespace();
+        for (String word : query.trim().toLowerCase(Locale.ROOT).split("\\s+")) {
+            if (word.isEmpty()) {
+                continue;
+            }
+            boolean hit = (!name.isEmpty() && name.contains(word))
+                    || (!fullId.isEmpty() && fullId.contains(word))
+                    || (!pathWords.isEmpty() && pathWords.contains(word))
+                    || (!ns.isEmpty() && ModNames.matchesQuery(ns, word));
+            if (!hit) {
+                return false;
+            }
+        }
+        return true;
     }
 }

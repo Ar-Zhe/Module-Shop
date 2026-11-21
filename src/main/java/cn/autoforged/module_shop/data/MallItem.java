@@ -24,6 +24,7 @@ import net.minecraft.world.item.ItemStack;
 public final class MallItem {
     public ItemStack stack = ItemStack.EMPTY;
     public long price;
+    public PriceSpec priceSpec = PriceSpec.ZERO;
     public Rarity rarity = Rarity.COMMON;
     /** 库存：-1 = 无限；0 = 售罄；>0 = 剩余数量。 */
     public int stock = -1;
@@ -31,8 +32,10 @@ public final class MallItem {
     public int stockMax = -1;
     /** 上架顺序（用于"默认排序"，同一次整模组导入保持注册表顺序）。 */
     public int sort = 0;
+    /** 是否开启“每人永久限购（不随商城刷新补货）”：开启后 stock 表示每人终身上限，定时/定时刷新不清空该物品限购记录。 */
+    public boolean permanentLimit = false;
     /**
-     * 「个人库存」模式下**每个玩家已经买走的件数**（玩家 → 已买）。
+     * 「个人库存」或「每人永久限购」模式下**每个玩家已经买走的件数**（玩家 → 已买）。
      *
      * <p>个人库存时 {@link #stock} 表示「每个玩家各自的上限」，不再被购买直接扣减；
      * 某玩家还剩几件 = {@code stock - 已买}（见 {@link #remainingFor}）。
@@ -45,10 +48,29 @@ public final class MallItem {
     }
 
     public MallItem(ItemStack stack, long price, Rarity rarity, int stock) {
+        this(stack, PriceSpec.star(price), rarity, stock);
+    }
+
+    public MallItem(ItemStack stack, PriceSpec spec, Rarity rarity, int stock) {
         this.stack = stack;
-        this.price = price;
+        setPriceSpec(spec);
         this.rarity = rarity;
         setStock(stock);
+    }
+
+    public void setPriceSpec(PriceSpec spec) {
+        this.priceSpec = spec == null ? PriceSpec.ZERO : spec;
+        this.price = this.priceSpec.supportsStar() ? this.priceSpec.starPrice : 0L;
+    }
+
+    public PriceSpec resolvePriceSpec() {
+        if (priceSpec == null) {
+            return PriceSpec.star(price);
+        }
+        if (priceSpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && priceSpec.starPrice != price) {
+            return PriceSpec.star(price);
+        }
+        return priceSpec;
     }
 
     /** 设置库存（同时把「补货目标」记成同一个数：管理员填多少，定时补货就补回多少）。 */
@@ -97,11 +119,14 @@ public final class MallItem {
 
     public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
-        tag.putLong("price", price);
+        resolvePriceSpec().writeToParent(tag, "priceSpec", "price");
         tag.putString("rarity", rarity.id());
         tag.putInt("stock", stock);
         tag.putInt("stockMax", stockMax);
         tag.putInt("sort", sort);
+        if (permanentLimit) {
+            tag.putBoolean("permanentLimit", true);
+        }
         // 个人库存：每个玩家买了多少（空表不写，全服库存模式下这一段永远是空的）
         if (!personalUsed.isEmpty()) {
             ListTag usedList = new ListTag();
@@ -133,24 +158,28 @@ public final class MallItem {
         // 直接按字段拼，不走 save()：save() 会把 personalUsed（每个买过的玩家一条）整表序列化，
         // 这里又马上删掉 —— 货架上千件、买家上百人时，每次下发快照都要白白构造几十万个 NBT 节点。
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
-        tag.putLong("price", price);
+        resolvePriceSpec().writeToParent(tag, "priceSpec", "price");
         tag.putString("rarity", rarity.id());
-        tag.putInt("stock", personal ? remainingFor(viewer) : stock);
+        tag.putInt("stock", (personal || permanentLimit) ? remainingFor(viewer) : stock);
         tag.putInt("stockMax", stockMax);
         tag.putInt("sort", sort);
+        if (permanentLimit) {
+            tag.putBoolean("permanentLimit", true);
+        }
         return tag;
     }
 
     public static MallItem load(CompoundTag tag, HolderLookup.Provider registries) {
         MallItem item = new MallItem();
         item.stack = ShopNbt.loadStack(tag, registries);
-        item.price = tag.getLong("price");
+        item.setPriceSpec(PriceSpec.readFromParent(tag, "priceSpec", "price"));
         item.rarity = Rarity.byId(tag.getString("rarity"));
         // 老存档没有 stock 字段时按"无限"处理（读成 0 会变成整店售罄）。
         item.stock = tag.contains("stock") ? tag.getInt("stock") : -1;
         // 老存档没有 stockMax：把当前库存当成补货目标（第一次补货时补回这个数）。
         item.stockMax = tag.contains("stockMax") ? tag.getInt("stockMax") : item.stock;
         item.sort = tag.getInt("sort");
+        item.permanentLimit = tag.getBoolean("permanentLimit");
         // 个人库存的已买记录（老存档没有这一段 = 还没人买过）
         ListTag usedList = tag.getList("personalUsed", Tag.TAG_COMPOUND);
         for (int i = 0; i < usedList.size(); i++) {

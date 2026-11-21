@@ -4,12 +4,17 @@ import cn.autoforged.module_shop.Config;
 import cn.autoforged.module_shop.data.AuctionEntry;
 import cn.autoforged.module_shop.data.NotificationType;
 import cn.autoforged.module_shop.data.PlayerAccount;
+import cn.autoforged.module_shop.data.PriceSpec;
+import cn.autoforged.module_shop.data.PriceSpec.CurrencyMode;
 import cn.autoforged.module_shop.data.ShopNbt;
 import cn.autoforged.module_shop.data.ShopSavedData;
 import cn.autoforged.module_shop.network.payload.ClientboundShopSyncPayload;
 import cn.autoforged.module_shop.shop.NotificationManager;
 import cn.autoforged.module_shop.shop.ShopManager;
 import cn.autoforged.module_shop.shop.TransactionLog;
+import cn.autoforged.module_shop.shop.currency.CurrencySettlement;
+import cn.autoforged.module_shop.shop.currency.PhysicalCurrencyConfig;
+import cn.autoforged.module_shop.shop.currency.PhysicalCurrencyEngine;
 import cn.autoforged.module_shop.shop.mail.MailTemplates;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -216,26 +221,82 @@ public final class AuctionService {
         SELLER_NOTIFY_AT.remove(id);
     }
 
-    /**
-     * 退款：先进余额（饱和），装不下的部分转金额邮件，绝不销毁。流水与托管由调用方负责。
-     *
-     * @return 实际进入余额的金额
-     */
-    private static long refund(MinecraftServer server, UUID owner, long amount, AuctionEntry entry, String note) {
+    private static long parsePositiveCount(String text) {
+        String s = text == null ? "" : text.trim();
+        if (s.isEmpty()) {
+            return 0L;
+        }
+        try {
+            long value = Long.parseLong(s);
+            if (value < 0L || value > Long.MAX_VALUE / 2L) {
+                return -1L;
+            }
+            return value;
+        } catch (NumberFormatException ex) {
+            return -1L;
+        }
+    }
+
+    private static long refund(MinecraftServer server, UUID owner, long amount, long physicalShare,
+                               AuctionEntry entry, String note) {
         if (owner == null || amount <= 0L) {
             return 0L;
         }
         ShopSavedData data = data(server);
         PlayerAccount account = data.account(owner);
-        long credited = ShopManager.credit(account, amount, Config.maxBalanceLimit());
-        if (credited < amount) {
-            ShopManager.addMoneyMail(server, owner, amount - credited, entry.stack.copy(),
-                    ShopManager.SOURCE_AUCTION_REFUND, "拍卖会系统", null);
+        if (entry != null && entry.isPhysical()) {
+            CurrencySettlement.payoutPhysTier(
+                    server, owner, entry.physTierKey, amount, ShopManager.SOURCE_AUCTION_REFUND);
+            TransactionLog.record(server, owner, TransactionLog.AUCTION_REFUND, "拍卖#" + entry.id,
+                    0L, account.balance,
+                    itemName(entry) + " " + note + " ["
+                            + CurrencySettlement.formatSpec(entry.specOf(amount), server) + "]");
+            data.setDirty();
+            return amount;
         }
-        TransactionLog.record(server, owner, TransactionLog.AUCTION_REFUND, "拍卖#" + entry.id,
-                amount, account.balance, itemName(entry) + " " + note);
+        long legacyPhys = Math.min(amount, Math.max(0L, physicalShare));
+        long deliverableLegacyPhys = 0L;
+        if (legacyPhys > 0L) {
+            deliverableLegacyPhys = deliverLegacyPhysicalShare(server, owner, legacyPhys,
+                    ShopManager.SOURCE_AUCTION_REFUND);
+        }
+        long starRefund = Math.max(0L, amount - deliverableLegacyPhys);
+        long settled = CurrencySettlement.payoutStarOnly(
+                server, owner, account, data, starRefund, false, true,
+                ShopManager.SOURCE_AUCTION_REFUND, "拍卖会系统",
+                entry == null ? ItemStack.EMPTY : entry.stack.copy());
+        TransactionLog.record(server, owner, TransactionLog.AUCTION_REFUND,
+                "拍卖#" + (entry == null ? 0L : entry.id),
+                starRefund, account.balance, (entry == null ? "" : itemName(entry)) + " " + note);
         data.setDirty();
-        return credited;
+        return settled + deliverableLegacyPhys;
+    }
+
+    /** 仅用于升级前老存档遗留混合托管资金的无损退还。 */
+    private static long deliverLegacyPhysicalShare(MinecraftServer server, UUID targetId, long units, String source) {
+        PhysicalCurrencyConfig cfg = PhysicalCurrencyConfig.get();
+        if (units <= 0L || !cfg.isActive() || server == null || targetId == null) {
+            return 0L;
+        }
+        var tiers = cfg.resolveTiers(server.registryAccess());
+        if (tiers.isEmpty()) {
+            return 0L;
+        }
+        long[] vals = new long[tiers.size()];
+        for (int i = 0; i < tiers.size(); i++) {
+            vals[i] = tiers.get(i).spec.value;
+        }
+        var plan = PhysicalCurrencyEngine.decomposePayout(units, vals);
+        long delivered = units - plan.remainder();
+        ServerPlayer online = server.getPlayerList().getPlayer(targetId);
+        for (int i = tiers.size() - 1; i >= 0; i--) {
+            int cnt = plan.counts()[i];
+            if (cnt > 0) {
+                PhysicalCurrencyEngine.deliverPhysicalItems(
+                        server, targetId, online, tiers.get(i).template, cnt, source);
+            }
+        }
+        return delivered;
     }
 
     // =================================================================== 上架
@@ -270,9 +331,31 @@ public final class AuctionService {
                 return;
             }
             boolean allowBid = !tag.contains("allowBid") || tag.getBoolean("allowBid");
-            long start = parseAmount(tag.getString("start"));
-            long increment = parseAmount(tag.getString("increment"));
-            long buyout = parseAmount(tag.getString("buyout"));
+            String physTier = tag.getString("physTier").trim();
+            if (physTier.isEmpty() && tag.contains("priceSpec", Tag.TAG_COMPOUND)) {
+                PriceSpec ps = PriceSpec.fromTag(tag.getCompound("priceSpec"), 0L);
+                if (ps.mode == CurrencyMode.PHYS_ONLY && !ps.physTierKey.isEmpty()) {
+                    physTier = ps.physTierKey;
+                }
+            }
+            boolean isPhys = !physTier.isEmpty() || "phys".equalsIgnoreCase(tag.getString("currencyMode").trim());
+            if (isPhys) {
+                PhysicalCurrencyConfig physCfg = PhysicalCurrencyConfig.get();
+                if (!physCfg.isActive()
+                        || physCfg.findResolvedTier(physTier, player.level().registryAccess()) == null) {
+                    err(player, "msg.module_shop.phys_tier_unavailable");
+                    return;
+                }
+                physTier = physCfg.canonicalTierKey(physTier);
+            }
+
+            long start = isPhys ? parsePositiveCount(tag.getString("start")) : parseAmount(tag.getString("start"));
+            if (start == 0L && tag.contains("priceSpec", Tag.TAG_COMPOUND)) {
+                PriceSpec ps = PriceSpec.fromTag(tag.getCompound("priceSpec"), 0L);
+                start = isPhys ? ps.physCount : ps.starPrice;
+            }
+            long increment = isPhys ? parsePositiveCount(tag.getString("increment")) : parseAmount(tag.getString("increment"));
+            long buyout = isPhys ? parsePositiveCount(tag.getString("buyout")) : parseAmount(tag.getString("buyout"));
             if (start < 0L || increment < 0L || buyout < 0L) {
                 err(player, "msg.module_shop.auction.err_amount");
                 return;
@@ -289,14 +372,14 @@ public final class AuctionService {
                 }
                 start = buyout;
             }
-            long minStart = Config.INSTANCE.auctionMinStartPrice.get();
-            long maxStart = Config.INSTANCE.auctionMaxStartPrice.get();
+            long minStart = isPhys ? 1L : Config.INSTANCE.auctionMinStartPrice.get();
+            long maxStart = isPhys ? 0L : Config.INSTANCE.auctionMaxStartPrice.get();
             if (start < minStart || (maxStart > 0L && start > maxStart)) {
                 err(player, "msg.module_shop.auction.err_start_range", minStart,
                         maxStart > 0L ? Long.toString(maxStart) : "∞");
                 return;
             }
-            long minInc = configIncrement();
+            long minInc = isPhys ? 1L : configIncrement();
             if (increment == 0L) {
                 increment = minInc;
             }
@@ -328,16 +411,33 @@ public final class AuctionService {
                 err(player, rule);
                 return;
             }
-            long fee = AuctionRules.listingFee(start);
             PlayerAccount account = ShopManager.account(player);
-            if (fee > 0L && account.balance < fee) {
-                err(player, "msg.module_shop.auction.err_fee", fee);
-                return;
-            }
-            // ---- 校验全部通过，下面不再有失败分支：先收费、再取物品、立刻入库 ----
-            if (fee > 0L && ShopManager.debit(account, fee, "auction_listing") < 0L) {
-                err(player, "msg.module_shop.auction.err_fee", fee);
-                return;
+            long fee;
+            if (isPhys) {
+                double pct = Config.INSTANCE.auctionListingFeePercent.get();
+                fee = pct <= 0.0D ? 0L : (long) Math.floor(start * pct / 100.0D);
+                if (fee > 0L) {
+                    var feePay = CurrencySettlement.payPhysTier(player, physTier, fee, ShopManager.SOURCE_EXCHANGE);
+                    if (!feePay.ok()) {
+                        player.displayClientMessage(
+                                Component.translatableWithFallback(feePay.failKey(), feePay.failFallback())
+                                        .withStyle(ChatFormatting.RED), false);
+                        CompoundTag reply = new CompoundTag();
+                        reply.putString("kind", "auction_result");
+                        reply.putBoolean("ok", false);
+                        ClientboundShopSyncPayload.send(player, reply);
+                        return;
+                    }
+                }
+            } else {
+                fee = AuctionRules.listingFee(start);
+                if (fee > 0L) {
+                    var feePay = CurrencySettlement.payStar(account, fee, "auction_listing");
+                    if (!feePay.ok()) {
+                        err(player, "msg.module_shop.auction.err_fee", fee);
+                        return;
+                    }
+                }
             }
             ItemStack taken = inSlot.split(count);
             inventory.setChanged();
@@ -346,6 +446,7 @@ public final class AuctionService {
             entry.seller = player.getUUID();
             entry.sellerName = player.getGameProfile().getName();
             entry.stack = taken;
+            entry.physTierKey = isPhys ? physTier : "";
             entry.startPrice = start;
             entry.minIncrement = increment;
             entry.buyoutPrice = buyout;
@@ -358,11 +459,22 @@ public final class AuctionService {
             data.auctions.add(entry);
             changed(data, entry);
             if (fee > 0L) {
-                TransactionLog.record(player.server, player.getUUID(), TransactionLog.AUCTION_LISTING,
-                        "拍卖#" + entry.id, -fee, account.balance, itemName(entry) + "×" + count);
+                if (isPhys) {
+                    TransactionLog.record(player.server, player.getUUID(), TransactionLog.AUCTION_LISTING,
+                            "拍卖#" + entry.id, 0L, account.balance,
+                            itemName(entry) + "×" + count + " [" + CurrencySettlement.formatSpec(entry.specOf(fee), player.server) + "]");
+                } else {
+                    TransactionLog.record(player.server, player.getUUID(), TransactionLog.AUCTION_LISTING,
+                            "拍卖#" + entry.id, -fee, account.balance, itemName(entry) + "×" + count);
+                }
             }
-            msg(player, "msg.module_shop.auction_created", ChatFormatting.GREEN, entry.stack.getHoverName(),
-                    allowBid ? start : buyout);
+            if (isPhys) {
+                msg(player, "msg.module_shop.auction_created_spec", ChatFormatting.GREEN, entry.stack.getHoverName(),
+                        CurrencySettlement.formatSpec(entry.specOf(allowBid ? start : buyout), player.server));
+            } else {
+                msg(player, "msg.module_shop.auction_created", ChatFormatting.GREEN, entry.stack.getHoverName(),
+                        allowBid ? start : buyout);
+            }
             ok(player, "create");
             ShopManager.sendSnapshot(player, "auction", true);
         }
@@ -396,8 +508,11 @@ public final class AuctionService {
             }
             long fee = AuctionRules.listingFee(price);
             PlayerAccount account = ShopManager.account(player);
-            if (error == null && fee > 0L && ShopManager.debit(account, fee, "auction_listing") < 0L) {
-                error = "msg.module_shop.auction.err_fee";
+            if (error == null && fee > 0L) {
+                var feePay = CurrencySettlement.payStar(account, fee, "auction_listing");
+                if (!feePay.ok()) {
+                    error = "msg.module_shop.auction.err_fee";
+                }
             }
             if (error != null) {
                 ShopManager.addItemOrMail(player, stack, ShopManager.SOURCE_AUCTION_UNSOLD);
@@ -465,12 +580,14 @@ public final class AuctionService {
                 sendDetail(player, entry, null);
                 return;
             }
-            long amount = parseAmount(tag.getString("amount"));
+            long amount = entry.isPhysical()
+                    ? parsePositiveCount(tag.getString("amount"))
+                    : parseAmount(tag.getString("amount"));
             if (amount <= 0L) {
                 err(player, "msg.module_shop.auction.err_amount");
                 return;
             }
-            long minimum = entry.minimumNext(configIncrement());
+            long minimum = entry.minimumNext(entry.isPhysical() ? 1L : configIncrement());
             if (amount < minimum) {
                 err(player, "msg.module_shop.bid_too_low", minimum);
                 return;
@@ -480,21 +597,32 @@ public final class AuctionService {
                 return;
             }
             PlayerAccount bidder = ShopManager.account(player);
-            if (bidder.balance < amount) {
-                err(player, "msg.module_shop.no_money");
-                return;
-            }
-            // ---- 扣款 → 退还上一位 → 更新托管，同一调用内完成 ----
-            if (ShopManager.debit(bidder, amount, "auction_bid") < 0L) {
-                err(player, "msg.module_shop.no_money");
+            CurrencySettlement.PayResult bidPay = entry.isPhysical()
+                    ? CurrencySettlement.payPhysTier(player, entry.physTierKey, amount, ShopManager.SOURCE_EXCHANGE)
+                    : CurrencySettlement.payStar(bidder, amount, "auction_bid");
+            if (!bidPay.ok()) {
+                if ("msg.module_shop.no_money".equals(bidPay.failKey())) {
+                    err(player, "msg.module_shop.no_money");
+                } else {
+                    player.displayClientMessage(
+                            Component.translatableWithFallback(bidPay.failKey(), bidPay.failFallback())
+                                    .withStyle(ChatFormatting.RED), false);
+                    CompoundTag reply = new CompoundTag();
+                    reply.putString("kind", "auction_result");
+                    reply.putBoolean("ok", false);
+                    ClientboundShopSyncPayload.send(player, reply);
+                }
                 return;
             }
             UUID previous = entry.topBidder;
             long previousEscrow = entry.escrow;
+            long previousPhysicalEscrow = entry.physicalEscrow;
             if (previous != null && previousEscrow > 0L) {
-                refund(player.server, previous, previousEscrow, entry, "被超价退款");
+                refund(player.server, previous, previousEscrow,
+                        entry.isPhysical() ? 0L : previousPhysicalEscrow, entry, "被超价退款");
             }
             entry.escrow = amount;
+            entry.physicalEscrow = 0L;
             entry.lastBid = entry.currentBid;
             entry.currentBid = amount;
             entry.topBidder = player.getUUID();
@@ -502,11 +630,25 @@ public final class AuctionService {
             entry.addBid(player.getUUID(), entry.topBidderName, amount, now);
             boolean extended = applyAntiSnipe(entry, now);
             changed(data, entry);
-            TransactionLog.record(player.server, player.getUUID(), TransactionLog.AUCTION_BID,
-                    entry.sellerName == null ? "" : entry.sellerName, -amount, bidder.balance,
-                    itemName(entry) + " 拍卖#" + entry.id);
+            if (entry.isPhysical()) {
+                TransactionLog.record(player.server, player.getUUID(), TransactionLog.AUCTION_BID,
+                        entry.sellerName == null ? "" : entry.sellerName, 0L, bidder.balance,
+                        itemName(entry) + " 拍卖#" + entry.id + " ["
+                                + CurrencySettlement.formatSpec(entry.specOf(amount), player.server) + "]");
+            } else {
+                TransactionLog.record(player.server, player.getUUID(), TransactionLog.AUCTION_BID,
+                        entry.sellerName == null ? "" : entry.sellerName, -amount, bidder.balance,
+                        itemName(entry) + " 拍卖#" + entry.id);
+            }
+            cn.autoforged.module_shop.api.event.ApiEvents.post(
+                    new cn.autoforged.module_shop.api.event.AuctionBidPlacedEvent(player.getUUID(), entry.id, amount));
 
-            msg(player, "msg.module_shop.bid_placed", ChatFormatting.GREEN, amount, entry.stack.getHoverName());
+            if (entry.isPhysical()) {
+                msg(player, "msg.module_shop.bid_placed_spec", ChatFormatting.GREEN,
+                        CurrencySettlement.formatSpec(entry.specOf(amount), player.server), entry.stack.getHoverName());
+            } else {
+                msg(player, "msg.module_shop.bid_placed", ChatFormatting.GREEN, amount, entry.stack.getHoverName());
+            }
             if (extended) {
                 msg(player, "msg.module_shop.auction.extended", ChatFormatting.AQUA,
                         Config.INSTANCE.antiSnipeExtensionSeconds.get());
@@ -610,32 +752,51 @@ public final class AuctionService {
             // 自己就是领先者：已托管的出价抵扣一口价，只需补差额。
             long due = selfTop ? Math.max(0L, price - entry.escrow) : price;
             PlayerAccount buyer = ShopManager.account(player);
-            // ② 余额检查
-            if (buyer.balance < due) {
-                err(player, "msg.module_shop.no_money");
-                return;
-            }
-            // ③ 扣买家
-            if (due > 0L && ShopManager.debit(buyer, due, "auction_buyout") < 0L) {
-                err(player, "msg.module_shop.no_money");
+            CurrencySettlement.PayResult buyPay = entry.isPhysical()
+                    ? CurrencySettlement.payPhysTier(player, entry.physTierKey, due, ShopManager.SOURCE_EXCHANGE)
+                    : CurrencySettlement.payStar(buyer, due, "auction_buyout");
+            if (!buyPay.ok()) {
+                if ("msg.module_shop.no_money".equals(buyPay.failKey())) {
+                    err(player, "msg.module_shop.no_money");
+                } else {
+                    player.displayClientMessage(
+                            Component.translatableWithFallback(buyPay.failKey(), buyPay.failFallback())
+                                    .withStyle(ChatFormatting.RED), false);
+                    CompoundTag reply = new CompoundTag();
+                    reply.putString("kind", "auction_result");
+                    reply.putBoolean("ok", false);
+                    ClientboundShopSyncPayload.send(player, reply);
+                }
                 return;
             }
             // ④ 退还原领先者
             if (!selfTop && entry.topBidder != null && entry.escrow > 0L) {
                 UUID previous = entry.topBidder;
                 long previousEscrow = entry.escrow;
-                refund(player.server, previous, previousEscrow, entry, "一口价成交退款");
+                long previousPhys = entry.physicalEscrow;
+                refund(player.server, previous, previousEscrow,
+                        entry.isPhysical() ? 0L : previousPhys, entry, "一口价成交退款");
                 notifyOutbid(player.server, entry, previous, previousEscrow, price);
             } else if (selfTop && entry.escrow > price) {
-                // 理论上不会出现（出价不能达到一口价），防御性地把多出的部分退回。
-                refund(player.server, player.getUUID(), entry.escrow - price, entry, "一口价差额退款");
+                long excess = entry.escrow - price;
+                long excessPhys = entry.isPhysical() ? 0L : Math.min(excess, entry.physicalEscrow);
+                refund(player.server, player.getUUID(), excess, excessPhys, entry, "一口价差额退款");
+                entry.physicalEscrow = Math.max(0L, entry.physicalEscrow - excessPhys);
             }
             entry.escrow = price;
+            entry.physicalEscrow = 0L;
             entry.topBidder = player.getUUID();
             entry.topBidderName = player.getGameProfile().getName();
-            TransactionLog.record(player.server, player.getUUID(), TransactionLog.AUCTION_BUYOUT,
-                    entry.sellerName == null ? "" : entry.sellerName, -due, buyer.balance,
-                    itemName(entry) + " 拍卖#" + entry.id);
+            if (entry.isPhysical()) {
+                TransactionLog.record(player.server, player.getUUID(), TransactionLog.AUCTION_BUYOUT,
+                        entry.sellerName == null ? "" : entry.sellerName, 0L, buyer.balance,
+                        itemName(entry) + " 拍卖#" + entry.id + " ["
+                                + CurrencySettlement.formatSpec(entry.specOf(due), player.server) + "]");
+            } else {
+                TransactionLog.record(player.server, player.getUUID(), TransactionLog.AUCTION_BUYOUT,
+                        entry.sellerName == null ? "" : entry.sellerName, -due, buyer.balance,
+                        itemName(entry) + " 拍卖#" + entry.id);
+            }
             // ⑤⑥⑦⑧ 交付物品、结算货款、记录流水、结束拍卖
             settle(player.server, entry, AuctionEntry.BUYOUT, "");
             ok(player, "buyout");
@@ -667,7 +828,10 @@ public final class AuctionService {
     }
 
     private static void adminCancel(ServerPlayer player, long id) {
-        if (!player.hasPermissions(2)) {
+        if (!ShopManager.canEditAdmin(player)) {
+            if (player != null && player.hasPermissions(2)) {
+                ShopManager.promptAdminAuth(player);
+            }
             return;
         }
         synchronized (ShopManager.LOCK) {
@@ -683,7 +847,10 @@ public final class AuctionService {
     }
 
     private static void adminEnd(ServerPlayer player, long id) {
-        if (!player.hasPermissions(2)) {
+        if (!ShopManager.canEditAdmin(player)) {
+            if (player != null && player.hasPermissions(2)) {
+                ShopManager.promptAdminAuth(player);
+            }
             return;
         }
         synchronized (ShopManager.LOCK) {
@@ -783,8 +950,10 @@ public final class AuctionService {
     private static void refundEscrow(MinecraftServer server, AuctionEntry entry, String note) {
         if (entry.topBidder != null && entry.escrow > 0L) {
             long amount = entry.escrow;
+            long phys = entry.physicalEscrow;
             entry.escrow = 0L;
-            refund(server, entry.topBidder, amount, entry, note);
+            entry.physicalEscrow = 0L;
+            refund(server, entry.topBidder, amount, phys, entry, note);
             ServerPlayer online = server.getPlayerList().getPlayer(entry.topBidder);
             if (online != null) {
                 online.displayClientMessage(Component.translatable("msg.module_shop.auction_broken_refund", amount)
@@ -806,7 +975,14 @@ public final class AuctionService {
             data.auctionAnomaly("拍卖#" + entry.id + " 托管额 " + entry.escrow + " 与成交价不一致（当前价 "
                     + entry.currentBid + "，一口价 " + entry.buyoutPrice + "），按托管额结算");
         }
-        long fee = AuctionRules.saleFee(price);
+        boolean isPhys = entry.isPhysical();
+        long fee;
+        if (isPhys) {
+            double pct = Config.INSTANCE.auctionFeePercent.get();
+            fee = (pct <= 0.0D || price <= 0L) ? 0L : Math.min(price, (long) Math.floor(price * (pct / 100.0D)));
+        } else {
+            fee = AuctionRules.saleFee(price);
+        }
         long net = price - fee;
         UUID winner = entry.topBidder;
         entry.buyer = winner;
@@ -814,41 +990,81 @@ public final class AuctionService {
         entry.finalPrice = price;
         entry.fee = fee;
         entry.net = net;
-        // 托管资金转出：net 给卖家，fee 作为系统回收。先清零托管，再发信（发信不会失败，最坏进超额邮箱）。
+        long physEscrow = entry.physicalEscrow;
         entry.escrow = 0L;
+        entry.physicalEscrow = 0L;
         String winnerName = ShopManager.nameOf(server, winner);
+        String priceDisplay = isPhys
+                ? CurrencySettlement.formatSpec(entry.specOf(price), server)
+                : Long.toString(price);
+        String feeDisplay = isPhys
+                ? CurrencySettlement.formatSpec(entry.specOf(fee), server)
+                : Long.toString(fee);
+        String netDisplay = isPhys
+                ? CurrencySettlement.formatSpec(entry.specOf(net), server)
+                : Long.toString(net);
         MailTemplates.Template wonTemplate = AuctionEntry.BUYOUT.equals(outcome)
                 ? MailTemplates.Template.AUCTION_BUYOUT_WON : MailTemplates.Template.AUCTION_WON;
         ShopManager.addMailDraft(server, winner, MailTemplates.build(wonTemplate,
                         MailTemplates.map("player", winnerName,
                                 "item", MailTemplates.itemText(entry.stack, true),
-                                "price", Long.toString(price)))
+                                "price", priceDisplay))
                 .source(ShopManager.SOURCE_AUCTION_WON)
                 .addItem(entry.stack.copy()));
         if (net > 0L) {
-            ShopManager.addMailDraft(server, entry.seller, MailTemplates.build(MailTemplates.Template.AUCTION_SOLD,
-                            MailTemplates.map("player", ShopManager.nameOf(server, entry.seller),
-                                    "item", MailTemplates.itemText(entry.stack, true),
-                                    "price", Long.toString(price),
-                                    "fee", Long.toString(fee),
-                                    "income", Long.toString(net)))
-                    .source(ShopManager.SOURCE_AUCTION_SOLD)
-                    .sender(entry.buyerName)
-                    .money(net)
-                    .moneyDisplay(entry.stack.copy()));
+            if (isPhys) {
+                CurrencySettlement.payoutPhysTier(server, entry.seller, entry.physTierKey, net,
+                        ShopManager.SOURCE_AUCTION_SOLD);
+                ShopManager.addMailDraft(server, entry.seller, MailTemplates.build(MailTemplates.Template.AUCTION_SOLD,
+                                MailTemplates.map("player", ShopManager.nameOf(server, entry.seller),
+                                        "item", MailTemplates.itemText(entry.stack, true),
+                                        "price", priceDisplay,
+                                        "fee", feeDisplay,
+                                        "income", netDisplay))
+                        .source(ShopManager.SOURCE_AUCTION_SOLD)
+                        .sender(entry.buyerName));
+            } else {
+                long legacyPhys = physEscrow > 0L ? Math.min(net, physEscrow) : 0L;
+                long deliverablePhys = legacyPhys > 0L
+                        ? deliverLegacyPhysicalShare(server, entry.seller, legacyPhys, ShopManager.SOURCE_AUCTION_SOLD)
+                        : 0L;
+                long virtMailNet = Math.max(0L, net - deliverablePhys);
+                MailTemplates.DraftMail soldMail = MailTemplates.build(MailTemplates.Template.AUCTION_SOLD,
+                                MailTemplates.map("player", ShopManager.nameOf(server, entry.seller),
+                                        "item", MailTemplates.itemText(entry.stack, true),
+                                        "price", Long.toString(price),
+                                        "fee", Long.toString(fee),
+                                        "income", Long.toString(net)))
+                        .source(ShopManager.SOURCE_AUCTION_SOLD)
+                        .sender(entry.buyerName)
+                        .moneyDisplay(entry.stack.copy());
+                if (virtMailNet > 0L) {
+                    soldMail.money(virtMailNet);
+                }
+                ShopManager.addMailDraft(server, entry.seller, soldMail);
+            }
         }
         TransactionLog.record(server, winner, TransactionLog.AUCTION_WIN, entry.sellerName, 0L,
                 balanceOf(data, winner), itemName(entry) + "×" + entry.stack.getCount() + " 拍卖#" + entry.id
-                        + "（成交价 " + price + "，物品进邮箱）");
-        TransactionLog.record(server, entry.seller, TransactionLog.AUCTION_SELL, entry.buyerName, net,
-                balanceOf(data, entry.seller), itemName(entry) + " 拍卖#" + entry.id + "（成交 " + price
-                        + "，手续费 " + fee + "，货款存邮箱）");
+                        + "（成交价 " + priceDisplay + "，物品进邮箱）");
+        TransactionLog.record(server, entry.seller, TransactionLog.AUCTION_SELL, entry.buyerName,
+                isPhys ? 0L : net, balanceOf(data, entry.seller),
+                itemName(entry) + " 拍卖#" + entry.id + "（成交 " + priceDisplay
+                        + "，手续费 " + feeDisplay + "，到账 " + netDisplay + "）");
         NotificationManager.notify(server, entry.seller, NotificationType.AUCTION);
         NotificationManager.notify(server, winner, NotificationType.AUCTION);
         ServerPlayer seller = server.getPlayerList().getPlayer(entry.seller);
         if (seller != null) {
-            seller.displayClientMessage(Component.translatable("msg.module_shop.auction_sold_fee",
-                    entry.stack.getHoverName(), price, fee, net).withStyle(ChatFormatting.GREEN), false);
+            if (isPhys) {
+                seller.displayClientMessage(Component.translatableWithFallback(
+                        "msg.module_shop.auction_sold_fee_spec",
+                        "拍品 %s 以 %s 成交（手续费 %s，实得 %s）",
+                        entry.stack.getHoverName(), priceDisplay, feeDisplay, netDisplay)
+                        .withStyle(ChatFormatting.GREEN), false);
+            } else {
+                seller.displayClientMessage(Component.translatable("msg.module_shop.auction_sold_fee",
+                        entry.stack.getHoverName(), price, fee, net).withStyle(ChatFormatting.GREEN), false);
+            }
             seller.playNotifySound(SoundEvents.PLAYER_LEVELUP, SoundSource.PLAYERS, 0.6F, 1.4F);
         }
         ServerPlayer winnerPlayer = server.getPlayerList().getPlayer(winner);
@@ -1023,8 +1239,11 @@ public final class AuctionService {
         c.putBoolean("iBid", e.bidders.contains(me));
         c.putLong("buyout", e.buyoutPrice);
         c.putBoolean("allowBid", e.allowBid);
-        c.putLong("increment", e.increment(configIncrement()));
-        c.putLong("minNext", e.minimumNext(configIncrement()));
+        long effCfgInc = e.isPhysical() ? 1L : configIncrement();
+        c.putLong("increment", e.increment(effCfgInc));
+        c.putLong("minNext", e.minimumNext(effCfgInc));
+        c.putString("physTier", e.physTierKey == null ? "" : e.physTierKey);
+        e.specOf(e.hasBid() ? e.currentBid : e.startPrice).writeToParent(c, "priceSpec", null);
         c.putInt("bidders", e.bidders.size());
         c.putInt("bidCount", e.bidCount);
         c.putLong("createdAgo", Math.max(0L, now - e.createdAt));
@@ -1156,7 +1375,7 @@ public final class AuctionService {
         tag.putString("status", entry.status);
         tag.putBoolean("canCancel", entry.active() && player.getUUID().equals(entry.seller) && !entry.hasBid());
         tag.putBoolean("admin", player.hasPermissions(2));
-        tag.putLong("balance", ShopManager.account(player).balance);
+        tag.putLong("balance", Math.max(0L, ShopManager.account(player).balance));
         tag.putLong("finalPrice", entry.finalPrice);
         tag.putString("buyerName", entry.buyerName == null ? "" : entry.buyerName);
         tag.putLong("endedAgo", entry.settledAt > 0L ? Math.max(0L, now - entry.settledAt) : 0L);
@@ -1218,6 +1437,8 @@ public final class AuctionService {
             c.putLong("startPrice", e.startPrice);
             c.putLong("increment", e.minIncrement);
             c.putLong("buyout", e.buyoutPrice);
+            c.putString("physTier", e.physTierKey == null ? "" : e.physTierKey);
+            e.specOf(e.finalPrice > 0L ? e.finalPrice : e.startPrice).writeToParent(c, "priceSpec", null);
             c.putBoolean("allowBid", e.allowBid);
             c.putInt("duration", (int) Math.max(1L, e.durationMs / 60_000L));
             c.putInt("bidCount", e.bidCount);
@@ -1233,7 +1454,10 @@ public final class AuctionService {
     // =================================================================== 管理员配置
 
     private static void sendAdminConfig(ServerPlayer player) {
-        if (!player.hasPermissions(2)) {
+        if (!ShopManager.canEditAdmin(player)) {
+            if (player != null && player.hasPermissions(2)) {
+                ShopManager.promptAdminAuth(player);
+            }
             return;
         }
         Config c = Config.INSTANCE;
@@ -1299,7 +1523,10 @@ public final class AuctionService {
     }
 
     private static void saveAdminConfig(ServerPlayer player, CompoundTag t) {
-        if (!player.hasPermissions(2)) {
+        if (!ShopManager.canEditAdmin(player)) {
+            if (player != null && player.hasPermissions(2)) {
+                ShopManager.promptAdminAuth(player);
+            }
             return;
         }
         Config c = Config.INSTANCE;
