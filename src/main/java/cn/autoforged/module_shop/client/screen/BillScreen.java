@@ -26,7 +26,7 @@ import net.minecraft.network.chat.Component;
  *     <li>外部插件通过 {@code /shop wallet log} 记进来的收支也会出现在这里（类型显示为"外部账目"）。</li>
  * </ul>
  */
-public class BillScreen extends Screen {
+public class BillScreen extends SkiaDialog {
     private static final int PANEL_W = 392;
     private static final int PANEL_H = 252;
     private static final int ROW_H = 24;
@@ -51,8 +51,21 @@ public class BillScreen extends Screen {
     private int pointerX;
     private int pointerY;
 
+    /** 只显示这些类型的流水（null = 全部）。「我的商店 → 交易记录」只看摊位买卖。 */
+    private final java.util.Set<String> onlyTypes;
+
     public BillScreen() {
-        super(Component.translatable("gui.module_shop.bill.title"));
+        this(null, "gui.module_shop.bill.title");
+    }
+
+    public BillScreen(java.util.Set<String> onlyTypes, String titleKey) {
+        super(Component.translatable(titleKey));
+        this.onlyTypes = onlyTypes;
+    }
+
+    /** 我的商店的交易记录：摊位购买 + 摊位出售。 */
+    public static BillScreen stallRecords() {
+        return new BillScreen(java.util.Set.of("stall_buy", "stall_sell"), "gui.module_shop.stall.records_title");
     }
 
     private int left() {
@@ -92,11 +105,20 @@ public class BillScreen extends Screen {
     /** 当前筛选下的明细列表（最新在前）。 */
     private List<ClientShopData.BillEntry> filtered() {
         List<ClientShopData.BillEntry> list = new ArrayList<>();
+        String q = skia() ? this.skQuery : "";
         for (ClientShopData.BillEntry entry : ClientShopData.bill) {
+            if (this.onlyTypes != null && !this.onlyTypes.contains(entry.type)) {
+                continue;
+            }
             if (this.filter == FILTER_OUT && entry.amount >= 0L) {
                 continue;
             }
             if (this.filter == FILTER_IN && entry.amount <= 0L) {
+                continue;
+            }
+            if (!q.isBlank() && !cn.autoforged.module_shop.client.screen.shop.PageKit.matchesQuery(q,
+                    typeName(entry).getString(), entry.party, entry.note,
+                    Long.toString(entry.amount), ClientShopData.money(entry.amount))) {
                 continue;
             }
             list.add(entry);
@@ -161,6 +183,9 @@ public class BillScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         this.pointerX = mouseX;
         this.pointerY = mouseY;
         this.tabs.clear();
@@ -332,6 +357,159 @@ public class BillScreen extends Screen {
         }
     }
 
+    // ------------------------------------------------------------------ Skija
+
+    private final cn.autoforged.module_shop.client.ui.widget.ScrollController skScroll =
+            new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skSearch;
+    private String skQuery = "";
+
+    @Override
+    protected void initSkia() {
+        this.skSearch = field(48, Component.translatable("gui.module_shop.search.placeholder").getString())
+                .clearable(true);
+        this.skSearch.editBox().setValue(this.skQuery);
+        this.skSearch.onChange(v -> {
+            this.skQuery = v == null ? "" : v;
+            this.skScroll.scrollTo(0, false);
+        });
+    }
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 392.0F;
+        float h = 258.0F;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        panel(c, x, y, w, h, this.title.getString());
+        // 汇总卡
+        float cardY = y + HEADER_H + 8;
+        card(c, innerX, cardY, innerW, 36);
+        small(c, Component.translatable("gui.module_shop.bill.balance").getString(), innerX + 8, cardY + 10, 80,
+                IOStyle.TEXT_2);
+        small(c, Component.translatable("gui.module_shop.bill.count", ClientShopData.billSize,
+                ClientShopData.billLimit).getString(), innerX + 88, cardY + 10, 108, IOStyle.TEXT_3);
+        cn.autoforged.module_shop.client.ui.render.Text.drawLine(c,
+                ClientShopData.money(ClientShopData.billBalance), cn.autoforged.module_shop.client.ui.AtomUi.BOLD,
+                cn.autoforged.module_shop.client.ui.render.Text.TITLE, IOStyle.ORANGE, innerX + 8, cardY + 24, 180,
+                cn.autoforged.module_shop.client.ui.render.Text.Align.LEFT);
+        float colX = innerX + innerW - 168;
+        small(c, Component.translatable("gui.module_shop.bill.today_in",
+                ClientShopData.money(ClientShopData.billTodayIn)).getString(), colX, cardY + 8, 160, IOStyle.GREEN);
+        small(c, Component.translatable("gui.module_shop.bill.today_out",
+                ClientShopData.money(ClientShopData.billTodayOut)).getString(), colX, cardY + 18, 160, IOStyle.RED);
+        small(c, Component.translatable("gui.module_shop.bill.month", ClientShopData.money(ClientShopData.billMonthOut),
+                ClientShopData.money(ClientShopData.billMonthIn)).getString(), colX, cardY + 28, 160, IOStyle.TEXT_2);
+        // 筛选 + 搜索
+        String[] keys = {"gui.module_shop.bill.filter_all", "gui.module_shop.bill.filter_out",
+                "gui.module_shop.bill.filter_in"};
+        float tabY = cardY + 44;
+        float tx = innerX;
+        for (int i = 0; i < keys.length; i++) {
+            final int idx = i;
+            chip(c, "filter" + i, Component.translatable(keys[i]).getString(), tx, tabY, 48, 16, this.filter == i,
+                    IOStyle.BLUE, () -> {
+                        if (this.filter != idx) {
+                            this.filter = idx;
+                            this.skScroll.reset();
+                        }
+                    });
+            tx += 52;
+        }
+        if (this.skSearch != null) {
+            this.skSearch.bounds(tx + 4, tabY, Math.max(80.0F, innerX + innerW - (tx + 4)), 16);
+        }
+        // 列表
+        buildRows();
+        float listY = tabY + 22;
+        float listH = y + h - PAD - 20 - 6 - listY;
+        if (this.rows.isEmpty()) {
+            String emptyMsg = ClientShopData.bill.isEmpty() || this.skQuery.isBlank()
+                    ? Component.translatable("gui.module_shop.bill.empty").getString()
+                    : Component.translatable("gui.module_shop.search.empty").getString();
+            center(c, emptyMsg, innerX, listY + 30, innerW, IOStyle.TEXT_2);
+        } else {
+            float contentH = 0;
+            for (Row row : this.rows) {
+                contentH += row.dayHeader() ? DAY_H + 2 : ROW_H;
+            }
+            float oy = beginList(c, this.skScroll, innerX, listY, innerW, listH, contentH);
+            float cy = oy;
+            for (Row row : this.rows) {
+                float rh = row.dayHeader() ? DAY_H + 2 : ROW_H;
+                if (cy + rh > listY && cy < listY + listH) {
+                    if (row.dayHeader()) {
+                        skDay(c, innerX, cy, innerW - 10, row);
+                    } else {
+                        skEntry(c, innerX, cy, innerW - 10, row.entry());
+                    }
+                }
+                cy += rh;
+            }
+            endList(c);
+        }
+        // 底部
+        float by = y + h - PAD - 20;
+        button(c, "back", Component.translatable("gui.module_shop.back").getString(), innerX, by, 64, 20,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, this::onClose);
+        button(c, "refresh", Component.translatable("gui.module_shop.bill.refresh").getString(),
+                innerX + innerW - 64, by, 64, 20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, true,
+                this::requestBill);
+        if (ClientShopData.billUpdatedAt > 0L) {
+            long ago = Math.max(0L, (System.currentTimeMillis() - ClientShopData.billUpdatedAt) / 1000L);
+            center(c, Component.translatable("gui.module_shop.bill.updated", ago).getString(), innerX, by + 10,
+                    innerW, IOStyle.TEXT_3);
+        }
+    }
+
+    private void skDay(io.github.humbleui.skija.Canvas c, float x, float y, float w, Row row) {
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x, y + 2, w, DAY_H - 2, 2, IOStyle.CARD);
+        small(c, row.dayText(), x + 6, y + 1 + DAY_H / 2.0F, w / 2, IOStyle.TEXT);
+        String detail = Component.translatable("gui.module_shop.bill.day_sum",
+                row.dayOut() > 0L ? "-" + ClientShopData.money(row.dayOut()) : "-",
+                row.dayIn() > 0L ? "+" + ClientShopData.money(row.dayIn()) : "-").getString();
+        cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, detail,
+                cn.autoforged.module_shop.client.ui.AtomUi.REGULAR, cn.autoforged.module_shop.client.ui.render.Text.SMALL,
+                IOStyle.TEXT_3, x, y + 1 + DAY_H / 2.0F, w - 6, cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
+    }
+
+    private void skEntry(io.github.humbleui.skija.Canvas c, float x, float y, float w, ClientShopData.BillEntry entry) {
+        boolean income = entry.amount > 0L;
+        boolean external = "external".equals(entry.type);
+        int bar = external ? IOStyle.BLUE : (income ? IOStyle.GREEN : IOStyle.RED);
+        float hv = hover("bill" + System.identityHashCode(entry), x, y, w, ROW_H);
+        if (hv > 0.01F) {
+            cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x, y + 1, w, ROW_H - 2, 2,
+                    cn.autoforged.module_shop.client.ui.render.Draw.alpha(IOStyle.GRAY_BTN_HOVER, hv * 0.6F));
+        }
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x + 2, y + 4, 2.5F, ROW_H - 8, 1.25F, bar);
+        String amount = (income ? "+" : "") + ClientShopData.money(entry.amount);
+        float aw = right(c, amount, x, y + 8, w - 6 + 0.5F, income ? IOStyle.GREEN : IOStyle.RED);
+        text(c, typeName(entry).getString(), x + 9, y + 8, Math.max(40.0F, w - aw - 18) + 0.5F, IOStyle.TEXT);
+        StringBuilder sub = new StringBuilder();
+        if (entry.note != null && !entry.note.isEmpty()) {
+            sub.append(entry.note);
+        }
+        if (entry.party != null && !entry.party.isEmpty()) {
+            if (sub.length() > 0) {
+                sub.append(" · ");
+            }
+            sub.append(entry.party);
+        }
+        String time = entry.time > 0L
+                ? TIME_FORMAT.format(Instant.ofEpochMilli(entry.time).atZone(ZoneId.systemDefault())) : "-";
+        String rightText = external ? time + "  —" : time + "  " + Component.translatable(
+                "gui.module_shop.bill.balance_after", ClientShopData.money(entry.balanceAfter)).getString();
+        float rw = cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, rightText,
+                cn.autoforged.module_shop.client.ui.AtomUi.REGULAR, cn.autoforged.module_shop.client.ui.render.Text.SMALL,
+                IOStyle.TEXT_3, x, y + 18, w - 6 + 0.5F, cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
+        small(c, sub.length() == 0 ? "-" : sub.toString(), x + 9, y + 18, Math.max(40.0F, w - rw - 20) + 0.5F,
+                IOStyle.TEXT_2);
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x + 6, y + ROW_H - 0.5F, w - 12, 0.5F, 0, IOStyle.HAIR);
+    }
+
     private void small(GuiGraphics g, int x, int y, Component text, int color, boolean centered) {
         g.pose().pushPose();
         g.pose().translate(x, y, 0.0F);
@@ -376,16 +554,22 @@ public class BillScreen extends Screen {
     }
 
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
-        if (delta != 0.0D) {
-            scrollBy(delta > 0.0D ? -1 : 1);
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
+        if (skia()) {
+            return super.mouseScrolled(mouseX, mouseY, scrollY);
+        }
+        if (scrollY != 0.0D) {
+            scrollBy(scrollY > 0.0D ? -1 : 1);
             return true;
         }
-        return super.mouseScrolled(mouseX, mouseY, delta);
+        return super.mouseScrolled(mouseX, mouseY, scrollY);
     }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         int x = left();
         int y = top();
         // 筛选页签

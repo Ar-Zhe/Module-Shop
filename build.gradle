@@ -7,23 +7,43 @@ plugins {
 
 version = "${mod_version}-forge-${minecraft_version}"
 group = mod_group_id
-base { archivesName = mod_id }
+
+base {
+    archivesName = mod_id
+}
 
 java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
 minecraft {
     mappings channel: mapping_channel, version: mapping_version
     copyIdeResources = true
+    // SkiaTextField 读取 EditBox 选区另一端（见 META-INF/accesstransformer.cfg）。
+    accessTransformer = file('src/main/resources/META-INF/accesstransformer.cfg')
 
     runs {
         configureEach {
             workingDirectory project.file('run')
             property 'forge.logging.markers', 'REGISTRIES'
             property 'forge.logging.console.level', 'debug'
-            mods { "${mod_id}" { source sourceSets.main } }
+            mods {
+                "${mod_id}" {
+                    source sourceSets.main
+                }
+            }
         }
         client {
             property 'forge.enabledGameTestNamespaces', mod_id
+            // 开发期 UI 巡检：-Pmsprops=moduleshop.uitour,moduleshop.tourquit → 自动进「新的世界」并截图（见 UiV2Tour）
+            def msprops = (project.findProperty('msprops') ?: '').toString()
+            if (msprops) {
+                args '--quickPlaySingleplayer', '新的世界'
+                msprops.split(',').each { p ->
+                    if (p) {
+                        def kv = p.split('=', 2)
+                        property kv[0], kv.length > 1 ? kv[1].replace('+', ',') : 'true'
+                    }
+                }
+            }
         }
         server {
             property 'forge.enabledGameTestNamespaces', mod_id
@@ -36,7 +56,18 @@ minecraft {
     }
 }
 
-sourceSets.main.resources { srcDir 'src/generated/resources' }
+sourceSets.main.resources {
+    srcDir 'src/generated/resources'
+    exclude '**/*.bbmodel'
+    exclude '**/.cache'
+    exclude '**/.cache/**'
+    exclude 'opencode.json'
+    exclude 'INSTRUCTIONS.md'
+    exclude 'mc-src/**'
+    exclude '.opencode/**'
+    exclude 'base-mod-api/**'
+    exclude 'base-mod-src/**'
+}
 
 repositories {
     mavenLocal()
@@ -44,10 +75,86 @@ repositories {
         name = 'MinecraftForge'
         url = 'https://maven.minecraftforge.net/'
     }
+    // JEI 的 API 从这里取（只用于编译期；运行时是否启用由「有没有装 JEI」决定）。
+    maven {
+        name = 'BlameJared'
+        url = 'https://maven.blamejared.com'
+    }
+    // 本地固定的 AtomLib jar（libs/atomlib-1.20.1-forge-0.4.0.jar）。
+    flatDir { dirs 'libs' }
+}
+
+// ---------------------------------------------------------------- AtomLib（客户端 UI）
+// 离线固定 AtomLib 0.4.0 的 1.20.1-forge 发布包（取自 atomlib-input-0.4.0.zip）
+def atomlibJar = layout.projectDirectory.file("libs/atomlib-1.20.1-forge-${atomlib_version}.jar")
+def atomlibSha256 = project.property('atomlib_jar_sha256').toString()
+def skijaJar = layout.buildDirectory.file('atomlib-compile/skija-shared-0.143.18.jar')
+def skijaTypesJar = layout.buildDirectory.file('atomlib-compile/types-0.2.0.jar')
+
+def verifyAtomLibPin = tasks.register('verifyAtomLibPin') {
+    inputs.file(atomlibJar)
+    inputs.property('sha256', atomlibSha256)
+    def stamp = layout.buildDirectory.file('atomlib-compile/atomlib.sha256')
+    outputs.file(stamp)
+    doLast {
+        def source = inputs.files.singleFile
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        source.withInputStream { stream ->
+            byte[] buffer = new byte[8192]
+            int read
+            while ((read = stream.read(buffer)) > 0) {
+                digest.update(buffer, 0, read)
+            }
+        }
+        def actual = digest.digest().collect { String.format('%02x', it & 0xff) }.join('')
+        if (actual != atomlibSha256) {
+            throw new GradleException("AtomLib pin mismatch: expected ${atomlibSha256} but was ${actual}")
+        }
+        def out = stamp.get().asFile
+        out.parentFile.mkdirs()
+        out.text = actual + '\n'
+    }
+}
+
+def extractAtomSkija = tasks.register('extractAtomSkija') {
+    dependsOn verifyAtomLibPin
+    inputs.file(atomlibJar)
+    def nested = ['skija-shared-0.143.18.jar': skijaJar, 'types-0.2.0.jar': skijaTypesJar]
+    outputs.files(nested.values())
+    doLast {
+        def source = inputs.files.singleFile
+        new java.util.zip.ZipFile(source).withCloseable { zip ->
+            nested.each { name, target ->
+                def dest = target.get().asFile
+                dest.parentFile.mkdirs()
+                def entry = zip.getEntry('META-INF/jarjar/' + name)
+                if (entry == null) {
+                    throw new GradleException('Pinned AtomLib jar is missing META-INF/jarjar/' + name)
+                }
+                zip.getInputStream(entry).withCloseable { input ->
+                    dest.withOutputStream { output -> output << input }
+                }
+            }
+        }
+    }
 }
 
 dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+
+    // AtomLib 0.4.0（1.20.1-forge）。发布包里的 Minecraft 引用是 SRG 名，开发环境要用 fg.deobf 映射回来。
+    // 只进编译和开发运行时，不打进 module_shop；Skija / Yoga 留在 AtomLib 自己的 Jar-in-Jar 里，
+    // 这里只把 Skija（含 io.github.humbleui.types）暴露给 javac。
+    implementation fg.deobf("local:atomlib-1.20.1-forge:${atomlib_version}")
+    compileOnly files(skijaJar, skijaTypesJar)
+
+    // JEI 软依赖：只在编译期用 API（运行时不打包、不硬依赖）。
+    compileOnly fg.deobf("mezz.jei:jei-${minecraft_version}-common-api:${jei_version}")
+    compileOnly fg.deobf("mezz.jei:jei-${minecraft_version}-forge-api:${jei_version}")
+
+    // 单元测试（JUnit 5）
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
 }
 
 // ---------------------------------------------------------------- KubeJS 桥接（可选）
@@ -69,15 +176,38 @@ if (kubejsJarPath) {
     tasks.named('jar', Jar).configure {
         from sourceSets.kubejsBridge.output
     }
+    logger.lifecycle("[module-shop] KubeJS 桥接已启用：${kubejsJarPath}")
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 17
+}
+
+tasks.named('compileJava').configure {
+    dependsOn verifyAtomLibPin, extractAtomSkija
+}
+
+// AutoForge: 资源模板里的中文必须按 UTF-8 读写，且手写资源与 DataGen 产物可能同名时保留先到的那份。
+tasks.withType(ProcessResources).configureEach {
+    filteringCharset = 'UTF-8'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
 tasks.named('processResources', ProcessResources).configure {
     var replaceProperties = [
-            minecraft_version: minecraft_version, minecraft_version_range: '[1.20.1,1.21)',
-            forge_version: forge_version, forge_version_range: '[47,)',
-            loader_version_range: '[47,)',
-            mod_id: mod_id, mod_name: mod_name, mod_license: mod_license, mod_version: mod_version,
-            mod_authors: mod_authors, mod_description: mod_description
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            forge_version          : forge_version,
+            forge_version_range    : forge_version_range,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mod_description        : mod_description,
+            atomlib_version_range  : atomlib_version_range
     ]
     inputs.properties replaceProperties
     filesMatching(['META-INF/mods.toml', 'pack.mcmeta']) {
@@ -86,21 +216,103 @@ tasks.named('processResources', ProcessResources).configure {
 }
 
 tasks.named('jar', Jar).configure {
+    archiveFileName = "Module-Shop-${mod_version}-for-Forge-${minecraft_version}.jar"
     manifest {
         attributes([
-                'Specification-Title'     : mod_id,
-                'Specification-Vendor'    : mod_authors,
-                'Specification-Version'   : '1',
-                'Implementation-Title'    : project.name,
-                'Implementation-Version'  : project.jar.archiveVersion,
-                'Implementation-Vendor'   : mod_authors
+                'Specification-Title'   : mod_id,
+                'Specification-Vendor'  : mod_authors,
+                'Specification-Version' : '1',
+                'Implementation-Title'  : project.name,
+                'Implementation-Version': project.jar.archiveVersion,
+                'Implementation-Vendor' : mod_authors
         ])
     }
     finalizedBy 'reobfJar'
 }
 
-tasks.withType(JavaCompile).configureEach {
-    options.encoding = 'UTF-8'
-    // 用 JDK 21 编译，但产物按 1.20.1 的 Java 17 目标输出
-    options.release = 17
+// 公共 API 单独打一个 jar（只含 cn.autoforged.module_shop.api.**）：附属模组只对它编译，
+// 从构建层面保证附属碰不到 ShopManager / ShopSavedData 等内部实现。运行时仍由完整的 module_shop jar 提供。
+// 注意：这个 jar 是官方映射名（开发环境用），附属用 ForgeGradle 编译时直接 compileOnly 即可。
+def apiJar = tasks.register('apiJar', Jar) {
+    archiveBaseName = 'module_shop'
+    archiveVersion = "${mod_version}-forge-${minecraft_version}"
+    archiveClassifier = 'api'
+    from(sourceSets.main.output) {
+        include 'cn/autoforged/module_shop/api/**'
+        // UI 套件（AtomLib 薄适配层）：附属的内容区页面用它和内置页面保持同样的绘制与控件。
+        include 'cn/autoforged/module_shop/client/ui/AtomUi.class'
+        include 'cn/autoforged/module_shop/client/ui/render/Draw*.class'
+        include 'cn/autoforged/module_shop/client/ui/render/Text*.class'
+        include 'cn/autoforged/module_shop/client/ui/render/SkiaFrame*.class'
+        include 'cn/autoforged/module_shop/client/ui/widget/**'
+        // API 1.3（UI v2）：统一列表视觉层与物品层，附属页面与内置页面用同一套表格 / 控件
+        include 'cn/autoforged/module_shop/client/ui/v2/V2*.class'
+        include 'cn/autoforged/module_shop/client/ui/v2/ListTable*.class'
+        include 'cn/autoforged/module_shop/client/ui/render/ItemOverlay*.class'
+        include 'cn/autoforged/module_shop/client/ui/render/StyledText*.class'
+    }
+    exclude 'cn/autoforged/module_shop/api/internal/**'
+}
+tasks.named('assemble').configure { dependsOn apiJar }
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+}
+
+// 兼容 Windows 中文（非 ASCII）项目路径运行 JUnit 5 测试（规避 JVM @argfile 系统编码乱码导致的 ClassNotFoundException）
+def nonAsciiProjectPath = !projectDir.path.chars().allMatch { it < 128 }
+if (nonAsciiProjectPath) {
+    def asciiSafeRoot = new File(System.getProperty('java.io.tmpdir'), 'ms-1201-junit-safe')
+    def syncMainForTest = tasks.register('syncMainClassesForTest', Sync) {
+        from sourceSets.main.output.classesDirs
+        into new File(asciiSafeRoot, 'main-classes')
+    }
+    def syncMainResourcesForTest = tasks.register('syncMainResourcesForTest', Sync) {
+        from tasks.named('processResources')
+        into new File(asciiSafeRoot, 'main-resources')
+    }
+    def syncTestClasses = tasks.register('syncTestClassesForTest', Sync) {
+        from sourceSets.test.output.classesDirs
+        into new File(asciiSafeRoot, 'test-classes')
+    }
+    def syncExtraJarsForTest = tasks.register('syncExtraJarsForTest', Sync) {
+        from sourceSets.test.runtimeClasspath.filter { File f ->
+            f.isFile() && !f.path.chars().allMatch { it < 128 }
+        }
+        into new File(asciiSafeRoot, 'extra-jars')
+    }
+    def asciiRuntimeDeps = sourceSets.test.runtimeClasspath.filter { File f ->
+        f.path.chars().allMatch { it < 128 }
+    }
+    tasks.named('test', Test).configure {
+        dependsOn syncMainForTest, syncMainResourcesForTest, syncTestClasses, syncExtraJarsForTest
+        testClassesDirs = files(new File(asciiSafeRoot, 'test-classes'))
+        classpath = files(
+                new File(asciiSafeRoot, 'test-classes'),
+                new File(asciiSafeRoot, 'main-classes'),
+                new File(asciiSafeRoot, 'main-resources'),
+                asciiRuntimeDeps,
+                fileTree(new File(asciiSafeRoot, 'extra-jars'))
+        )
+    }
+}
+
+publishing {
+    publications {
+        register('mavenJava', MavenPublication) {
+            from components.java
+        }
+    }
+    repositories {
+        maven {
+            url "file://${project.projectDir}/repo"
+        }
+    }
+}
+
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+    }
 }

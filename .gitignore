@@ -10,16 +10,22 @@ logs/
 
 # IDE
 .idea/
+*.iws
 *.iml
+*.ipr
 .vscode/
 eclipse/
 bin/
 out/
 
+# Minecraft Modding
+**/src/generated/**/.cache/
+
 # 系统
 .DS_Store
 Thumbs.db
 
-# 本地调试用 jar（不要把别人的 mod 提交进来）
+# 本地库与临时 jar（AtomLib 离线包不入库，由构建验证 SHA-256）
 *.jar.tmp
 libs/*.jar
+.atomlib/

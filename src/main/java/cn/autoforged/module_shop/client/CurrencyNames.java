@@ -114,6 +114,5 @@ public final class CurrencyNames {
         public Map<String, String> getLanguageData() {
             return this.delegate.getLanguageData();
         }
-
     }
 }

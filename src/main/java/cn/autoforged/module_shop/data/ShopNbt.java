@@ -1,6 +1,6 @@
 package cn.autoforged.module_shop.data;
 
-import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -9,7 +9,7 @@ import net.minecraft.world.item.ItemStack;
 import javax.annotation.Nullable;
 import java.util.IdentityHashMap;
 
-/** 统一的 NBT 读写工具，保证 ItemStack 的完整组件数据被序列化。 */
+/** 统一的 NBT 读写工具，保证 ItemStack 的完整 NBT 数据被序列化。 */
 public final class ShopNbt {
     private ShopNbt() {
     }
@@ -33,11 +33,20 @@ public final class ShopNbt {
         batchCache = new IdentityHashMap<>();
     }
 
+    /** 兼容 1.21 调用方传入 {@code registries} 的重载（1.20.1 序列化不依赖 registries）。 */
+    public static void beginBatch(@Nullable HolderLookup.Provider registries) {
+        beginBatch();
+    }
+
     public static void endBatch() {
         batchCache = null;
     }
 
-    public static CompoundTag saveStack(ItemStack stack, RegistryAccess registries) {
+    public static CompoundTag saveStack(ItemStack stack) {
+        return saveStack(stack, null);
+    }
+
+    public static CompoundTag saveStack(ItemStack stack, @Nullable HolderLookup.Provider registries) {
         CompoundTag tag = new CompoundTag();
         if (stack != null && !stack.isEmpty()) {
             IdentityHashMap<ItemStack, CompoundTag> cache = batchCache;
@@ -49,13 +58,17 @@ public final class ShopNbt {
                 }
                 tag.put("item", encoded);
             } else {
-                tag.put("item", stack.save(new net.minecraft.nbt.CompoundTag()));
+                tag.put("item", stack.save(new CompoundTag()));
             }
         }
         return tag;
     }
 
-    public static ItemStack loadStack(CompoundTag tag, RegistryAccess registries) {
+    public static ItemStack loadStack(CompoundTag tag) {
+        return loadStack(tag, null);
+    }
+
+    public static ItemStack loadStack(CompoundTag tag, @Nullable HolderLookup.Provider registries) {
         if (tag == null || !tag.contains("item", Tag.TAG_COMPOUND)) {
             return ItemStack.EMPTY;
         }
@@ -64,11 +77,15 @@ public final class ShopNbt {
 
     /**
      * 需求四：容器类物品（潜影盒、精妙背包等）深拷贝。
-     * 普通 {@link ItemStack#copy()} 与源栈共享组件对象（例如容器内容物列表），
+     * 普通 {@link ItemStack#copy()} 与源栈共享组件/标签对象（例如容器内容物列表），
      * 这里强制走一次 NBT 序列化/反序列化，保证内容物、自定义 NBT、标签与属性数据
      * 完全独立且不丢失，任一方向后续修改都不会影响另一方。
      */
-    public static ItemStack deepCopy(ItemStack stack, RegistryAccess registries) {
+    public static ItemStack deepCopy(ItemStack stack) {
+        return deepCopy(stack, null);
+    }
+
+    public static ItemStack deepCopy(ItemStack stack, @Nullable HolderLookup.Provider registries) {
         if (stack == null || stack.isEmpty()) {
             return ItemStack.EMPTY;
         }

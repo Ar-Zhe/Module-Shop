@@ -122,9 +122,6 @@ public class DepositMenu extends AbstractContainerMenu {
                 }
             }
         }
-        if (player instanceof net.minecraft.server.level.ServerPlayer serverSnapshot) {
-            cn.autoforged.module_shop.shop.ShopManager.pushSnapshot(serverSnapshot);
-        }
     }
 
     public static DepositMenu clientSide(int id, Inventory playerInventory) {
@@ -146,7 +143,6 @@ public class DepositMenu extends AbstractContainerMenu {
         public boolean mayPickup(Player player) {
             return false;
         }
-
     }
 
     /** 需求 2：交易槽位已满时的锁定槽，服务端拒绝任何放入。 */

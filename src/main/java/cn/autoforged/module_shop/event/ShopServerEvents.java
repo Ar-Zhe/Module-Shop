@@ -1,7 +1,5 @@
 package cn.autoforged.module_shop.event;
 
-
-import net.minecraftforge.fml.common.Mod;
 import cn.autoforged.module_shop.ModuleShopMod;
 import cn.autoforged.module_shop.command.ShopCommands;
 import cn.autoforged.module_shop.shop.NotificationManager;
@@ -9,23 +7,46 @@ import cn.autoforged.module_shop.shop.ShopManager;
 import cn.autoforged.module_shop.shop.TradeManager;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod.EventBusSubscriber;
 import net.minecraftforge.event.RegisterCommandsEvent;
-import net.minecraftforge.event.entity.player.PlayerEvent;
-import net.minecraftforge.event.server.ServerStoppingEvent;
 import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.event.server.ServerStartedEvent;
+import net.minecraftforge.event.server.ServerStoppingEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
 
 @Mod.EventBusSubscriber(modid = ModuleShopMod.MODID)
 public final class ShopServerEvents {
     private static int tickCounter;
+    /** 记录已完成一次模板初始化检查的当前服务端实例（单人切换存档时自然重查）。 */
+    @javax.annotation.Nullable
+    private static MinecraftServer checkedServer;
 
     private ShopServerEvents() {
     }
 
     @SubscribeEvent
-    public static void onServerStarted(net.minecraftforge.event.server.ServerStartedEvent event) {
+    public static void onServerStarted(ServerStartedEvent event) {
+        checkedServer = null;
+        tickCounter = 0;
         cn.autoforged.module_shop.shop.http.ShopHttpApi.start(event.getServer());
+        // 新世界首次启动：用客户端 / 服务器的默认模板初始化商店。
+        // 老世界、已初始化过的世界、商品被改过的世界都不会被覆盖（判定见 TemplateService）。
+        try {
+            if (cn.autoforged.module_shop.Config.INSTANCE.templateInitEnabled.get()) {
+                cn.autoforged.module_shop.shop.TemplateService.initNewWorldIfNeeded(event.getServer());
+            }
+        } catch (Throwable error) {
+            // 初始化失败绝不阻断服务器启动，但保留警告日志方便排查
+            org.slf4j.LoggerFactory.getLogger("module_shop")
+                    .warn("模板初始化失败（ServerStarted）：{}", error.toString(), error);
+        }
+        cn.autoforged.module_shop.shop.auction.AuctionService.reset();
+        cn.autoforged.module_shop.shop.stall.StallService.reset();
+        cn.autoforged.module_shop.shop.ShopManager.resetShippingTick();
+        cn.autoforged.module_shop.shop.home.AnnouncementConfig.reload();
+        cn.autoforged.module_shop.shop.currency.PhysicalCurrencyConfig.reload();
+        cn.autoforged.module_shop.shop.auth.AdminAuthService.reload();
     }
 
     @SubscribeEvent
@@ -34,6 +55,20 @@ public final class ShopServerEvents {
             return;
         }
         MinecraftServer server = event.getServer();
+        if (checkedServer != server) {
+            checkedServer = server;
+            try {
+                if (cn.autoforged.module_shop.Config.INSTANCE.templateInitEnabled.get()) {
+                    cn.autoforged.module_shop.shop.TemplateService.initNewWorldIfNeeded(server);
+                } else {
+                    org.slf4j.LoggerFactory.getLogger("module_shop")
+                            .info("模板初始化已在配置中关闭（templateInitEnabled=false）");
+                }
+            } catch (Throwable error) {
+                org.slf4j.LoggerFactory.getLogger("module_shop")
+                        .warn("模板初始化调用失败：{}", error.toString(), error);
+            }
+        }
         // 签到活动日：给「补发给离线玩家」的活动日补发（每个现实日期只执行一次）。
         ShopManager.tickActivityDayOffline(server);
         tickCounter++;
@@ -79,6 +114,8 @@ public final class ShopServerEvents {
 
     @SubscribeEvent
     public static void onServerStopping(ServerStoppingEvent event) {
+        checkedServer = null;
+        tickCounter = 0;
         // 可选 HTTP API：关服时停掉监听
         cn.autoforged.module_shop.shop.http.ShopHttpApi.stop();
         TradeManager.shutdown(event.getServer());

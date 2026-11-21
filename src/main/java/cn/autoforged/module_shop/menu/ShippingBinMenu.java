@@ -85,7 +85,7 @@ public class ShippingBinMenu extends AbstractContainerMenu {
         if (slotId >= 0 && slotId < this.binSlots && !this.getCarried().isEmpty()
                 && !ShippingRules.canSell(this.getCarried())
                 && player instanceof net.minecraft.server.level.ServerPlayer server) {
-            cn.autoforged.module_shop.shop.ShopManager.notifyShippingRejected(server);
+            cn.autoforged.module_shop.shop.ShopManager.notifyShippingRejected(server, this.getCarried());
             return;
         }
         super.clicked(slotId, button, type, player);
@@ -109,7 +109,7 @@ public class ShippingBinMenu extends AbstractContainerMenu {
             // 背包 → 出货箱：不在规则里的物品直接拒绝，并给玩家一条说明。
             if (!ShippingRules.canSell(stack)) {
                 if (player instanceof net.minecraft.server.level.ServerPlayer server) {
-                    cn.autoforged.module_shop.shop.ShopManager.notifyShippingRejected(server);
+                    cn.autoforged.module_shop.shop.ShopManager.notifyShippingRejected(server, stack);
                 }
                 return ItemStack.EMPTY;
             }
@@ -123,20 +123,6 @@ public class ShippingBinMenu extends AbstractContainerMenu {
             slot.setChanged();
         }
         return result;
-    }
-
-    /**
-     * 容器关闭：把最新的界面数据推给玩家。
-     *
-     * <p>客户端关掉容器会回到缓存的商店界面；不推一次的话上面显示的还是打开容器前的旧数字
-     *（出货箱的「箱内物品 N 件 / 本次结算可得 N 星币」），必须切模块才刷新。
-     */
-    @Override
-    public void removed(Player player) {
-        super.removed(player);
-        if (player instanceof net.minecraft.server.level.ServerPlayer server) {
-            cn.autoforged.module_shop.shop.ShopManager.pushSnapshot(server);
-        }
     }
 
     @Override

@@ -1,15 +1,26 @@
 modLoader="javafml"
 loaderVersion="${loader_version_range}"
 license="${mod_license}"
+issueTrackerURL="https://github.com/Ar-Zhe/Module-Shop/issues"
 
 [[mods]]
 modId="${mod_id}"
 version="${mod_version}"
-displayName="模块商店"
+displayName="Module-Shop ${mod_version} for Forge ${minecraft_version}"
+displayURL="https://github.com/Ar-Zhe/Module-Shop"
 logoFile="shop.png"
 authors="${mod_authors}"
 description='''
-${mod_description}
+模块商店（Module Shop）—— 面向 Forge 1.20.1 的完整服务端经济系统：
+每日商店（翻牌 / 限购 / 付费刷新）、每日收购（全清额外奖励）、拍卖行（出价即扣款、被超价自动全额退回）、
+玩家摊位、玩家交易与转账、邮箱（物品与金币待领取，可翻页）、管理员发放（发钱 / 发物品图形界面）、
+交易流水查询、同 IP 多账号管控。数值全部服务端权威，界面中英双语。
+
+A full server-side shop & economy mod for Minecraft 1.20.1 / Forge 47:
+daily shop with paid refresh, daily buyback with completion bonus, auction house (bids charged instantly,
+refunded automatically when outbid), player stalls, player trading, wallet transfers, mailbox,
+admin grants with a GUI, transaction history and per-IP alt-account control.
+Everything is server-authoritative; the GUI is available in English and Simplified Chinese.
 '''
 
 [[dependencies.${mod_id}]]
@@ -25,3 +36,12 @@ ${mod_description}
     versionRange="${minecraft_version_range}"
     ordering="NONE"
     side="BOTH"
+
+# AtomLib：客户端 UI 前置（Skija 渲染桥 + 设计包），编译期锁定 0.4.0，运行期向上兼容 [0.1.0-beta,)。
+# 专用服务器不需要安装。
+[[dependencies.${mod_id}]]
+    modId="atomlib"
+    mandatory=true
+    versionRange="${atomlib_version_range}"
+    ordering="AFTER"
+    side="CLIENT"

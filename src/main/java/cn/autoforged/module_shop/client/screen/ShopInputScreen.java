@@ -1,36 +1,64 @@
 package cn.autoforged.module_shop.client.screen;
 
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState;
+import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.ui.render.Draw;
+import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
+import cn.autoforged.module_shop.client.ui.v2.V2;
+import cn.autoforged.module_shop.client.ui.widget.PriceSpecEditor;
+import cn.autoforged.module_shop.client.ui.widget.ScrollController;
+import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
+import cn.autoforged.module_shop.data.PriceSpec;
+import cn.autoforged.module_shop.data.PriceSpec.CurrencyMode;
 import cn.autoforged.module_shop.data.Rarity;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
+import io.github.humbleui.skija.Canvas;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import javax.annotation.Nullable;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
-import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 
-/** 通用数值/文本输入界面：管理员配置、拍卖出价、转账、修改价格都走这里。 */
-public class ShopInputScreen extends Screen {
+/** 通用数值/文本/配价输入界面：管理员配价、商店/收购/摊位改价、数量与通道确认都走这里。 */
+public class ShopInputScreen extends SkiaDialog {
     /** 品质字段不用输入框，改成四个品质按钮（点一下就选中，按钮上方显示「当前品质：X」）。 */
     private static final String RARITY_FIELD = "rarity";
     private final CompoundTag request;
+    private final String action;
     private final List<String> fieldNames = new ArrayList<>();
     private final List<EditBox> boxes = new ArrayList<>();
-    /** 与 {@link #boxes} 一一对应的字段名（品质字段没有输入框，所以下标不能直接跟着 fieldNames 走）。 */
+    /** 与 {@link #boxes} 一一对应的字段名（品质、选项与可视化配价器不走 boxes）。 */
     private final List<String> boxFields = new ArrayList<>();
     /** 每个品质按钮的矩形（x, y, w, h, rarityIndex），渲染时给选中项描边。 */
     private final List<int[]> rarityRects = new ArrayList<>();
     /** 当前选中的品质 id。 */
     private String rarityValue = Rarity.COMMON.id();
-    /**
-     * 选项字段（提供 {@code choices_<字段名>} 的字段）：值 → 当前选择；值 → 按钮矩形。
-     * 用于「补货设置」这类开关 / 二选一（关/开、现实时间/游戏时间），点按钮即选中，不用手打。
-     */
-    private final java.util.Map<String, String> choiceValues = new java.util.LinkedHashMap<>();
-    private final java.util.Map<String, List<int[]>> choiceRects = new java.util.LinkedHashMap<>();
+    /** 选项字段（choices_<field>） */
+    private final Map<String, String> choiceValues = new LinkedHashMap<>();
+    private final Map<String, List<int[]>> choiceRects = new LinkedHashMap<>();
+    /** Skija 模式：挂载 PriceSpecEditor 的字段（如 price / amount / base / makeupCost）。 */
+    private final Map<String, PriceSpecEditor> priceEditors = new LinkedHashMap<>();
+    private final Map<String, PriceSpec> savedEditorSpecs = new LinkedHashMap<>();
+    private final Map<String, float[]> editorBounds = new LinkedHashMap<>();
+    private final ScrollController bodyScroll = new ScrollController();
+    private boolean bodyScrolling;
+    private float bodyTop;
+    private float bodyBottom;
+
+    /** 玩家购买/出售确认态携带的物品定价规格（EITHER / PHYS_ONLY / BOTH / STAR_ONLY）。 */
+    private final boolean hasItemPriceSpec;
+    private final PriceSpec itemPriceSpec;
+    private final boolean sellAction;
+    private String payChannel = "star";
+
     private final Component title;
     private final String info;
     private final int panelW = 240;
@@ -41,6 +69,7 @@ public class ShopInputScreen extends Screen {
     public ShopInputScreen(CompoundTag request) {
         super(Component.translatable("gui.module_shop.input.title"));
         this.request = request.copy();
+        this.action = request.getString("action");
         // 标题允许带参数（例如「取款数量（星币 → 银币）」里的货币名），在客户端按本地语言渲染。
         ListTag titleArgs = request.getList("title_args", 8);
         if (titleArgs.isEmpty()) {
@@ -60,6 +89,125 @@ public class ShopInputScreen extends Screen {
         String presetRarity = request.getString("default_" + RARITY_FIELD).trim();
         Rarity preset = Rarity.byIdOrNull(presetRarity);
         this.rarityValue = preset == null ? Rarity.COMMON.id() : preset.id();
+
+        boolean priceConfig = hasAnyPriceEditorField();
+        this.sellAction = "sell_buyback".equals(this.action);
+        this.hasItemPriceSpec = !priceConfig && request.contains("priceSpec", Tag.TAG_COMPOUND);
+        if (this.hasItemPriceSpec) {
+            this.itemPriceSpec = PriceSpec.fromTag(request.getCompound("priceSpec"), request.getLong("unit_price"));
+            String presetChannel = request.getString("pay_channel");
+            this.payChannel = resolveInitialChannel(this.itemPriceSpec, presetChannel);
+        } else {
+            this.itemPriceSpec = PriceSpec.ZERO;
+        }
+    }
+
+    private static String resolveInitialChannel(PriceSpec spec, @Nullable String presetChannel) {
+        if (spec == null) {
+            return "star";
+        }
+        return switch (spec.mode) {
+            case STAR_ONLY -> "star";
+            case PHYS_ONLY -> "phys";
+            case BOTH -> "both";
+            case EITHER -> ("star".equals(presetChannel) || "phys".equals(presetChannel))
+                    ? presetChannel
+                    : PriceDisplay.resolveBuyChannel(spec, 1);
+        };
+    }
+
+    private boolean hasAnyPriceEditorField() {
+        for (String field : this.fieldNames) {
+            if (priceScopeForField(field) != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Nullable
+    private PriceSpecEditor.Scope priceScopeForField(String field) {
+        if ("stall_apply_price".equals(this.action) || "stall_set_price_new".equals(this.action)) {
+            return "price".equals(field) ? PriceSpecEditor.Scope.PLAYER : null;
+        }
+        if ("admin_apply_price".equals(this.action)
+                || "admin_batch_apply".equals(this.action)
+                || "admin_mall_import".equals(this.action)
+                || "admin_set_price_new".equals(this.action)) {
+            return "price".equals(field) ? PriceSpecEditor.Scope.OP : null;
+        }
+        if ("admin_buyback_bonus_set".equals(this.action)) {
+            return "amount".equals(field) ? PriceSpecEditor.Scope.OP : null;
+        }
+        if ("admin_signin_set".equals(this.action)) {
+            return ("base".equals(field) || "makeupCost".equals(field)) ? PriceSpecEditor.Scope.OP : null;
+        }
+        if (this.request.getBoolean("supports_price_spec") && ("price".equals(field) || "amount".equals(field))) {
+            return PriceSpecEditor.Scope.OP;
+        }
+        return null;
+    }
+
+    private boolean allowZeroForField(String field) {
+        return "admin_buyback_bonus_set".equals(this.action)
+                || "admin_signin_set".equals(this.action)
+                || this.request.getBoolean("allow_zero_" + field)
+                || this.request.getBoolean("allow_zero");
+    }
+
+    private String specKeyForField(String field) {
+        if ("admin_signin_set".equals(this.action)) {
+            if ("base".equals(field)) {
+                return "baseSpec";
+            }
+            if ("makeupCost".equals(field)) {
+                return "makeupSpec";
+            }
+        }
+        return "priceSpec";
+    }
+
+    @Nullable
+    private PriceSpec initialSpecForField(String field) {
+        PriceSpec saved = this.savedEditorSpecs.get(field);
+        if (saved != null) {
+            return saved;
+        }
+        String specKey = specKeyForField(field);
+        if (this.request.contains(specKey, Tag.TAG_COMPOUND)) {
+            long fallback = tryParseLong(this.request.getString("default_" + field), 0L);
+            return PriceSpec.fromTag(this.request.getCompound(specKey), fallback);
+        }
+        String preset = this.request.getString("default_" + field).trim();
+        if (!preset.isEmpty()) {
+            PriceSpec parsed = PriceSpec.parseRuleText(preset);
+            if (parsed != null) {
+                return parsed;
+            }
+        }
+        if ("admin_signin_set".equals(this.action)) {
+            if ("base".equals(field)) {
+                return ClientShopData.signInBaseSpec;
+            }
+            if ("makeupCost".equals(field)) {
+                return ClientShopData.signInMakeupSpec;
+            }
+        }
+        if ("admin_buyback_bonus_set".equals(this.action)) {
+            return ClientShopData.buybackBonusSpec;
+        }
+        return null;
+    }
+
+    private static long tryParseLong(String raw, long fallback) {
+        if (raw == null || raw.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Math.max(0L, Long.parseLong(raw.trim()));
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
     }
 
     private static boolean isRarityField(String field) {
@@ -81,6 +229,57 @@ public class ShopInputScreen extends Screen {
         return field != null && field.endsWith("_time");
     }
 
+    /** 可选非负整数上限字段（留空或 0 代表无限）：出货箱每日上限、兑换每日限额、出货箱各等级额度。 */
+    private static boolean isDailyMaxField(String field) {
+        return "daily_max".equals(field)
+                || "daily_deposit_limit".equals(field)
+                || "daily_withdraw_limit".equals(field)
+                || isShippingLimitField(field);
+    }
+
+    private static boolean isShippingLimitField(@Nullable String field) {
+        if (field == null || !field.startsWith("limit") || field.length() <= 5) {
+            return false;
+        }
+        for (int i = 5; i < field.length(); i++) {
+            if (!Character.isDigit(field.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Component fieldLabel(String field) {
+        if (isShippingLimitField(field)) {
+            int lvl = tryParseInt(field.substring(5), 0);
+            if (lvl >= 5) {
+                return Component.translatableWithFallback(
+                        "gui.module_shop.field." + field, "等级 %s 每日额度", lvl);
+            }
+        }
+        return Component.translatable("gui.module_shop.field." + field);
+    }
+
+    private static int tryParseInt(String s, int fallback) {
+        try {
+            return Integer.parseInt(s == null ? "" : s.trim());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private boolean dailyMaxBad() {
+        for (int i = 0; i < this.boxFields.size(); i++) {
+            if (isDailyMaxField(this.boxFields.get(i))) {
+                String v = this.boxes.get(i).getValue().trim();
+                if (!v.isEmpty() && !v.matches("\\d{1,9}")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /** 「0600」→「06:00」：只留数字，超过两位就自动插冒号。 */
     private static String autoColon(String raw) {
         StringBuilder digits = new StringBuilder();
@@ -97,59 +296,84 @@ public class ShopInputScreen extends Screen {
     }
 
     /** 「HH:mm」是否合法。 */
-    private static boolean validClock(String text) {
-        if (text == null || text.isEmpty()) {
-            return true;   // 留空 = 不改这项
-        }
-        int colon = text.indexOf(':');
-        if (colon <= 0 || colon >= text.length() - 1) {
+    private static boolean validTime(String raw) {
+        if (raw == null || raw.length() != 5 || raw.charAt(2) != ':') {
             return false;
         }
         try {
-            int hour = Integer.parseInt(text.substring(0, colon));
-            int minute = Integer.parseInt(text.substring(colon + 1));
-            return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
+            int hh = Integer.parseInt(raw.substring(0, 2));
+            int mm = Integer.parseInt(raw.substring(3, 5));
+            return hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59;
         } catch (NumberFormatException ex) {
             return false;
         }
     }
 
-    /** 有没有格式不对的时间字段（有的话红字提示并且不让确认）。 */
+    /** 当前是否填了一个不合法的时间（用于红字提示和禁用确认）。 */
     private boolean timeBad() {
         for (int i = 0; i < this.boxFields.size(); i++) {
-            if (isTimeField(this.boxFields.get(i)) && !validClock(this.boxes.get(i).getValue().trim())) {
+            if (isTimeField(this.boxFields.get(i)) && !validTime(this.boxes.get(i).getValue().trim())) {
                 return true;
             }
         }
         return false;
     }
 
+    private boolean hasDualChannelSelector() {
+        return this.hasItemPriceSpec && this.itemPriceSpec.mode == CurrencyMode.EITHER;
+    }
+
+    private PriceSpec activeItemTotalSpec(long qty) {
+        if (!this.hasItemPriceSpec || qty <= 0L) {
+            return PriceSpec.ZERO;
+        }
+        int clamped = (int) Math.min(Integer.MAX_VALUE, qty);
+        PriceSpec total = this.itemPriceSpec.scale(clamped);
+        if (this.itemPriceSpec.mode == CurrencyMode.EITHER) {
+            return "phys".equals(this.payChannel)
+                    ? PriceSpec.phys(total.physTierKey, total.physCount)
+                    : PriceSpec.star(total.starPrice);
+        }
+        return total;
+    }
+
     private int infoOffset() {
         return this.info.isEmpty() ? 0 : 14;
     }
 
-    /** 需求 3：交易金额界面在标题/提示下方额外显示一行“玩家余额”。 */
     private boolean showBalance() {
-        return this.request.getBoolean("show_balance");
+        return this.request.getBoolean("show_balance")
+                || ("trade_set_money".equals(this.action) && this.request.contains("balance"));
     }
 
-    /** 输入框里填的数量（不是数字时返回 0）。 */
     private long enteredQuantity() {
-        if (this.boxes.isEmpty()) {
+        int idx = this.boxFields.indexOf("quantity");
+        EditBox target = idx >= 0 ? this.boxes.get(idx) : (this.boxes.isEmpty() ? null : this.boxes.get(0));
+        if (target == null) {
             return 0L;
         }
         try {
-            return Math.max(0L, Long.parseLong(this.boxes.get(0).getValue().trim()));
+            return Math.max(0L, Long.parseLong(target.getValue().trim()));
         } catch (NumberFormatException ex) {
             return 0L;
         }
     }
 
     /**
-     * 输入的数量是否超出余额能承担的范围（用于货币兑换取款的「余额不足」提示）。
-     * 用「数量 &gt; 余额 / 单价」判断，避免 数量 × 单价 溢出。
+     * 输入的数量是否超出余额能承担的范围（支持旧单星币与双独立并行账本）。
      */
     private boolean overBalance() {
+        if (this.hasItemPriceSpec) {
+            if (this.sellAction) {
+                return false;
+            }
+            long qty = enteredQuantity();
+            if (qty <= 0L) {
+                return false;
+            }
+            int clamped = (int) Math.min(Integer.MAX_VALUE, qty);
+            return !PriceDisplay.canAffordChannel(this.itemPriceSpec, clamped, this.payChannel);
+        }
         long unit = this.request.getLong("unit_price");
         long balance = this.request.getLong("balance");
         if (unit <= 0L || !showBalance()) {
@@ -163,40 +387,55 @@ public class ShopInputScreen extends Screen {
         return infoOffset() + (showBalance() ? 14 : 0);
     }
 
-    /** 需求 1（bug 修复）：交易金额输入界面关闭/确认后需要回到交易界面。 */
     private boolean isTradeMoney() {
-        return "trade_set_money".equals(this.request.getString("action"));
+        return "trade_set_money".equals(this.action);
     }
 
     private void returnToTradeIfNeeded() {
-        if (isTradeMoney() && !cn.autoforged.module_shop.client.ClientShopData.tradeSelfName.isEmpty()) {
+        if (isTradeMoney() && !ClientShopData.tradeSelfName.isEmpty()) {
             Nav.open(new TradeScreen());
         }
     }
 
     @Override
     protected void init() {
-        super.init();
-        // init() 在窗口 resize 时会再次执行：先把已输入的值记下来、清空 boxes 再重建，
-        // 否则 boxes 会累积成 2N 条，setInitialFocus/confirm 读到的是上一轮已经不在界面上的旧输入框
-        // （玩家看到的输入框里敲的数字不会进入发送包）。
-        List<String> previous = new ArrayList<>();
+        List<String> kept = new ArrayList<>();
         for (EditBox box : this.boxes) {
-            previous.add(box.getValue());
+            kept.add(box.getValue());
         }
+        for (Map.Entry<String, PriceSpecEditor> e : this.priceEditors.entrySet()) {
+            PriceSpec current = e.getValue().buildSpec();
+            if (current != null) {
+                this.savedEditorSpecs.put(e.getKey(), current);
+            }
+        }
+        if (skiaInit()) {
+            for (int i = 0; i < this.boxes.size() && i < kept.size(); i++) {
+                if (!kept.get(i).isEmpty()) {
+                    this.boxes.get(i).setValue(kept.get(i));
+                }
+            }
+            return;
+        }
+
+        List<String> previous = new ArrayList<>(kept);
         this.boxes.clear();
         this.boxFields.clear();
         this.rarityRects.clear();
         this.choiceValues.clear();
         this.choiceRects.clear();
-        this.panelH = 70 + this.fieldNames.size() * 33 + headerOffset();
+        this.priceEditors.clear();
+        this.editorBounds.clear();
+
+        int dualExtra = hasDualChannelSelector() ? 32 : 0;
+        int footerExtra = (this.hasItemPriceSpec || this.request.getLong("unit_price") > 0L) ? 16 : 0;
+        this.panelH = 68 + this.fieldNames.size() * 33 + headerOffset() + dualExtra + footerExtra;
         this.left = (this.width - this.panelW) / 2;
         this.top = (this.height - this.panelH) / 2;
+
         for (int i = 0; i < this.fieldNames.size(); i++) {
             String field = this.fieldNames.get(i);
             if (isRarityField(field)) {
-                // 品质：不再用输入框（以前要手打 legendary/epic/rare/common，容易打错），
-                // 改成四个按钮，点一下即选中，按钮上方显示「品质　当前品质：X」。
                 int rowY = this.top + 38 + headerOffset() + i * 33;
                 int btnW = 47;
                 int gap = 4;
@@ -213,7 +452,6 @@ public class ShopInputScreen extends Screen {
             }
             ListTag choices = choicesOf(field);
             if (!choices.isEmpty()) {
-                // 选项字段：一排按钮（关/开、现实时间/游戏时间…），点一下即选中，上方显示「当前：X」。
                 int rowY = this.top + 38 + headerOffset() + i * 33;
                 int count = Math.min(4, choices.size());
                 int gap = 4;
@@ -242,19 +480,24 @@ public class ShopInputScreen extends Screen {
                 continue;
             }
             EditBox box = new EditBox(this.font, this.left + 20, this.top + 38 + headerOffset() + i * 33, this.panelW - 40, 18,
-                    Component.translatable("gui.module_shop.field." + field));
-            box.setMaxLength(32);
-            // 需求 6/7：管理界面编辑时带出当前值，方便修改而不是重新输入。
-            String preset = request.getString("default_" + field);
+                    fieldLabel(field));
+            box.setMaxLength(isDailyMaxField(field) ? 9 : 64);
+            PriceSpec initialSpec = priceScopeForField(field) != null ? initialSpecForField(field) : null;
+            String preset = initialSpec != null ? initialSpec.toRuleText() : this.request.getString("default_" + field);
+            if (isDailyMaxField(field)) {
+                if ("0".equals(preset.trim())) {
+                    preset = "";
+                }
+                box.setFilter(text -> text.isEmpty() || text.matches("\\d{0,9}"));
+            }
             if (!preset.isEmpty()) {
                 box.setValue(preset);
             }
-            // resize 前已经输入过的内容优先保留，避免重建输入框时把玩家输入清掉。
-            if (i < previous.size() && !previous.get(i).isEmpty()) {
-                box.setValue(previous.get(i));
+            int boxIdx = this.boxes.size();
+            if (boxIdx < previous.size() && !previous.get(boxIdx).isEmpty()) {
+                box.setValue(previous.get(boxIdx));
             }
             if (isTimeField(field)) {
-                // 时间输入：自动补冒号（输入 0600 就变成 06:00），并且只允许数字与冒号
                 box.setMaxLength(5);
                 box.setFilter(text -> text.isEmpty() || text.matches("[0-9:]{0,5}"));
                 box.setResponder(text -> {
@@ -268,8 +511,19 @@ public class ShopInputScreen extends Screen {
             this.boxes.add(box);
             this.boxFields.add(field);
         }
+
+        if (hasDualChannelSelector()) {
+            int chY = this.top + 38 + headerOffset() + this.fieldNames.size() * 33 + 2;
+            int half = (this.panelW - 44) / 2;
+            this.addRenderableWidget(new ShopButton(this.left + 20, chY, half, 18,
+                    Component.literal(ClientHomeCurrencyState.tr("gui.module_shop.input.channel_star", "星币账本")),
+                    b -> this.payChannel = "star"));
+            this.addRenderableWidget(new ShopButton(this.left + 24 + half, chY, half, 18,
+                    Component.literal(ClientHomeCurrencyState.tr("gui.module_shop.input.channel_phys", "实体货币账本")),
+                    b -> this.payChannel = "phys"));
+        }
+
         int buttonY = this.top + this.panelH - 30;
-        // 需求 7/8：防误触按钮统一为“左侧确认、右侧取消”；confirm_right 保留作兼容开关（true 才反过来）。
         boolean confirmRight = this.request.getBoolean("confirm_right");
         int leftX = this.left + 24;
         int rightX = this.left + this.panelW - 114;
@@ -296,27 +550,57 @@ public class ShopInputScreen extends Screen {
         }
     }
 
+    @Nullable
+    private String editorValidationError() {
+        for (PriceSpecEditor ed : this.priceEditors.values()) {
+            String err = ed.validateError();
+            if (err != null && !err.isBlank()) {
+                return err;
+            }
+        }
+        return null;
+    }
+
     private void confirm() {
-        // 时间字段格式不对：不进包、不关界面，红字让玩家改（服务端也会再校验一次）
-        if (timeBad()) {
+        if (timeBad() || dailyMaxBad()) {
+            return;
+        }
+        if (editorValidationError() != null) {
             return;
         }
         CompoundTag tag = this.request.copy();
         for (int i = 0; i < this.boxes.size(); i++) {
-            tag.putString(this.boxFields.get(i), this.boxes.get(i).getValue().trim());
+            String field = this.boxFields.get(i);
+            String val = this.boxes.get(i).getValue().trim();
+            tag.putString(field, val);
+            if (!skia() && priceScopeForField(field) != null) {
+                PriceSpec parsed = PriceSpec.parseRuleText(val);
+                if (parsed != null && (parsed.isValid() || (allowZeroForField(field) && parsed.isZero()))) {
+                    tag.put(specKeyForField(field), parsed.toTag());
+                } else if (parsed == null) {
+                    return;
+                }
+            }
         }
-        // 品质是按钮选的，值单独带上（没有输入框，所以不在上面的循环里）。
+        for (Map.Entry<String, PriceSpecEditor> e : this.priceEditors.entrySet()) {
+            String field = e.getKey();
+            PriceSpec spec = e.getValue().buildSpec();
+            if (spec == null) {
+                return;
+            }
+            tag.put(specKeyForField(field), spec.toTag());
+            tag.putString(field, spec.toRuleText());
+        }
         if (this.fieldNames.contains(RARITY_FIELD)) {
             tag.putString(RARITY_FIELD, this.rarityValue);
         }
-        // 选项字段（开关 / 二选一）同样是按钮选的。
-        for (java.util.Map.Entry<String, String> entry : this.choiceValues.entrySet()) {
+        for (Map.Entry<String, String> entry : this.choiceValues.entrySet()) {
             tag.putString(entry.getKey(), entry.getValue());
         }
+        if (this.hasItemPriceSpec) {
+            tag.putString("pay_channel", this.payChannel);
+        }
         ServerboundShopActionPayload.send(tag);
-        // 需求 1（bug 修复）：确认后**立刻返回上一级**（和「取消」走同一条返回路径）。
-        // 旧版只对「交易金额」做了返回，其它入口（管理员编辑商品、出价、兑换…）确认后就一直停在
-        // 这个输入界面上，玩家以为「确认没生效」，其实数据早就在服务端改好了。
         Nav.back();
         returnToTradeIfNeeded();
     }
@@ -324,28 +608,32 @@ public class ShopInputScreen extends Screen {
     @Override
     public void renderBackground(GuiGraphics g) {
         super.renderBackground(g);
+        if (skia()) {
+            return;
+        }
         Bricks.panel(g, this.left, this.top, this.panelW, this.panelH);
     }
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         this.renderBackground(g);
         super.render(g, mouseX, mouseY, partialTick);
-        // 标题/提示过长时截断，避免顶出面板（货币名可能很长，例如别的模组的“银币锭”）。
         int maxTextW = this.panelW - 20;
-        IOStyle.centerAt(g, this.font, truncate(this.title, maxTextW), this.left + this.panelW / 2, this.top + 12, IOStyle.ORANGE);
+        IOStyle.centerAt(g, this.font, truncate(this.title, maxTextW), this.left + this.panelW / 2, this.top + 12,
+                IOStyle.ORANGE);
         if (!this.info.isEmpty()) {
-            IOStyle.centerAt(g, this.font, truncate(Component.literal(this.info), maxTextW), this.left + this.panelW / 2,
-                    this.top + 27, IOStyle.ORANGE);
+            IOStyle.centerAt(g, this.font, truncate(Component.literal(this.info), maxTextW),
+                    this.left + this.panelW / 2, this.top + 27, IOStyle.ORANGE);
         }
-        // 需求 3：交易金额界面显示玩家余额（数值由服务端在打开输入界面时下发）。
         if (showBalance()) {
             long balance = this.request.getLong("balance");
             int balanceY = this.top + 27 + infoOffset();
             Component balanceText = Component.translatable("gui.module_shop.trade.balance",
-                    cn.autoforged.module_shop.client.ClientShopData.money(balance));
+                    ClientShopData.money(balance));
             if (overBalance()) {
-                // 输入的数量超过余额能兑换的数量：余额改为左对齐，右侧腾出位置红字提示「余额不足」。
                 g.drawString(this.font, balanceText, this.left + 20, balanceY, IOStyle.ORANGE, false);
                 Component warn = Component.translatable("gui.module_shop.input.not_enough");
                 g.drawString(this.font, warn, this.left + this.panelW - 12 - this.font.width(warn), balanceY,
@@ -358,7 +646,6 @@ public class ShopInputScreen extends Screen {
             String field = this.fieldNames.get(i);
             int labelY = this.top + 26 + headerOffset() + i * 33;
             if (isRarityField(field)) {
-                // 「品质」+ 右侧「当前品质：X」（按品质配色），与按钮同一行上方，互不重叠。
                 Component label = Component.translatable("gui.module_shop.field." + RARITY_FIELD);
                 g.drawString(this.font, label, this.left + 20, labelY, IOStyle.TEXT_2, true);
                 Rarity current = Rarity.byId(this.rarityValue);
@@ -366,21 +653,16 @@ public class ShopInputScreen extends Screen {
                         Component.translatable("gui.module_shop.quality_current",
                                 Component.translatable(current.translationKey())),
                         this.left + 20 + this.font.width(label) + 10, labelY, current.color(), true);
-                // 选中的那一个按钮加一圈品质色描边（按钮本身是原版样式，这里只勾边）。
                 for (int[] rect : this.rarityRects) {
                     Rarity rarity = Rarity.values()[rect[4]];
                     boolean selected = rarity.id().equals(this.rarityValue);
-                    if (selected) {
-                        IOStyle.ring(g, rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2, 0, rarity.color());
-                    } else {
-                        IOStyle.ring(g, rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2, 0, IOStyle.BORDER_DIM);
-                    }
+                    IOStyle.ring(g, rect[0] - 1, rect[1] - 1, rect[2] + 2, rect[3] + 2, 0,
+                            selected ? IOStyle.rarity(rarity) : IOStyle.BORDER_DIM);
                 }
                 continue;
             }
             List<int[]> rects = this.choiceRects.get(field);
             if (rects != null) {
-                // 「字段名　当前：X」+ 选中项描边（和品质按钮同一套观感）。
                 Component label = Component.translatable("gui.module_shop.field." + field);
                 g.drawString(this.font, label, this.left + 20, labelY, IOStyle.TEXT_2, true);
                 String value = this.choiceValues.getOrDefault(field, "");
@@ -397,27 +679,470 @@ public class ShopInputScreen extends Screen {
                 }
                 continue;
             }
-            g.drawString(this.font, Component.translatable("gui.module_shop.field." + field),
-                    this.left + 20, labelY, IOStyle.TEXT_2, true);
+            Component fieldLbl = fieldLabel(field);
+            g.drawString(this.font, fieldLbl, this.left + 20, labelY, IOStyle.TEXT_2, true);
+            if (isDailyMaxField(field)) {
+                Component hint = Component.translatable("gui.module_shop.field.daily_max.hint");
+                g.drawString(this.font, hint, this.left + this.panelW - 20 - this.font.width(hint),
+                        labelY, IOStyle.TEXT_3, false);
+            }
         }
-        // 需求 7：购买弹窗实时显示总价与余额变化（货币兑换取款复用，并换用自己的文案 key）。
-        long unitPrice = this.request.getLong("unit_price");
-        if (unitPrice > 0L && !this.boxes.isEmpty()) {
-            long quantity = enteredQuantity();
-            long total = quantity > Long.MAX_VALUE / unitPrice ? Long.MAX_VALUE : quantity * unitPrice;
-            long balanceAfter = this.request.getLong("balance") - total;
-            String totalKey = this.request.contains("total_key")
-                    ? this.request.getString("total_key") : "gui.module_shop.buy_total";
-            IOStyle.centerAt(g, this.font, Component.translatable(totalKey,
-                            cn.autoforged.module_shop.client.ClientShopData.money(total),
-                            cn.autoforged.module_shop.client.ClientShopData.money(balanceAfter)),
-                    this.left + this.panelW / 2, this.top + this.panelH - 46, overBalance() ? IOStyle.RED : IOStyle.ORANGE);
+        if (hasDualChannelSelector()) {
+            int chY = this.top + 38 + headerOffset() + this.fieldNames.size() * 33 + 2;
+            int half = (this.panelW - 44) / 2;
+            IOStyle.ring(g, this.left + 19, chY - 1, half + 2, 20, 0,
+                    "star".equals(this.payChannel) ? IOStyle.ORANGE : IOStyle.BORDER_DIM);
+            IOStyle.ring(g, this.left + 23 + half, chY - 1, half + 2, 20, 0,
+                    "phys".equals(this.payChannel) ? IOStyle.BLUE : IOStyle.BORDER_DIM);
         }
-        // 时间格式错误：红字提示（并且确认按钮点了不会生效）
+        if (this.hasItemPriceSpec) {
+            long qty = enteredQuantity();
+            PriceSpec preview = activeItemTotalSpec(qty);
+            boolean lack = !this.sellAction && qty > 0L
+                    && !PriceDisplay.canAffordChannel(this.itemPriceSpec, (int) Math.min(Integer.MAX_VALUE, qty),
+                            this.payChannel);
+            String label = this.sellAction
+                    ? ClientHomeCurrencyState.tr("gui.module_shop.input.sell_total_preview", "预计入账：%s",
+                            PriceDisplay.formatPlain(preview))
+                    : ClientHomeCurrencyState.tr("gui.module_shop.input.buy_total_preview", "总计应付：%s%s",
+                            PriceDisplay.formatPlain(preview),
+                            lack ? "（" + Component.translatable("gui.module_shop.input.not_enough").getString() + "）" : "");
+            IOStyle.centerAt(g, this.font, truncate(Component.literal(label), maxTextW),
+                    this.left + this.panelW / 2, this.top + this.panelH - 46,
+                    lack ? IOStyle.RED : IOStyle.ORANGE);
+        } else {
+            long unitPrice = this.request.getLong("unit_price");
+            if (unitPrice > 0L && !this.boxes.isEmpty()) {
+                long quantity = enteredQuantity();
+                long total = quantity > Long.MAX_VALUE / unitPrice ? Long.MAX_VALUE : quantity * unitPrice;
+                long balanceAfter = this.request.getLong("balance") - total;
+                String totalKey = this.request.contains("total_key")
+                        ? this.request.getString("total_key") : "gui.module_shop.buy_total";
+                IOStyle.centerAt(g, this.font, Component.translatable(totalKey,
+                                ClientShopData.money(total),
+                                ClientShopData.money(balanceAfter)),
+                        this.left + this.panelW / 2, this.top + this.panelH - 46,
+                        overBalance() ? IOStyle.RED : IOStyle.ORANGE);
+            }
+        }
         if (timeBad()) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.input.time_bad"),
                     this.left + this.panelW / 2, this.top + this.panelH - 46, IOStyle.RED);
         }
+    }
+
+    // ------------------------------------------------------------------ Skija
+
+    private static final float SK_W = 250.0F;
+    private static final float SK_WIDE_W = 308.0F;
+    private static final float SK_ROW = 38.0F;
+    private final Map<String, SkiaTextField> skFields = new LinkedHashMap<>();
+
+    @Override
+    protected void initSkia() {
+        this.boxes.clear();
+        this.boxFields.clear();
+        this.choiceValues.clear();
+        this.skFields.clear();
+        this.priceEditors.clear();
+        this.editorBounds.clear();
+
+        SkiaTextField first = null;
+        for (String field : this.fieldNames) {
+            if (isRarityField(field)) {
+                continue;
+            }
+            ListTag choices = choicesOf(field);
+            if (!choices.isEmpty()) {
+                String preset = this.request.getString("default_" + field).trim();
+                String current = choices.getString(0);
+                for (int k = 0; k < choices.size(); k++) {
+                    if (choices.getString(k).equals(preset)) {
+                        current = preset;
+                    }
+                }
+                this.choiceValues.put(field, current);
+                continue;
+            }
+            PriceSpecEditor.Scope scope = priceScopeForField(field);
+            if (scope != null) {
+                PriceSpecEditor ed = new PriceSpecEditor(this, this.font, scope)
+                        .allowZero(allowZeroForField(field))
+                        .items(this.items);
+                PriceSpec initial = initialSpecForField(field);
+                if (initial != null) {
+                    ed.setInitial(initial);
+                }
+                ed.registerInputs(this::addWidget);
+                this.priceEditors.put(field, ed);
+                if (first == null) {
+                    first = ed.mode() == CurrencyMode.PHYS_ONLY ? ed.physField() : ed.starField();
+                }
+                continue;
+            }
+            int maxLen = isTimeField(field) ? 5 : (isDailyMaxField(field) ? 9 : 32);
+            String ph = isTimeField(field) ? "HH:mm"
+                    : (isDailyMaxField(field)
+                            ? Component.translatable("gui.module_shop.field.daily_max.hint").getString()
+                            : "");
+            SkiaTextField tf = field(maxLen, ph);
+            EditBox box = tf.editBox();
+            String preset = this.request.getString("default_" + field);
+            if (isDailyMaxField(field)) {
+                if ("0".equals(preset.trim())) {
+                    preset = "";
+                }
+                box.setFilter(text -> text.isEmpty() || text.matches("\\d{0,9}"));
+            }
+            if (!preset.isEmpty()) {
+                box.setValue(preset);
+            }
+            if (isTimeField(field)) {
+                box.setFilter(text -> text.isEmpty() || text.matches("[0-9:]{0,5}"));
+                box.setResponder(text -> {
+                    String formatted = autoColon(text);
+                    if (!formatted.equals(text)) {
+                        box.setValue(formatted);
+                    }
+                });
+            }
+            this.boxes.add(box);
+            this.boxFields.add(field);
+            this.skFields.put(field, tf);
+            if (first == null) {
+                first = tf;
+            }
+        }
+        if (first != null && first.editBox().isVisible()) {
+            first.focus();
+        }
+    }
+
+    private float dialogWidth() {
+        return this.priceEditors.isEmpty() ? SK_W : SK_WIDE_W;
+    }
+
+    private float fieldHeight(String field, float innerW) {
+        PriceSpecEditor ed = this.priceEditors.get(field);
+        if (ed != null) {
+            ed.bounds(0, 0, innerW);
+            return 12.0F + ed.preferredHeight() + 8.0F;
+        }
+        return SK_ROW;
+    }
+
+    private boolean hasFooterLine() {
+        return this.hasItemPriceSpec
+                || (this.request.getLong("unit_price") > 0L && !this.boxes.isEmpty())
+                || timeBad()
+                || editorValidationError() != null;
+    }
+
+    @Override
+    protected void paint(Canvas c) {
+        float w = dialogWidth();
+        float innerW = w - PAD * 2;
+        float headerExtra = (this.info.isEmpty() ? 0.0F : 13.0F) + (showBalance() ? 13.0F : 0.0F);
+        float fieldsTotalH = 0.0F;
+        for (String field : this.fieldNames) {
+            fieldsTotalH += fieldHeight(field, innerW);
+        }
+        float channelSelectorH = hasDualChannelSelector() ? 32.0F : 0.0F;
+        float footerH = (hasFooterLine() ? 16.0F : 0.0F) + 4.0F + 20.0F + PAD;
+        float chromeTop = HEADER_H + 8.0F + headerExtra;
+        float wantedH = chromeTop + fieldsTotalH + channelSelectorH + footerH;
+        float maxH = Math.max(180.0F, this.height - 16.0F);
+        float h = Math.min(wantedH, maxH);
+
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        panel(c, x, y, w, h, this.title.getString());
+
+        float cy = y + HEADER_H + 8.0F;
+        if (!this.info.isEmpty()) {
+            center(c, this.info, innerX, cy + 5.0F, innerW, IOStyle.TEXT_2);
+            cy += 13.0F;
+        }
+        if (showBalance()) {
+            String bal = Component.translatable("gui.module_shop.trade.balance",
+                    ClientShopData.money(this.request.getLong("balance"))).getString();
+            if (overBalance()) {
+                text(c, bal, innerX, cy + 5.0F, innerW * 0.6F, IOStyle.ORANGE);
+                right(c, Component.translatable("gui.module_shop.input.not_enough").getString(), innerX, cy + 5.0F,
+                        innerW, IOStyle.RED);
+            } else {
+                center(c, bal, innerX, cy + 5.0F, innerW, IOStyle.ORANGE);
+            }
+            cy += 13.0F;
+        }
+
+        float viewH = h - (cy - y) - channelSelectorH - footerH;
+        this.bodyScrolling = fieldsTotalH > viewH + 0.5F;
+        this.bodyTop = cy;
+        this.bodyBottom = cy + viewH;
+        float contentW = this.bodyScrolling ? innerW - 8.0F : innerW;
+        float drawY = this.bodyScrolling
+                ? beginList(c, this.bodyScroll, innerX, cy, innerW, viewH, fieldsTotalH)
+                : cy;
+
+        this.editorBounds.clear();
+        Component pendingEditorTip = null;
+
+        for (String field : this.fieldNames) {
+            float fh = fieldHeight(field, contentW);
+            boolean rowVisible = !this.bodyScrolling
+                    || (drawY >= this.bodyTop - 1.0F && drawY + fh <= this.bodyBottom + 1.0F);
+            String label = fieldLabel(field).getString();
+            float labelW = small(c, label, innerX, drawY + 5.0F, contentW, IOStyle.TEXT_2);
+            float ctrlY = drawY + 12.0F;
+
+            PriceSpecEditor ed = this.priceEditors.get(field);
+            if (ed != null) {
+                ed.bounds(innerX, ctrlY, contentW);
+                ed.visible(rowVisible);
+                ed.render(c, this.items, this.mouseX, this.mouseY, this.dtMs);
+                if (rowVisible) {
+                    this.editorBounds.put(field, new float[]{innerX, ctrlY, contentW, ed.preferredHeight()});
+                    Component edTip = ed.hoveredTooltip();
+                    if (edTip != null) {
+                        pendingEditorTip = edTip;
+                    }
+                }
+            } else if (isRarityField(field)) {
+                Rarity current = Rarity.byId(this.rarityValue);
+                small(c, Component.translatable("gui.module_shop.quality_current",
+                                Component.translatable(current.translationKey())).getString(),
+                        innerX + labelW + 8.0F, drawY + 5.0F, contentW - labelW - 8.0F, IOStyle.rarity(current));
+                Rarity[] all = Rarity.values();
+                float gap = 4.0F;
+                float bw = (contentW - gap * (all.length - 1)) / all.length;
+                for (int k = 0; k < all.length; k++) {
+                    Rarity r = all[k];
+                    chip(c, "rarity:" + r.id(), Component.translatable(r.translationKey()).getString(),
+                            innerX + k * (bw + gap), ctrlY, bw, 18.0F, r.id().equals(this.rarityValue),
+                            IOStyle.rarity(r), () -> this.rarityValue = r.id());
+                }
+            } else if (this.choiceValues.containsKey(field)) {
+                ListTag choices = choicesOf(field);
+                String value = this.choiceValues.get(field);
+                int count = Math.min(4, choices.size());
+                float gap = 4.0F;
+                float bw = (contentW - gap * (count - 1)) / Math.max(1, count);
+                for (int k = 0; k < count; k++) {
+                    String v = choices.getString(k);
+                    chip(c, "choice:" + field + ":" + v, choiceLabel(field, v).getString(), innerX + k * (bw + gap),
+                            ctrlY, bw, 18.0F, v.equals(value), IOStyle.BLUE, () -> this.choiceValues.put(field, v));
+                }
+            } else {
+                if (isDailyMaxField(field)) {
+                    String hint = Component.translatable("gui.module_shop.field.daily_max.hint").getString();
+                    right(c, hint, innerX + labelW + 4.0F, drawY + 5.0F,
+                            Math.max(20.0F, contentW - labelW - 4.0F), IOStyle.TEXT_3);
+                }
+                SkiaTextField tf = this.skFields.get(field);
+                if (tf != null) {
+                    tf.visible(rowVisible);
+                    if (rowVisible) {
+                        tf.bounds(innerX, ctrlY, contentW, 18.0F);
+                    }
+                }
+            }
+            drawY += fh;
+        }
+        if (this.bodyScrolling) {
+            endList(c);
+        }
+        if (pendingEditorTip != null) {
+            tip(pendingEditorTip);
+        }
+
+        cy += viewH;
+
+        if (hasDualChannelSelector()) {
+            String chLbl = ClientHomeCurrencyState.tr("gui.module_shop.input.pay_channel_lbl",
+                    this.sellAction ? "收款账本" : "支付账本");
+            small(c, chLbl, innerX, cy + 4.0F, innerW, IOStyle.TEXT_2);
+            float gap = 6.0F;
+            float chipW = (innerW - gap) * 0.5F;
+            long qty = Math.max(1L, enteredQuantity());
+            int clamped = (int) Math.min(Integer.MAX_VALUE, qty);
+            PriceSpec starTotal = PriceSpec.star(this.itemPriceSpec.scale(clamped).starPrice);
+            PriceSpec physTotal = PriceSpec.phys(this.itemPriceSpec.physTierKey,
+                    this.itemPriceSpec.scale(clamped).physCount);
+            String starTag = ClientHomeCurrencyState.tr("gui.module_shop.input.channel_star_val", "星币 (%s)",
+                    PriceDisplay.formatCompact(starTotal));
+            String physTag = ClientHomeCurrencyState.tr("gui.module_shop.input.channel_phys_val", "实体 (%s)",
+                    PriceDisplay.formatCompact(physTotal));
+            chip(c, "pay_star", starTag, innerX, cy + 11.0F, chipW, 18.0F, "star".equals(this.payChannel),
+                    IOStyle.ORANGE, () -> this.payChannel = "star");
+            chip(c, "pay_phys", physTag, innerX + chipW + gap, cy + 11.0F, chipW, 18.0F, "phys".equals(this.payChannel),
+                    IOStyle.BLUE, () -> this.payChannel = "phys");
+            cy += 32.0F;
+        }
+
+        String edErr = editorValidationError();
+        if (timeBad()) {
+            center(c, Component.translatable("gui.module_shop.input.time_bad").getString(), innerX, cy + 6.0F, innerW,
+                    IOStyle.RED);
+            cy += 16.0F;
+        } else if (edErr != null) {
+            center(c, edErr, innerX, cy + 6.0F, innerW, IOStyle.RED);
+            cy += 16.0F;
+        } else if (this.hasItemPriceSpec) {
+            long qty = enteredQuantity();
+            int clamped = (int) Math.min(Integer.MAX_VALUE, qty);
+            PriceSpec preview = activeItemTotalSpec(qty);
+            boolean lack = !this.sellAction && qty > 0L
+                    && !PriceDisplay.canAffordChannel(this.itemPriceSpec, clamped, this.payChannel);
+            String prefix = this.sellAction
+                    ? ClientHomeCurrencyState.tr("gui.module_shop.input.prefix_earn", "预计入账 ")
+                    : ClientHomeCurrencyState.tr("gui.module_shop.input.prefix_cost", "总计应付 ");
+            if (lack) {
+                float warnW = Math.min(82.0F, innerW * 0.36F);
+                PriceDisplay.drawCell(c, this.items, preview, innerX, cy + 6.0F, innerW - warnW - 4.0F,
+                        Text.Align.LEFT, IOStyle.RED, false, prefix);
+                right(c, Component.translatable("gui.module_shop.input.not_enough").getString(), innerX, cy + 6.0F,
+                        innerW, IOStyle.RED);
+            } else {
+                PriceDisplay.drawCell(c, this.items, preview, innerX, cy + 6.0F, innerW,
+                        Text.Align.CENTER, this.sellAction ? IOStyle.GREEN : IOStyle.ORANGE, qty <= 0L, prefix);
+            }
+            if (over(innerX, cy, innerW, 14.0F) && qty > 0L) {
+                tip(Component.literal(prefix + PriceDisplay.formatPlain(preview)));
+            }
+            cy += 16.0F;
+        } else if (hasFooterLine()) {
+            long unit = this.request.getLong("unit_price");
+            long qty = enteredQuantity();
+            long total = unit > 0L && qty > Long.MAX_VALUE / unit ? Long.MAX_VALUE : qty * unit;
+            long after = this.request.getLong("balance") - total;
+            String key = this.request.contains("total_key") ? this.request.getString("total_key")
+                    : "gui.module_shop.buy_total";
+            center(c, Component.translatable(key, ClientShopData.money(total),
+                            ClientShopData.money(after)).getString(), innerX, cy + 6.0F,
+                    innerW, overBalance() ? IOStyle.RED : IOStyle.ORANGE);
+            cy += 16.0F;
+        }
+
+        boolean confirmRight = this.request.getBoolean("confirm_right");
+        float bw = Math.min(96.0F, (innerW - 24.0F) * 0.5F);
+        float by = y + h - PAD - 20.0F;
+        float leftX = x + PAD + 8.0F;
+        float rightX = x + w - PAD - 8.0F - bw;
+        String confirm = Component.translatable("gui.module_shop.confirm").getString();
+        String cancel = Component.translatable("gui.module_shop.cancel").getString();
+        boolean canConfirm = !timeBad() && !dailyMaxBad() && edErr == null;
+        button(c, "confirm", confirm, confirmRight ? rightX : leftX, by, bw, 20.0F,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, canConfirm, this::confirm);
+        button(c, "cancel", cancel, confirmRight ? leftX : rightX, by, bw, 20.0F,
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, this::onClose);
+    }
+
+    private double toDialogX(double guiX) {
+        Minecraft mc = Minecraft.getInstance();
+        int winW = Math.max(1, mc.getWindow().getGuiScaledWidth());
+        return guiX * this.width / winW;
+    }
+
+    private double toDialogY(double guiY) {
+        Minecraft mc = Minecraft.getInstance();
+        int winH = Math.max(1, mc.getWindow().getGuiScaledHeight());
+        return guiY * this.height / winH;
+    }
+
+    private boolean insideEditorBounds(double mx, double my) {
+        if (this.bodyScrolling && (my < this.bodyTop || my > this.bodyBottom)) {
+            return false;
+        }
+        for (float[] b : this.editorBounds.values()) {
+            if (mx >= b[0] && mx < b[0] + b[2] && my >= b[1] && my < b[1] + b[3]) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public boolean mouseClicked(double mx, double my, int button) {
+        if (skia() && !this.priceEditors.isEmpty()) {
+            double sx = toDialogX(mx);
+            double sy = toDialogY(my);
+            if (!insideEditorBounds(sx, sy)) {
+                for (PriceSpecEditor ed : this.priceEditors.values()) {
+                    ed.blur();
+                }
+            }
+        }
+        return super.mouseClicked(mx, my, button);
+    }
+
+    @Override
+    protected boolean onClick(double mx, double my, int button) {
+        if (this.priceEditors.isEmpty()) {
+            return false;
+        }
+        if (this.bodyScrolling && (my < this.bodyTop || my > this.bodyBottom)) {
+            for (PriceSpecEditor ed : this.priceEditors.values()) {
+                ed.blur();
+            }
+            return false;
+        }
+        boolean handled = false;
+        for (PriceSpecEditor ed : this.priceEditors.values()) {
+            if (!handled && ed.mouseClicked(mx, my, button)) {
+                handled = true;
+            } else {
+                ed.blur();
+            }
+        }
+        return handled;
+    }
+
+    @Override
+    public boolean mouseDragged(double mx, double my, int button, double dx, double dy) {
+        if (skia() && !this.priceEditors.isEmpty()) {
+            double sx = toDialogX(mx);
+            double sy = toDialogY(my);
+            double sdx = toDialogX(dx);
+            double sdy = toDialogY(dy);
+            for (PriceSpecEditor ed : this.priceEditors.values()) {
+                if (ed.mouseDragged(sx, sy, button, sdx, sdy)) {
+                    return true;
+                }
+            }
+        }
+        return super.mouseDragged(mx, my, button, dx, dy);
+    }
+
+    @Override
+    public boolean mouseReleased(double mx, double my, int button) {
+        if (skia() && !this.priceEditors.isEmpty()) {
+            double sx = toDialogX(mx);
+            double sy = toDialogY(my);
+            for (PriceSpecEditor ed : this.priceEditors.values()) {
+                if (ed.mouseReleased(sx, sy, button)) {
+                    return true;
+                }
+            }
+        }
+        return super.mouseReleased(mx, my, button);
+    }
+
+    @Override
+    protected boolean onScroll(double mx, double my, double amount) {
+        for (PriceSpecEditor ed : this.priceEditors.values()) {
+            if (ed.mouseScrolled(mx, my, amount)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    protected boolean onEnter() {
+        confirm();
+        return true;
     }
 
     /** 按面板宽度截断文本（超出部分用省略号结尾）。 */
@@ -426,12 +1151,11 @@ public class ShopInputScreen extends Screen {
         if (this.font.width(plain) <= maxWidth) {
             return text;
         }
-        return Component.literal(this.font.plainSubstrByWidth(plain, maxWidth - 6) + "...");
+        return Component.literal(this.font.plainSubstrByWidth(plain, Math.max(10, maxWidth - 6)) + "...");
     }
 
     @Override
     public void onClose() {
-        // 需求 1（bug 修复）：取消交易金额输入后回到交易界面，而不是直接关闭所有界面。
         Nav.back();
         returnToTradeIfNeeded();
     }
