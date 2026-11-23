@@ -99,7 +99,7 @@ public final class MailFormat {
                             .getString();
         }
         String key = switch (entry.source == null ? "" : entry.source) {
-            case "stall_unsold" -> "gui.module_shop.mail.desc.stall_unsold";
+            case "stall_unsold", "stall_expired" -> "gui.module_shop.mail.desc.stall_unsold";
             case "stall_bought" -> "gui.module_shop.mail.desc.stall_bought";
             case "auction_refund" -> "gui.module_shop.mail.desc.auction_refund";
             case "auction_unsold" -> "gui.module_shop.mail.desc.auction_unsold";

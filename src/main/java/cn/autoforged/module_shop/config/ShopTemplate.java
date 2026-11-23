@@ -829,6 +829,9 @@ public final class ShopTemplate {
         obj.addProperty("block_buyback_and_shipping", cfg.blockBuybackAndShipping);
         obj.addProperty("max_convert_output_items", cfg.effectiveMaxConvertOutputItems());
         obj.addProperty("daily_convert_value_limit", cfg.effectiveDailyConvertValueLimit());
+        if (cfg.addonDefaultTierKey != null && !cfg.addonDefaultTierKey.isBlank()) {
+            obj.addProperty("addon_default_tier_key", cfg.addonDefaultTierKey);
+        }
         JsonArray tiers = new JsonArray();
         if (cfg.tiers != null) {
             for (PhysicalCurrencyConfig.CurrencyTier tier : cfg.tiers) {
@@ -862,6 +865,8 @@ public final class ShopTemplate {
                         cn.autoforged.module_shop.shop.currency.PhysicalCurrencyEngine.DEFAULT_MAX_CHANGE_ITEMS));
         cfg.dailyConvertValueLimit = optLong(obj, "daily_convert_value_limit",
                 optLong(obj, "dailyConvertValueLimit", 0L));
+        cfg.addonDefaultTierKey = optString(obj, "addon_default_tier_key",
+                optString(obj, "addonDefaultTierKey", ""));
         cfg.tiers = new ArrayList<>();
         if (obj.has("tiers") && obj.get("tiers").isJsonArray()) {
             for (JsonElement el : obj.getAsJsonArray("tiers")) {

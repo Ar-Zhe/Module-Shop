@@ -43,6 +43,9 @@ public class ShopInputScreen extends SkiaDialog {
     private String rarityValue = Rarity.COMMON.id();
     /** 选项字段（choices_<field>） */
     private final Map<String, String> choiceValues = new LinkedHashMap<>();
+    /** 窗口缩放重建 init() 时保留用户已点选的选项，避免静默回退为默认值。 */
+    private final Map<String, String> savedChoices = new LinkedHashMap<>();
+    private boolean inputsInitialized;
     private final Map<String, List<int[]>> choiceRects = new LinkedHashMap<>();
     /** Skija 模式：挂载 PriceSpecEditor 的字段（如 price / amount / base / makeupCost）。 */
     private final Map<String, PriceSpecEditor> priceEditors = new LinkedHashMap<>();
@@ -237,6 +240,30 @@ public class ShopInputScreen extends SkiaDialog {
                 || isShippingLimitField(field);
     }
 
+    /** 摊位 / 求购下架时长字段（非负整数 0..100000；选永久时允许留空）。 */
+    private static boolean isExpireAmountField(String field) {
+        return "expire_amount".equals(field);
+    }
+
+    private String resolveChoiceValue(String field, ListTag choices) {
+        String saved = this.savedChoices.get(field);
+        if (saved != null) {
+            for (int k = 0; k < choices.size(); k++) {
+                if (choices.getString(k).equals(saved)) {
+                    return saved;
+                }
+            }
+        }
+        String preset = this.request.getString("default_" + field).trim();
+        String current = choices.getString(0);
+        for (int k = 0; k < choices.size(); k++) {
+            if (choices.getString(k).equals(preset)) {
+                return preset;
+            }
+        }
+        return current;
+    }
+
     private static boolean isShippingLimitField(@Nullable String field) {
         if (field == null || !field.startsWith("limit") || field.length() <= 5) {
             return false;
@@ -399,9 +426,13 @@ public class ShopInputScreen extends SkiaDialog {
 
     @Override
     protected void init() {
+        boolean wasInitialized = this.inputsInitialized;
         List<String> kept = new ArrayList<>();
         for (EditBox box : this.boxes) {
             kept.add(box.getValue());
+        }
+        if (!this.choiceValues.isEmpty()) {
+            this.savedChoices.putAll(this.choiceValues);
         }
         for (Map.Entry<String, PriceSpecEditor> e : this.priceEditors.entrySet()) {
             PriceSpec current = e.getValue().buildSpec();
@@ -410,11 +441,12 @@ public class ShopInputScreen extends SkiaDialog {
             }
         }
         if (skiaInit()) {
-            for (int i = 0; i < this.boxes.size() && i < kept.size(); i++) {
-                if (!kept.get(i).isEmpty()) {
+            if (wasInitialized) {
+                for (int i = 0; i < this.boxes.size() && i < kept.size(); i++) {
                     this.boxes.get(i).setValue(kept.get(i));
                 }
             }
+            this.inputsInitialized = true;
             return;
         }
 
@@ -456,16 +488,7 @@ public class ShopInputScreen extends SkiaDialog {
                 int count = Math.min(4, choices.size());
                 int gap = 4;
                 int btnW = Math.min(110, (this.panelW - 40 - gap * (count - 1)) / Math.max(1, count));
-                String presetValue = this.request.getString("default_" + field).trim();
-                String current = presetValue;
-                for (int k = 0; k < choices.size(); k++) {
-                    if (choices.getString(k).equals(presetValue)) {
-                        current = choices.getString(k);
-                    }
-                }
-                if (current.isEmpty() && choices.size() > 0) {
-                    current = choices.getString(0);
-                }
+                String current = resolveChoiceValue(field, choices);
                 this.choiceValues.put(field, current);
                 List<int[]> rects = new ArrayList<>();
                 for (int k = 0; k < count; k++) {
@@ -489,12 +512,15 @@ public class ShopInputScreen extends SkiaDialog {
                     preset = "";
                 }
                 box.setFilter(text -> text.isEmpty() || text.matches("\\d{0,9}"));
+            } else if (isExpireAmountField(field)) {
+                box.setMaxLength(6);
+                box.setFilter(text -> text.isEmpty() || text.matches("\\d{0,6}"));
             }
             if (!preset.isEmpty()) {
                 box.setValue(preset);
             }
             int boxIdx = this.boxes.size();
-            if (boxIdx < previous.size() && !previous.get(boxIdx).isEmpty()) {
+            if (wasInitialized && boxIdx < previous.size()) {
                 box.setValue(previous.get(boxIdx));
             }
             if (isTimeField(field)) {
@@ -548,6 +574,7 @@ public class ShopInputScreen extends SkiaDialog {
         if (!this.boxes.isEmpty()) {
             this.setInitialFocus(this.boxes.get(0));
         }
+        this.inputsInitialized = true;
     }
 
     @Nullable
@@ -754,14 +781,7 @@ public class ShopInputScreen extends SkiaDialog {
             }
             ListTag choices = choicesOf(field);
             if (!choices.isEmpty()) {
-                String preset = this.request.getString("default_" + field).trim();
-                String current = choices.getString(0);
-                for (int k = 0; k < choices.size(); k++) {
-                    if (choices.getString(k).equals(preset)) {
-                        current = preset;
-                    }
-                }
-                this.choiceValues.put(field, current);
+                this.choiceValues.put(field, resolveChoiceValue(field, choices));
                 continue;
             }
             PriceSpecEditor.Scope scope = priceScopeForField(field);
@@ -793,6 +813,9 @@ public class ShopInputScreen extends SkiaDialog {
                     preset = "";
                 }
                 box.setFilter(text -> text.isEmpty() || text.matches("\\d{0,9}"));
+            } else if (isExpireAmountField(field)) {
+                box.setMaxLength(6);
+                box.setFilter(text -> text.isEmpty() || text.matches("\\d{0,6}"));
             }
             if (!preset.isEmpty()) {
                 box.setValue(preset);

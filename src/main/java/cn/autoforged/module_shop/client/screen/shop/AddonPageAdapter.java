@@ -3,8 +3,15 @@ package cn.autoforged.module_shop.client.screen.shop;
 import cn.autoforged.module_shop.api.client.AddonFrame;
 import cn.autoforged.module_shop.api.client.AddonPage;
 import cn.autoforged.module_shop.api.client.AddonPageHost;
+import cn.autoforged.module_shop.api.view.CurrencyTierView;
+import cn.autoforged.module_shop.api.view.CurrencyUnit;
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState;
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState.PhysTierView;
 import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.shop.currency.PhysicalCurrencyEngine;
 import io.github.humbleui.skija.Canvas;
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
@@ -275,6 +282,63 @@ public final class AddonPageAdapter implements ShopPage {
         @Override
         public cn.autoforged.module_shop.client.ui.render.ItemOverlay items() {
             return this.shop.items();
+        }
+
+        @Override
+        public boolean physicalCurrencyEnabled() {
+            return ClientHomeCurrencyState.physEnabled && !ClientHomeCurrencyState.physTiers.isEmpty();
+        }
+
+        @Override
+        public List<CurrencyTierView> physicalTiers() {
+            if (!physicalCurrencyEnabled()) {
+                return List.of();
+            }
+            List<PhysTierView> tiers = ClientHomeCurrencyState.physTiers;
+            int[] owned = ClientHomeCurrencyState.liveOwnedCounts();
+            List<CurrencyTierView> out = new ArrayList<>(tiers.size());
+            for (int i = 0; i < tiers.size(); i++) {
+                PhysTierView tv = tiers.get(i);
+                int count = i < owned.length ? owned[i] : tv.ownedCount;
+                out.add(new CurrencyTierView(
+                        tv.tierKey(),
+                        tv.displayName(),
+                        tv.itemId,
+                        tv.value,
+                        Math.max(1, tv.stepRatio),
+                        tv.itemStack,
+                        count));
+            }
+            return List.copyOf(out);
+        }
+
+        @Override
+        public CurrencyUnit activeCurrency() {
+            PhysTierView active = ClientHomeCurrencyState.activeAddonPhysTier();
+            if (active != null) {
+                return CurrencyUnit.physical(active.tierKey(), active.displayName(), active.value, active.itemStack);
+            }
+            return CurrencyUnit.star(currencyName());
+        }
+
+        @Override
+        public long activeBalance() {
+            PhysTierView active = ClientHomeCurrencyState.activeAddonPhysTier();
+            if (active == null) {
+                return balance();
+            }
+            int idx = ClientHomeCurrencyState.findTierIndex(active.tierKey());
+            if (idx < 0) {
+                return balance();
+            }
+            long[] values = ClientHomeCurrencyState.tierValues();
+            int[] owned = ClientHomeCurrencyState.liveOwnedCounts();
+            return PhysicalCurrencyEngine.maxPayableTierCount(idx, values, owned);
+        }
+
+        @Override
+        public String activeCurrencyName() {
+            return activeCurrency().displayName();
         }
     }
 }

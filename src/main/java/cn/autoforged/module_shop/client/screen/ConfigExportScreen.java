@@ -46,6 +46,7 @@ public class ConfigExportScreen extends SkiaDialog {
 
     private final boolean dedicated;
     private String currentName = "";
+    private String savedCustomName = "";
     private TemplateFormat format = TemplateFormat.MSHOP;
     private String dest = "local";
     private final EnumSet<ExportSection> selected = ExportSection.allDefault(false);
@@ -67,6 +68,7 @@ public class ConfigExportScreen extends SkiaDialog {
     private static final int HIT_FMT_JSON = 7;
     private static final int HIT_ALL = 8;
     private static final int HIT_CORE = 9;
+    private static final int HIT_TOGGLE_DEFAULT = 10;
     private static final int HIT_SECTION_BASE = 100;
 
     public ConfigExportScreen(boolean dedicated) {
@@ -83,7 +85,10 @@ public class ConfigExportScreen extends SkiaDialog {
         }
         int x = (this.width - FB_W) / 2;
         int y = (this.height - FB_H) / 2;
-        this.fallbackBox = new EditBox(this.font, x + 16, y + 66, FB_W - 32, 18, Component.empty());
+        int innerX = x + 14;
+        int innerW = FB_W - 28;
+        int toggleW = 98;
+        this.fallbackBox = new EditBox(this.font, innerX, y + 64, innerW - toggleW - 6, 18, Component.empty());
         this.fallbackBox.setMaxLength(64);
         this.fallbackBox.setValue(this.currentName);
         this.fallbackBox.setResponder(this::onNameChanged);
@@ -102,12 +107,37 @@ public class ConfigExportScreen extends SkiaDialog {
 
     private void onNameChanged(String val) {
         this.currentName = val == null ? "" : val;
+        if (!ShopTemplateStore.isDefaultName(this.currentName)) {
+            this.savedCustomName = this.currentName;
+        }
         if (!this.securityTouched) {
             if (ShopTemplateStore.isDefaultName(this.currentName) && ClientShopData.adminLockEnabled) {
                 this.selected.add(ExportSection.SECURITY);
             } else {
                 this.selected.remove(ExportSection.SECURITY);
             }
+        }
+    }
+
+    private void setNameFieldValue(String val) {
+        String clean = val == null ? "" : val;
+        if (this.skNameField != null) {
+            this.skNameField.editBox().setValue(clean);
+        } else if (this.fallbackBox != null) {
+            this.fallbackBox.setValue(clean);
+        }
+        if (!clean.equals(this.currentName)) {
+            onNameChanged(clean);
+        }
+    }
+
+    public void toggleDefaultName() {
+        if (ShopTemplateStore.isDefaultName(this.currentName)) {
+            String restore = ShopTemplateStore.isDefaultName(this.savedCustomName) ? "" : this.savedCustomName;
+            setNameFieldValue(restore);
+        } else {
+            this.savedCustomName = this.currentName;
+            setNameFieldValue("shop_config");
         }
     }
 
@@ -226,15 +256,23 @@ public class ConfigExportScreen extends SkiaDialog {
             cy += 13.0F;
         }
 
-        // 文件名输入 + 格式预览
+        // 文件名输入 + 「设为默认模板」显式开关 + 格式预览
+        boolean isDef = ShopTemplateStore.isDefaultName(this.currentName);
         small(canvas, Component.translatable("gui.module_shop.cfg.export_field_label").getString(),
                 innerX, cy + 5.0F, innerW, IOStyle.TEXT);
+        float defToggleW = 104.0F;
+        float fieldGap = 6.0F;
+        float fieldW = Math.max(120.0F, innerW - defToggleW - fieldGap);
         if (this.skNameField != null) {
-            this.skNameField.bounds(innerX, cy + 11.0F, innerW, 17.0F);
+            this.skNameField.bounds(innerX, cy + 11.0F, fieldW, 17.0F);
         }
+        String defToggleLabel = (isDef ? "☑ " : "☐ ") + Component.translatableWithFallback(
+                "gui.module_shop.cfg.export_default_toggle", "设为默认模板").getString();
+        chip(canvas, "toggleDefault", defToggleLabel,
+                innerX + fieldW + fieldGap, cy + 11.0F, innerW - fieldW - fieldGap, 17.0F,
+                isDef, IOStyle.ORANGE, this::toggleDefaultName);
         cy += 31.0F;
 
-        boolean isDef = ShopTemplateStore.isDefaultName(this.currentName);
         String previewFile = ShopTemplateStore.previewExportFileName(this.currentName, this.format);
         String previewLine = Component.translatable(
                 isDef ? "gui.module_shop.cfg.export_preview_default" : "gui.module_shop.cfg.export_preview",
@@ -245,7 +283,7 @@ public class ConfigExportScreen extends SkiaDialog {
         // 格式选择（.mshop / .json.gz / .json）
         float fmtW = (innerW - 8.0F) / 3.0F;
         chip(canvas, "fmtMshop",
-                Component.translatableWithFallback("gui.module_shop.cfg.fmt_mshop", ".mshop 整合包").getString(),
+                Component.translatableWithFallback("gui.module_shop.cfg.fmt_mshop", ".mshop 完整包(含图)").getString(),
                 innerX, cy, fmtW, 17.0F, this.format == TemplateFormat.MSHOP, IOStyle.ORANGE,
                 () -> this.format = TemplateFormat.MSHOP);
         chip(canvas, "fmtGz",
@@ -359,11 +397,19 @@ public class ConfigExportScreen extends SkiaDialog {
         g.drawString(this.font, Component.translatable("gui.module_shop.cfg.export_field_label"),
                 innerX, y + 50, IOStyle.TEXT, false);
 
-        String previewFile = ShopTemplateStore.previewExportFileName(this.currentName, this.format);
         boolean isDef = ShopTemplateStore.isDefaultName(this.currentName);
-        g.drawString(this.font,
-                Component.translatable(isDef ? "gui.module_shop.cfg.export_preview_default"
-                        : "gui.module_shop.cfg.export_preview", previewFile),
+        int toggleW = 98;
+        int toggleX = innerX + innerW - toggleW;
+        String defLabel = (isDef ? "[√] " : "[ ] ") + Component.translatableWithFallback(
+                "gui.module_shop.cfg.export_default_toggle", "设为默认模板").getString();
+        IOStyle.button(g, toggleX, y + 64, toggleW, 18, Component.literal(defLabel),
+                this.font, mouseX, mouseY, true, isDef ? IOStyle.Btn.PRIMARY : IOStyle.Btn.GRAY);
+        this.fallbackHits.add(new int[]{toggleX, y + 64, toggleW, 18, HIT_TOGGLE_DEFAULT});
+
+        String previewFile = ShopTemplateStore.previewExportFileName(this.currentName, this.format);
+        String previewText = Component.translatable(isDef ? "gui.module_shop.cfg.export_preview_default"
+                : "gui.module_shop.cfg.export_preview", previewFile).getString();
+        g.drawString(this.font, this.font.plainSubstrByWidth(previewText, innerW),
                 innerX, y + 88, isDef ? IOStyle.ORANGE : IOStyle.TEXT_2, false);
 
         // 格式按钮
@@ -434,6 +480,7 @@ public class ConfigExportScreen extends SkiaDialog {
                         case HIT_FMT_JSON -> this.format = TemplateFormat.JSON;
                         case HIT_ALL -> selectAll(false);
                         case HIT_CORE -> selectCoreOnly();
+                        case HIT_TOGGLE_DEFAULT -> toggleDefaultName();
                         default -> {
                             int idx = act - HIT_SECTION_BASE;
                             if (idx >= 0 && idx < SECTION_ITEMS.size()) {

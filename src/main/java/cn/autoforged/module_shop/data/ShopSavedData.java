@@ -44,6 +44,9 @@ public final class ShopSavedData extends SavedData {
     public final List<CompoundTag> auctionCorrupt = new ArrayList<>();
     /** 拍卖列表版本号（不存档）：任何拍卖变化 +1，客户端据此判断要不要重新拉列表。 */
     public transient long auctionVersion = 1L;
+    /** 活动日离线补发本服缓存（不存档，天然随存档/世界实例隔离，避免单人切档串台）。 */
+    public transient long lastOfflineGrantDay = Long.MIN_VALUE;
+    public transient int lastOfflineGrantSig;
     /** 玩家求购（悬赏）单：悬赏在发布时就已托管，撤销 / 到期原样退回。 */
     public final List<DemandEntry> demands = new ArrayList<>();
     /** 管理员配置的可兑换货币（1 个物品 = N 星币，双向兑换）。 */
@@ -569,8 +572,8 @@ public final class ShopSavedData extends SavedData {
         }
         // 老存档没有这两个标签时按「开启 + 用配置默认金额」处理。
         if (tag.contains("shopSlotCount")) {
-            data.shopSlotCount = Math.max(1, Math.min(64, tag.getInt("shopSlotCount")));
-            data.buybackSlotCount = Math.max(1, Math.min(64, tag.getInt("buybackSlotCount")));
+            data.shopSlotCount = Math.max(0, Math.min(64, tag.getInt("shopSlotCount")));
+            data.buybackSlotCount = Math.max(0, Math.min(64, tag.getInt("buybackSlotCount")));
             copyInts(tag.getIntArray("shopWeights"), data.shopWeights);
             copyInts(tag.getIntArray("shopGuarantee"), data.shopGuarantee);
             copyInts(tag.getIntArray("buybackWeights"), data.buybackWeights);

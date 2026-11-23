@@ -94,8 +94,15 @@ public final class Text {
         int i = 0;
         while (i < raw.length() && out.length() < MAX_LENGTH - 2) {
             char c = raw.charAt(i);
-            if (c == '§') { // § 格式码：连同后一个字符一起跳过
-                i += 2;
+            if (c == '§') { // § 格式码：支持 §#RRGGBB 与完整 Unicode 码点跳过（避免截断代理对）
+                if (isHexColorAt(raw, i)) {
+                    i += 8;
+                } else {
+                    i++;
+                    if (i < raw.length()) {
+                        i += Character.charCount(raw.codePointAt(i));
+                    }
+                }
                 continue;
             }
             int cp = raw.codePointAt(i);
@@ -150,5 +157,19 @@ public final class Text {
         }
         return cp == 0x200B || cp == 0x200C || cp == 0x200D || cp == 0x200E || cp == 0x200F
                 || cp == 0x2060 || cp == 0xFEFF;
+    }
+
+    private static boolean isHexColorAt(String raw, int index) {
+        if (index + 7 >= raw.length() || raw.charAt(index + 1) != '#') {
+            return false;
+        }
+        for (int k = index + 2; k < index + 8; k++) {
+            char h = raw.charAt(k);
+            boolean hex = (h >= '0' && h <= '9') || (h >= 'a' && h <= 'f') || (h >= 'A' && h <= 'F');
+            if (!hex) {
+                return false;
+            }
+        }
+        return true;
     }
 }

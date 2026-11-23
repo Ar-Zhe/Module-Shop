@@ -52,6 +52,13 @@ public class PhysicalCurrencyConfigScreen extends SkiaDialog {
         String label = "";
         ItemStack sampleStack = ItemStack.EMPTY;
         boolean customPicked;
+        boolean addonDefault;
+
+        String uniqueItemKey() {
+            String item = this.itemId == null ? "" : this.itemId.trim().toLowerCase(java.util.Locale.ROOT);
+            String snbt = this.componentsSnbt == null ? "" : this.componentsSnbt.trim();
+            return item + "|" + snbt;
+        }
 
         ItemStack displayStack() {
             if (this.sampleStack != null && !this.sampleStack.isEmpty()) {
@@ -108,7 +115,10 @@ public class PhysicalCurrencyConfigScreen extends SkiaDialog {
         this.blockBuyback = ClientHomeCurrencyState.physBlockBuyback;
         this.maxConvertItems = Math.max(1, Math.min(64000, ClientHomeCurrencyState.physMaxConvertItems));
         this.dailyConvertLimit = Math.max(0L, ClientHomeCurrencyState.physDailyConvertLimit);
-        for (PhysTierView tv : ClientHomeCurrencyState.physTiers) {
+        int addonDefaultIdx = ClientHomeCurrencyState.findTierIndex(ClientHomeCurrencyState.physAddonDefaultTier);
+        List<PhysTierView> initTiers = ClientHomeCurrencyState.physTiers;
+        for (int i = 0; i < initTiers.size(); i++) {
+            PhysTierView tv = initTiers.get(i);
             TierDraft d = new TierDraft();
             d.id = tv.id == null ? "" : tv.id;
             d.itemId = tv.itemId == null ? "" : tv.itemId;
@@ -118,6 +128,7 @@ public class PhysicalCurrencyConfigScreen extends SkiaDialog {
             d.label = tv.label == null ? "" : tv.label;
             d.sampleStack = tv.itemStack == null ? ItemStack.EMPTY : tv.itemStack.copy();
             d.customPicked = ClientHomeCurrencyState.hasNonEmptyTag(d.sampleStack);
+            d.addonDefault = (i == addonDefaultIdx);
             this.tiers.add(d);
         }
         if (!this.tiers.isEmpty()) {
@@ -499,15 +510,45 @@ public class PhysicalCurrencyConfigScreen extends SkiaDialog {
             tierList.add(itemTag);
         }
 
+        String addonDefaultKey = "";
+        TierDraft defDraft = addonDefaultDraft();
+        if (defDraft != null) {
+            addonDefaultKey = (defDraft.id != null && !defDraft.id.isBlank())
+                    ? defDraft.id.trim()
+                    : defDraft.uniqueItemKey();
+        }
+
         CompoundTag payload = new CompoundTag();
         payload.putString("action", "admin_phys_currency_save");
         payload.putBoolean("physEnabled", this.enabled);
         payload.putBoolean("physBlockBuyback", this.blockBuyback);
         payload.putInt("physMaxConvertItems", nextMaxConvert);
         payload.putLong("physDailyConvertLimit", nextDailyLimit);
+        payload.putString("physAddonDefaultTier", addonDefaultKey);
         payload.put("physTiers", tierList);
         ServerboundShopActionPayload.send(payload);
         Nav.back();
+    }
+
+    private void toggleAddonDefault(TierDraft target) {
+        if (target == null) {
+            return;
+        }
+        boolean next = !target.addonDefault;
+        for (TierDraft t : this.tiers) {
+            t.addonDefault = false;
+        }
+        target.addonDefault = next;
+        this.errorText = "";
+    }
+
+    private TierDraft addonDefaultDraft() {
+        for (TierDraft t : this.tiers) {
+            if (t.addonDefault) {
+                return t;
+            }
+        }
+        return null;
     }
 
     private boolean hasAnyVanillaWithoutComponents() {
@@ -624,8 +665,18 @@ public class PhysicalCurrencyConfigScreen extends SkiaDialog {
         Draw.fill(canvas, x + 12.0F, row3Y + 3.0F, tagW, 10.0F, 2.0F, Draw.alpha(IOStyle.BLUE, 0.22F));
         Text.drawLine(canvas, tagTxt, AtomUi.BOLD, 5.25F, IOStyle.BLUE,
                 x + 12.0F, row3Y + 8.0F, tagW, Text.Align.CENTER);
-        String descTxt = tr("gui.module_shop.phys_cfg.dual_desc",
-                "星币与实体货币彻底分离，绝不混扣折抵；实体链内仍支持阶梯兑换与破整找零");
+        String descTxt;
+        TierDraft addonDef = addonDefaultDraft();
+        if (addonDef != null) {
+            descTxt = this.enabled
+                    ? tr("gui.module_shop.phys_cfg.dual_desc_addon",
+                    "双账本独立 · 附属默认货币：%s（再次点击可切回虚拟主货币）", addonDef.displayTitle())
+                    : tr("gui.module_shop.phys_cfg.dual_desc_addon_off",
+                    "双账本独立 · 启用后附属默认货币：%s", addonDef.displayTitle());
+        } else {
+            descTxt = tr("gui.module_shop.phys_cfg.dual_desc_star",
+                    "双账本独立 · 附属默认：虚拟主货币（可在右侧指定实体币档位）");
+        }
         float descX = x + 16.0F + tagW;
         small(canvas, descTxt, descX, row3Y + 8.0F, Math.max(20.0F, x + w - 12.0F - descX), IOStyle.TEXT_2);
     }
@@ -678,19 +729,28 @@ public class PhysicalCurrencyConfigScreen extends SkiaDialog {
                 float tx = rx + 24.0F;
                 float tw = Math.max(20.0F, rw - 28.0F);
                 String name = "#" + (i + 1) + " " + t.displayTitle();
+                float tagRight = rx + rw - 4.0F;
+                if (t.addonDefault) {
+                    String defTag = tr("gui.module_shop.phys_cfg.addon_tag", "附属默认");
+                    float addonTagW = Text.width(defTag, AtomUi.BOLD, 5.0F) + 6.0F;
+                    float defX = tagRight - addonTagW;
+                    Draw.fill(canvas, defX, ry + 3.0F, addonTagW, 9.0F, 2.0F, Draw.alpha(IOStyle.ORANGE, 0.24F));
+                    Text.drawLine(canvas, defTag, AtomUi.BOLD, 5.0F, IOStyle.ORANGE,
+                            defX, ry + 7.5F, addonTagW + 0.5F, Text.Align.CENTER);
+                    tagRight = defX - 3.0F;
+                }
                 if (t.hasCustomComponents()) {
                     String tag = tr("gui.module_shop.phys_cfg.comp_tag", "组件");
                     float tagW = Text.width(tag, AtomUi.BOLD, 5.0F) + 6.0F;
-                    Draw.fill(canvas, rx + rw - tagW - 4.0F, ry + 3.0F, tagW, 9.0F, 2.0F, Draw.alpha(IOStyle.EPIC, 0.22F));
+                    float compX = tagRight - tagW;
+                    Draw.fill(canvas, compX, ry + 3.0F, tagW, 9.0F, 2.0F, Draw.alpha(IOStyle.EPIC, 0.22F));
                     Text.drawLine(canvas, tag, AtomUi.BOLD, 5.0F, IOStyle.EPIC,
-                            rx + rw - tagW - 4.0F, ry + 7.5F, tagW + 0.5F, Text.Align.CENTER);
-                    Text.drawLine(canvas, name, sel ? AtomUi.BOLD : AtomUi.REGULAR, Text.SMALL,
-                            sel ? IOStyle.TEXT : IOStyle.TEXT_2, tx, ry + 8.0F,
-                            Math.max(12.0F, tw - tagW - 4.0F) + 0.5F, Text.Align.LEFT);
-                } else {
-                    Text.drawLine(canvas, name, sel ? AtomUi.BOLD : AtomUi.REGULAR, Text.SMALL,
-                            sel ? IOStyle.TEXT : IOStyle.TEXT_2, tx, ry + 8.0F, tw + 0.5F, Text.Align.LEFT);
+                            compX, ry + 7.5F, tagW + 0.5F, Text.Align.CENTER);
+                    tagRight = compX - 3.0F;
                 }
+                float nameMaxW = Math.max(12.0F, tagRight - tx);
+                Text.drawLine(canvas, name, sel ? AtomUi.BOLD : AtomUi.REGULAR, Text.SMALL,
+                        sel ? IOStyle.TEXT : IOStyle.TEXT_2, tx, ry + 8.0F, nameMaxW + 0.5F, Text.Align.LEFT);
 
                 String sub;
                 if (i == 0) {
@@ -750,13 +810,28 @@ public class PhysicalCurrencyConfigScreen extends SkiaDialog {
         ItemStack preview = sel.displayStack();
         item(preview, ix + 1.0F, cy + 1.0F);
 
-        float pickW = 66.0F;
+        float pickW = 50.0F;
+        float addonW = 62.0F;
+        float btnGapTop = 3.0F;
+        float pickX = ix + iw - pickW;
+        float addonX = pickX - btnGapTop - addonW;
+        String addonLbl = sel.addonDefault
+                ? tr("gui.module_shop.phys_cfg.addon_on", "★ 附属默认")
+                : tr("gui.module_shop.phys_cfg.addon_set", "设为附属默认");
+        button(canvas, "addon_default", addonLbl, addonX, cy, addonW, 18.0F,
+                sel.addonDefault ? Button.Kind.ACCENT : Button.Kind.NORMAL, true,
+                () -> toggleAddonDefault(sel));
+        if (over(addonX, cy, addonW, 18.0F)) {
+            tip(Component.literal(sel.addonDefault
+                    ? tr("gui.module_shop.phys_cfg.addon_tip_on", "当前为附属默认结算币；再次点击取消并回退虚拟主货币")
+                    : tr("gui.module_shop.phys_cfg.addon_tip_set", "设为附属模组（红包/盲仓/股票/任务等）默认结算实体货币")));
+        }
         button(canvas, "pick_inv", tr("gui.module_shop.phys_cfg.pick_inv", "背包拾取"),
-                ix + iw - pickW, cy, pickW, 18.0F, Button.Kind.NORMAL, true,
+                pickX, cy, pickW, 18.0F, Button.Kind.NORMAL, true,
                 () -> this.pickingInventory = true);
 
         float titleX = ix + 22.0F;
-        float titleMaxW = Math.max(20.0F, ix + iw - pickW - 6.0F - titleX);
+        float titleMaxW = Math.max(20.0F, addonX - 4.0F - titleX);
         String itemTitle = preview.isEmpty()
                 ? tr("gui.module_shop.phys_cfg.invalid_item", "未匹配到物品")
                 : PageKit.plainName(preview);

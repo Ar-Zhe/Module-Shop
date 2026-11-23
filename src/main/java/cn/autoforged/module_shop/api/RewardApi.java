@@ -1,5 +1,6 @@
 package cn.autoforged.module_shop.api;
 
+import cn.autoforged.module_shop.api.view.CurrencyUnit;
 import java.util.List;
 import java.util.UUID;
 import net.minecraft.world.item.ItemStack;
@@ -20,4 +21,24 @@ public interface RewardApi {
      * @param reason    写进流水与邮件正文的原因，例如「每日任务：采矿 10 个」
      */
     ApiResult<Void> grantOnce(UUID target, String requestId, List<ItemStack> items, long money, String reason);
+
+    /**
+     * 按指定货币单位（虚拟主货币或实体货币档位）幂等发放一次奖励（与旧版共用同一 {@code requestId} 幂等表）。
+     *
+     * @since API 1.5
+     */
+    default ApiResult<Void> grantOnce(UUID target, String requestId, List<ItemStack> items,
+                                      CurrencyUnit unit, long money, String reason) {
+        return grantOnce(target, requestId, items, money, reason);
+    }
+
+    /**
+     * 按当前生效的附属默认货币（{@link EconomyApi#activeCurrency()}）幂等发放一次奖励。
+     *
+     * @since API 1.5
+     */
+    default ApiResult<Void> grantOnceActive(UUID target, String requestId, List<ItemStack> items,
+                                            long money, String reason) {
+        return grantOnce(target, requestId, items, ModuleShopApi.economy().activeCurrency(), money, reason);
+    }
 }

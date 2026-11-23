@@ -579,6 +579,13 @@ public final class CurrencySettlement {
         tag.putBoolean("physBlockBuyback", cfg.blockBuybackAndShipping);
         tag.putInt("physMaxConvertItems", cfg.effectiveMaxConvertOutputItems());
         tag.putLong("physDailyConvertLimit", cfg.effectiveDailyConvertValueLimit());
+        tag.putString("physAddonDefaultTier", cfg.addonDefaultTierKey == null ? "" : cfg.addonDefaultTierKey);
+        long[] tierValues = new long[displayTiers.size()];
+        for (int i = 0; i < displayTiers.size(); i++) {
+            tierValues[i] = displayTiers.get(i).template.isEmpty() ? 0L : displayTiers.get(i).spec.value;
+        }
+        long totalUnits = PhysicalCurrencyEngine.totalPhysicalValue(tierValues, owned);
+        tag.putLong("physPlayerValue", totalUnits);
         if (player != null) {
             PlayerAccount acct = ShopManager.account(player);
             long day = cn.autoforged.module_shop.Config.realDayWithReset("00:00");

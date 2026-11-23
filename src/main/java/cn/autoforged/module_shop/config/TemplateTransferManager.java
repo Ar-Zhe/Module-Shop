@@ -278,6 +278,7 @@ public final class TemplateTransferManager {
                         "保存默认模板失败。", err);
                 return;
             }
+            ShopTemplateStore.archiveOtherDefaultFiles(configDir, target);
             String relKey = ShopTemplateStore.relativeKey(configDir, target);
             String relPath = "config/" + ShopTemplateStore.DIR_NAME + "/" + relKey;
             player.displayClientMessage(Component.translatable("msg.module_shop.cfg_saved_default", relPath)
@@ -594,6 +595,12 @@ public final class TemplateTransferManager {
                 selectedSections.isEmpty() ? null : selectedSections);
         var result = detailed.result();
 
+        EnumSet<ExportSection> effective = selectedSections.isEmpty() ? template.presentSections : selectedSections;
+        boolean resetShop = effective.isEmpty() || effective.contains(ExportSection.SHOP);
+        boolean resetBuyback = effective.isEmpty() || effective.contains(ExportSection.BUYBACK);
+        if (resetShop || resetBuyback) {
+            ShopManager.rerollDailyForAll(server, data, resetShop, resetBuyback);
+        }
         data.setDirty();
         try {
             ShopManager.refreshAllClients(server, data);
@@ -655,6 +662,7 @@ public final class TemplateTransferManager {
                 read.template(), data, Mode.REPLACE, server.registryAccess(), null);
         var result = detailed.result();
         data.templateInitDone = true;
+        ShopManager.rerollDailyForAll(server, data, true, true);
         data.setDirty();
         try {
             ShopManager.refreshAllClients(server, data);

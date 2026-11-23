@@ -547,8 +547,8 @@ public final class ClientShopData {
             buybackGuarantee = bg;
         }
         if (tag.contains("shopSlotCount")) {
-            shopSlotCount = Math.max(1, tag.getInt("shopSlotCount"));
-            buybackSlotCount = Math.max(1, tag.getInt("buybackSlotCount"));
+            shopSlotCount = Math.max(0, Math.min(64, tag.getInt("shopSlotCount")));
+            buybackSlotCount = Math.max(0, Math.min(64, tag.getInt("buybackSlotCount")));
         }
         int[] td = tag.getIntArray("signInTierDays");
         if (td.length > 0) { signInTierDays = td; }
@@ -1014,6 +1014,13 @@ public final class ClientShopData {
         sidebarNames = new java.util.LinkedHashMap<>();
         shopTitle = "";
         brandIconId = "";
+        stallExpireMode = "permanent";
+        stallExpireAmount = 7;
+        demandExpireMode = "permanent";
+        demandExpireAmount = 7;
+        stall = new ArrayList<>();
+        stallPlayers = new ArrayList<>();
+        demands = new ArrayList<>();
         cn.autoforged.module_shop.client.media.ClientMediaCache.clearMemory();
         ClientAdminAuth.clearState();
         clearTrade();

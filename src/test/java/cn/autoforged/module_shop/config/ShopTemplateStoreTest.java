@@ -138,8 +138,111 @@ class ShopTemplateStoreTest {
         assertNull(ShopTemplateStore.resolveSafeServerFile(configDir, "professions.json"));
         assertNull(ShopTemplateStore.resolveSafeServerFile(configDir, "quality_rules.json"));
         assertNull(ShopTemplateStore.resolveSafeServerFile(configDir, "mod_names_zh_cn.json"));
+        assertNull(ShopTemplateStore.resolveSafeServerFile(configDir, "mod_names_en_us.json"));
+        assertNull(ShopTemplateStore.resolveSafeServerFile(configDir, "brand_default.json"));
+        assertNull(ShopTemplateStore.resolveSafeServerFile(configDir, "admin_auth.json"));
         assertNull(ShopTemplateStore.resolveSafeServerFile(configDir, "/abs/path.json"));
         assertNull(ShopTemplateStore.resolveSafeServerFile(configDir, "C:\\evil.json"));
         assertNull(ShopTemplateStore.resolveSafeServerFile(configDir, "not_json.txt"));
+    }
+
+    @Test
+    @DisplayName("默认模板跨格式更新：保存新后缀 shop_config 时自动归档移除旧后缀并避免解压同秒冲突")
+    void saveDefaultArchivesOtherFormatSiblings(@TempDir Path configDir) throws Exception {
+        Path mshop = ShopTemplateStore.saveExportOrDefault(
+                configDir, sampleTemplate("旧版整合包默认"), "shop_config",
+                ShopTemplateStore.TemplateFormat.MSHOP, null);
+        assertNotNull(mshop);
+        assertEquals("shop_config.mshop", mshop.getFileName().toString());
+        assertTrue(Files.isRegularFile(mshop));
+
+        Path json = ShopTemplateStore.saveExportOrDefault(
+                configDir, sampleTemplate("新版纯文本默认"), "shop_config",
+                ShopTemplateStore.TemplateFormat.JSON, null);
+        assertNotNull(json);
+        assertEquals("shop_config.json", json.getFileName().toString());
+        assertTrue(Files.isRegularFile(json));
+        assertFalse(Files.exists(mshop), "旧后缀 shop_config.mshop 应已归档移除");
+
+        Path resolved = ShopTemplateStore.resolveExistingDefaultFile(configDir);
+        assertEquals(json.toAbsolutePath().normalize(), resolved.toAbsolutePath().normalize());
+        assertEquals("新版纯文本默认", ShopTemplateStore.read(resolved).template().name);
+
+        // 确认旧的 .mshop 已安全备份进 backups/
+        try (Stream<Path> s = Files.list(ShopTemplateStore.backupsDir(configDir))) {
+            List<Path> backups = s.filter(Files::isRegularFile).toList();
+            assertEquals(1, backups.size());
+            assertTrue(backups.get(0).getFileName().toString().endsWith(".mshop"));
+            assertEquals("旧版整合包默认", ShopTemplateStore.read(backups.get(0)).template().name);
+        }
+
+        // 同时验证 brand_default.json / admin_auth.json / mod_names_*.json 不会混入列表
+        Path root = ShopTemplateStore.dir(configDir);
+        Files.writeString(root.resolve("brand_default.json"), "{\"shopTitle\":\"test\"}", StandardCharsets.UTF_8);
+        Files.writeString(root.resolve("admin_auth.json"), "{\"enabled\":true}", StandardCharsets.UTF_8);
+        Files.writeString(root.resolve("mod_names_en_us.json"), "{}", StandardCharsets.UTF_8);
+
+        List<Path> listed = ShopTemplateStore.listTemplates(configDir);
+        assertEquals(1, listed.size());
+        assertEquals("shop_config.json", listed.get(0).getFileName().toString());
+    }
+
+    @Test
+    @DisplayName("模板 JSON 读取支持 UTF-8 BOM 剥离与 GB18030 中文编码回退")
+    void readTemplateSupportsUtf8BomAndGb18030(@TempDir Path configDir) throws Exception {
+        Path root = ShopTemplateStore.dir(configDir);
+        Files.createDirectories(root);
+
+        byte[] utf8 = "{\"format_version\":1,\"name\":\"繁星商店\"}".getBytes(StandardCharsets.UTF_8);
+        byte[] withBom = new byte[3 + utf8.length];
+        withBom[0] = (byte) 0xEF;
+        withBom[1] = (byte) 0xBB;
+        withBom[2] = (byte) 0xBF;
+        System.arraycopy(utf8, 0, withBom, 3, utf8.length);
+        Path bomFile = root.resolve("bom_tpl.json");
+        Files.write(bomFile, withBom);
+        ShopTemplateStore.ReadDetailedResult bomRes = ShopTemplateStore.readDetailed(bomFile);
+        assertTrue(bomRes.ok(), () -> "UTF-8 BOM 读取失败: " + bomRes.errorCode() + " / " + bomRes.errorDetail());
+        assertEquals("繁星商店", bomRes.template().name);
+
+        byte[] gbBytes = "{\"format_version\":1,\"name\":\"记事本中文模板\"}"
+                .getBytes(java.nio.charset.Charset.forName("GB18030"));
+        Path gbFile = root.resolve("gb_tpl.json");
+        Files.write(gbFile, gbBytes);
+        ShopTemplateStore.ReadDetailedResult gbRes = ShopTemplateStore.readDetailed(gbFile);
+        assertTrue(gbRes.ok(), () -> "GB18030 读取失败: " + gbRes.errorCode() + " / " + gbRes.errorDetail());
+        assertEquals("记事本中文模板", gbRes.template().name);
+
+        // UTF-16LE BOM (FF FE)
+        byte[] leBody = "{\"format_version\":1,\"name\":\"UTF16小端模板\"}".getBytes(StandardCharsets.UTF_16LE);
+        byte[] leBytes = new byte[2 + leBody.length];
+        leBytes[0] = (byte) 0xFF;
+        leBytes[1] = (byte) 0xFE;
+        System.arraycopy(leBody, 0, leBytes, 2, leBody.length);
+        Path leFile = root.resolve("utf16le_tpl.json");
+        Files.write(leFile, leBytes);
+        ShopTemplateStore.ReadDetailedResult leRes = ShopTemplateStore.readDetailed(leFile);
+        assertTrue(leRes.ok(), () -> "UTF-16LE BOM 读取失败: " + leRes.errorCode() + " / " + leRes.errorDetail());
+        assertEquals("UTF16小端模板", leRes.template().name);
+
+        // UTF-16BE BOM (FE FF)
+        byte[] beBody = "{\"format_version\":1,\"name\":\"UTF16大端模板\"}".getBytes(StandardCharsets.UTF_16BE);
+        byte[] beBytes = new byte[2 + beBody.length];
+        beBytes[0] = (byte) 0xFE;
+        beBytes[1] = (byte) 0xFF;
+        System.arraycopy(beBody, 0, beBytes, 2, beBody.length);
+        Path beFile = root.resolve("utf16be_tpl.json");
+        Files.write(beFile, beBytes);
+        ShopTemplateStore.ReadDetailedResult beRes = ShopTemplateStore.readDetailed(beFile);
+        assertTrue(beRes.ok(), () -> "UTF-16BE BOM 读取失败: " + beRes.errorCode() + " / " + beRes.errorDetail());
+        assertEquals("UTF16大端模板", beRes.template().name);
+
+        // 损坏二进制必须被严格拒绝，不静默产出乱码
+        byte[] corrupt = new byte[]{(byte) 0xFF, (byte) 0x80, (byte) 0xFE, (byte) 0xFF};
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> ShopTemplateStore.decodeJsonText(corrupt));
+        ShopTemplateStore.ReadDetailedResult corruptRes = ShopTemplateStore.readBytesDetailed(corrupt, "broken.json");
+        assertFalse(corruptRes.ok());
+        assertEquals("invalid_json", corruptRes.errorCode());
     }
 }

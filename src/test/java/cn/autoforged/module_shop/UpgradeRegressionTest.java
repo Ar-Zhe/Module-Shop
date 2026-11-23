@@ -827,4 +827,70 @@ class UpgradeRegressionTest {
         assertTrue(cfgSrc.contains("public static int shippingLevels("));
         assertTrue(cfgSrc.contains("last + extra * 9"));
     }
+
+    @Test
+    void shellV2AndSkiaDialogRenderTooltipsWithIdentityPoseAndGuiCoords() throws IOException {
+        String shellCode = Files.readString(
+                Path.of("src/main/java/cn/autoforged/module_shop/client/screen/ShellV2.java"),
+                StandardCharsets.UTF_8).replaceAll("(?m)//.*$", "");
+        int shellRender = shellCode.indexOf("void render(GuiGraphics g, int mouseX, int mouseY)");
+        int shellHovered = shellCode.indexOf("ItemStack hovered = this.screen.pageItems.hovered();", shellRender);
+        int shellEnd = shellCode.indexOf("this.screen.pendingTextTip = null;", shellHovered);
+        assertTrue(shellRender > 0 && shellHovered > shellRender && shellEnd > shellHovered);
+        String shellTipBlock = shellCode.substring(shellHovered, shellEnd);
+        assertFalse(shellTipBlock.contains("pose().scale"), "ShellV2 tooltip 阶段不得缩放 GuiGraphics.pose()");
+        assertTrue(shellTipBlock.contains("renderTooltip(Minecraft.getInstance().font, hovered, mouseX, mouseY)"),
+                "ShellV2 物品 tooltip 必须直接传入原始 GUI 坐标 (mouseX, mouseY)");
+
+        String dlgCode = Files.readString(
+                Path.of("src/main/java/cn/autoforged/module_shop/client/screen/SkiaDialog.java"),
+                StandardCharsets.UTF_8).replaceAll("(?m)//.*$", "");
+        int dlgResetClip = dlgCode.indexOf("this.items.setClipScale(1.0F);");
+        int dlgReturn = dlgCode.indexOf("return true;", dlgResetClip);
+        assertTrue(dlgResetClip > 0 && dlgReturn > dlgResetClip);
+        String dlgTipBlock = dlgCode.substring(dlgResetClip, dlgReturn);
+        assertFalse(dlgTipBlock.contains("pose().scale"), "SkiaDialog tooltip 阶段不得缩放 GuiGraphics.pose()");
+        assertTrue(dlgTipBlock.contains("this.items.renderTooltip(g, this.font, guiMx, guiMy)"),
+                "SkiaDialog 物品 tooltip 必须直接传入原始 GUI 坐标 (guiMx, guiMy)");
+    }
+
+    @Test
+    void dailyBuybackAndShopFullServerRerollAndPoolSyncGuards() throws Exception {
+        cn.autoforged.module_shop.data.PlayerAccount acc1 = new cn.autoforged.module_shop.data.PlayerAccount();
+        cn.autoforged.module_shop.data.PlayerAccount acc2 = new cn.autoforged.module_shop.data.PlayerAccount();
+        acc1.dailyShopDay = 19999L;
+        acc1.dailyBuybackDay = 19999L;
+        acc1.dailyFlipped.add(0);
+        acc2.dailyShopDay = 19999L;
+        acc2.dailyBuybackDay = 19999L;
+
+        // 仅重抽每日收购：两个玩家（含离线账户）的 dailyBuybackDay 均重置，但每日商店保持不变
+        cn.autoforged.module_shop.shop.ShopManager.resetAccountsDaily(List.of(acc1, acc2), false, true);
+        assertEquals(19999L, acc1.dailyShopDay);
+        assertEquals(19999L, acc2.dailyShopDay);
+        assertTrue(acc1.dailyFlipped.contains(0));
+        assertEquals(Long.MIN_VALUE, acc1.dailyBuybackDay);
+        assertEquals(Long.MIN_VALUE, acc2.dailyBuybackDay);
+
+        // 仅重抽每日商店：dailyShopDay 与翻面状态同步清空
+        cn.autoforged.module_shop.shop.ShopManager.resetAccountsDaily(List.of(acc1, acc2), true, false);
+        assertEquals(Long.MIN_VALUE, acc1.dailyShopDay);
+        assertEquals(Long.MIN_VALUE, acc2.dailyShopDay);
+        assertTrue(acc1.dailyFlipped.isEmpty());
+
+        String mgrCode = Files.readString(
+                Path.of("src/main/java/cn/autoforged/module_shop/shop/ShopManager.java"),
+                StandardCharsets.UTF_8);
+        assertTrue(mgrCode.contains("applyBuybackGuarantee("),
+                "generateDailyBuyback 必须执行收购品质保底逻辑");
+        assertTrue(mgrCode.contains("syncDailyBuybackWithPool(player, account, data)"),
+                "ensureDaily 必须执行同日收购池增量补齐与删项同步");
+        assertTrue(mgrCode.contains("resetAccountsDaily(data.accounts().values(), resetShop, resetBuyback)"),
+                "rerollDailyForAll 必须重置全服在线与离线账户");
+        int genSetIdx = mgrCode.indexOf("private static void adminShopGenSet(");
+        int genSetEnd = mgrCode.indexOf("msg.module_shop.gen_set_ok", genSetIdx);
+        assertTrue(genSetIdx > 0 && genSetEnd > genSetIdx);
+        assertTrue(mgrCode.substring(genSetIdx, genSetEnd).contains("rerollDailyForAll(player.server, data, shop, !shop)"),
+                "刷新参数保存后必须同步重抽全服玩家");
+    }
 }

@@ -447,6 +447,11 @@ public final class ClientTemplateIO {
                 setErrorAndNotify("io_error", "msg.module_shop.cfg_export_fail", "写入本地文件失败。", err);
                 return;
             }
+            if (isDefault || "save_default".equals(purpose)
+                    || (dir.equals(target.getParent())
+                    && ShopTemplateStore.isDefaultName(target.getFileName().toString()))) {
+                ShopTemplateStore.archiveOtherDefaultFiles(cfg, target);
+            }
             lastErrorMessage = "";
             Component msg = isDefault || "save_default".equals(purpose)
                     ? Component.translatable("msg.module_shop.cfg_saved_default", String.valueOf(target))
@@ -505,7 +510,13 @@ public final class ClientTemplateIO {
 
     /** 把服务端下发的模板写成默认模板（`shop_config.json`）。 */
     public static String writeDefault(ShopTemplate template) {
-        return ShopTemplateStore.write(ShopTemplateStore.defaultFile(configDir()), template);
+        Path cfg = configDir();
+        Path target = ShopTemplateStore.defaultFile(cfg);
+        String err = ShopTemplateStore.write(target, template);
+        if (err.isEmpty()) {
+            ShopTemplateStore.archiveOtherDefaultFiles(cfg, target);
+        }
+        return err;
     }
 
     /** 模板 JSON（兼容旧调用点）。 */

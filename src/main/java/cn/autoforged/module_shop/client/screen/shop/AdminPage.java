@@ -379,10 +379,10 @@ public final class AdminPage implements ShopPage {
         } else if (demands) {
             specs.add(new Object[]{"gui.module_shop.demand.settings", "demand_settings", ClientShopData.demandEnabled});
             specs.add(new Object[]{"gui.module_shop.demand.expire", "demand_expire",
-                    !"permanent".equals(ClientShopData.demandExpireMode)});
+                    !"permanent".equals(ClientShopData.demandExpireMode) && ClientShopData.demandExpireAmount > 0});
         } else if (stalls) {
             specs.add(new Object[]{"gui.module_shop.stall.expire", "stall_expire",
-                    !"permanent".equals(ClientShopData.stallExpireMode)});
+                    !"permanent".equals(ClientShopData.stallExpireMode) && ClientShopData.stallExpireAmount > 0});
         } else {
             specs.add(new Object[]{"gui.module_shop.admin_add", "admin_add", false});
             if (mall) {
@@ -395,6 +395,7 @@ public final class AdminPage implements ShopPage {
                 specs.add(new Object[]{"gui.module_shop.admin_system_costs", "admin_system_costs", false});
             } else {
                 specs.add(new Object[]{"gui.module_shop.admin_gen", "admin_gen_set", false});
+                specs.add(new Object[]{"gui.module_shop.admin_reroll", "admin_reroll_daily", false});
                 specs.add(new Object[]{"gui.module_shop.admin_system_costs", "admin_system_costs", false});
             }
         }
@@ -411,12 +412,17 @@ public final class AdminPage implements ShopPage {
             Button b = actions.get(i);
             String label = "gui.module_shop.admin_system_costs".equals(key)
                     ? ClientHomeCurrencyState.tr(key, "系统费用设置")
-                    : Component.translatable(key).getString();
+                    : ("gui.module_shop.admin_reroll".equals(key)
+                            ? ClientHomeCurrencyState.tr(key, "全服重抽")
+                            : Component.translatable(key).getString());
             b.label(label);
             b.kind(on ? Button.Kind.ACCENT : Button.Kind.NORMAL);
             b.onClick(() -> ClientAdminAuth.guard(() -> {
                 CompoundTag extra = null;
-                if ("admin_add".equals(action) || "admin_system_costs".equals(action)) {
+                if ("admin_add".equals(action)
+                        || "admin_gen_set".equals(action)
+                        || "admin_reroll_daily".equals(action)
+                        || "admin_system_costs".equals(action)) {
                     extra = new CompoundTag();
                     extra.putString("mode", mode);
                 }

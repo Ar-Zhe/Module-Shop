@@ -9,6 +9,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -118,10 +122,13 @@ public final class ShopTemplateStore {
     private static final Set<String> RESERVED_NON_TEMPLATE = Set.of(
             "professions.json",
             "quality_rules.json",
+            "mod_names.json",
             "mod_names_zh_cn.json",
             "announcements.json",
             "physical_currency.json",
-            "media_index.json"
+            "media_index.json",
+            "brand_default.json",
+            "admin_auth.json"
     );
 
     /** Windows 保留设备名（不区分大小写）。 */
@@ -185,7 +192,11 @@ public final class ShopTemplateStore {
         if (fileName == null || fileName.isBlank()) {
             return true;
         }
-        return RESERVED_NON_TEMPLATE.contains(fileName.trim().toLowerCase(Locale.ROOT));
+        String lower = fileName.trim().toLowerCase(Locale.ROOT);
+        if (RESERVED_NON_TEMPLATE.contains(lower)) {
+            return true;
+        }
+        return lower.startsWith("mod_names_") && lower.endsWith(".json");
     }
 
     public static boolean isTemplateFileName(@Nullable String fileName) {
@@ -346,8 +357,12 @@ public final class ShopTemplateStore {
         if (raw.length > MAX_UNCOMPRESSED_JSON_BYTES) {
             return new ReadDetailedResult(null, "too_large", raw.length + " bytes", List.of());
         }
-        String json = new String(raw, StandardCharsets.UTF_8);
-        return parseJsonResult(json);
+        try {
+            String json = decodeJsonText(raw);
+            return parseJsonResult(json);
+        } catch (IllegalArgumentException ex) {
+            return new ReadDetailedResult(null, "invalid_json", ex.getMessage(), List.of());
+        }
     }
 
     private static ReadDetailedResult readMshopArchive(byte[] raw) {
@@ -473,7 +488,48 @@ public final class ShopTemplateStore {
     }
 
     private static String readBoundedUtf8(InputStream in, long maxBytes) throws IOException {
-        return new String(readBoundedBytes(in, maxBytes), StandardCharsets.UTF_8);
+        return decodeJsonText(readBoundedBytes(in, maxBytes));
+    }
+
+    static String decodeJsonText(byte[] raw) {
+        if (raw == null || raw.length == 0) {
+            return "";
+        }
+        String text;
+        if (raw.length >= 2 && (raw[0] & 0xFF) == 0xFF && (raw[1] & 0xFF) == 0xFE) {
+            text = decodeStrict(raw, 2, StandardCharsets.UTF_16LE);
+        } else if (raw.length >= 2 && (raw[0] & 0xFF) == 0xFE && (raw[1] & 0xFF) == 0xFF) {
+            text = decodeStrict(raw, 2, StandardCharsets.UTF_16BE);
+        } else {
+            int offset = 0;
+            if (raw.length >= 3 && (raw[0] & 0xFF) == 0xEF && (raw[1] & 0xFF) == 0xBB && (raw[2] & 0xFF) == 0xBF) {
+                offset = 3;
+            }
+            try {
+                text = decodeStrict(raw, offset, StandardCharsets.UTF_8);
+            } catch (IllegalArgumentException utf8Ex) {
+                if (offset != 0 || !Charset.isSupported("GB18030")) {
+                    throw utf8Ex;
+                }
+                text = decodeStrict(raw, offset, Charset.forName("GB18030"));
+            }
+        }
+        while (!text.isEmpty() && text.charAt(0) == '\uFEFF') {
+            text = text.substring(1);
+        }
+        return text;
+    }
+
+    private static String decodeStrict(byte[] raw, int offset, Charset charset) {
+        try {
+            return charset.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(raw, offset, raw.length - offset))
+                    .toString();
+        } catch (CharacterCodingException ex) {
+            throw new IllegalArgumentException("无法按 " + charset.name() + " 解码文本", ex);
+        }
     }
 
     private static byte[] readBoundedBytes(InputStream in, long maxBytes) throws IOException {
@@ -623,7 +679,8 @@ public final class ShopTemplateStore {
             Path root = dir(configDir).toAbsolutePath().normalize();
             Files.createDirectories(root);
             Path target;
-            if (isDefaultName(rawName)) {
+            boolean defaultTarget = isDefaultName(rawName);
+            if (defaultTarget) {
                 target = root.resolve(fmt.defaultFileName);
             } else {
                 String prefix = sanitizePrefix(rawName);
@@ -640,9 +697,46 @@ public final class ShopTemplateStore {
                 return null;
             }
             String error = write(target, template, sections);
-            return error.isEmpty() ? target : null;
+            if (!error.isEmpty()) {
+                return null;
+            }
+            if (defaultTarget) {
+                archiveOtherDefaultFiles(configDir, target);
+            }
+            return target;
         } catch (IOException | RuntimeException error) {
             return null;
+        }
+    }
+
+    /**
+     * 写入新的默认模板（{@code shop_config.*}）后，将同目录下其余后缀的旧默认模板自动备份到 {@code backups/} 并移除，
+     * 确保 {@code config/moduleshop/} 下始终只有唯一生效的默认模板，避免整合包压缩解压刷平修改时间后旧后缀反压新配置。
+     */
+    public static void archiveOtherDefaultFiles(@Nullable Path configDir, @Nullable Path keepFile) {
+        if (configDir == null || keepFile == null) {
+            return;
+        }
+        Path keepNorm = keepFile.toAbsolutePath().normalize();
+        Path[] candidates = {
+                defaultFile(configDir, TemplateFormat.MSHOP),
+                defaultFile(configDir, TemplateFormat.JSON_GZ),
+                defaultFile(configDir, TemplateFormat.JSON)
+        };
+        for (Path candidate : candidates) {
+            Path candNorm = candidate.toAbsolutePath().normalize();
+            if (candNorm.equals(keepNorm)) {
+                continue;
+            }
+            try {
+                if (Files.isRegularFile(candNorm)) {
+                    if (Files.size(candNorm) > 0L) {
+                       backup(candNorm);
+                    }
+                    Files.deleteIfExists(candNorm);
+                }
+            } catch (IOException | RuntimeException ignored) {
+            }
         }
     }
 
@@ -666,7 +760,13 @@ public final class ShopTemplateStore {
                 return null;
             }
             String error = write(target, template);
-            return error.isEmpty() ? target : null;
+            if (!error.isEmpty()) {
+                return null;
+            }
+            if (isDefaultUploadTarget(configDir, target)) {
+                archiveOtherDefaultFiles(configDir, target);
+            }
+            return target;
         } catch (IOException | RuntimeException error) {
             return null;
         }
@@ -686,10 +786,22 @@ public final class ShopTemplateStore {
                 return null;
             }
             String error = writeRawAtomic(target, rawBytes);
-            return error.isEmpty() ? target : null;
+            if (!error.isEmpty()) {
+                return null;
+            }
+            if (isDefaultUploadTarget(configDir, target)) {
+                archiveOtherDefaultFiles(configDir, target);
+            }
+            return target;
         } catch (IOException | RuntimeException error) {
             return null;
         }
+    }
+
+    private static boolean isDefaultUploadTarget(Path configDir, Path target) {
+        Path root = dir(configDir).toAbsolutePath().normalize();
+        Path norm = target.toAbsolutePath().normalize();
+        return root.equals(norm.getParent()) && isDefaultName(norm.getFileName().toString());
     }
 
     private static @Nullable Path resolveUploadTarget(Path configDir, String rawFileName, TemplateFormat fmt)

@@ -237,21 +237,17 @@ final class ShellV2 {
         }
 
         // 提示：物品原版 tooltip（同时供 JEI 快捷键）优先，其次是文字提示。
-        // GUI 缩放大时原版提示框会比界面大一倍：按界面自己的缩放把它缩小（原版定位仍会把它夹在屏幕内）。
+        // 必须保持单位 pose 并传入原始 GUI 坐标 (mouseX, mouseY)：
+        // 原版 DefaultTooltipPositioner 按未缩放 guiWidth/guiHeight 夹持边界，且 ColorTooltips 等模组
+        // 调用 GuiGraphics.enableScissor（不随 pose 缩放）并在 ScreenEvent.Render.Post 淡出重放，缩放 pose 会导致提示框被裁切不可见且移开瞬间闪烁。
         ItemStack hovered = this.screen.pageItems.hovered();
         this.screen.jeiHover = hovered;
-        float tk = Math.min(Math.max(1.0F, k), this.ui * 0.85F / (float) gs);
-        int tmx = Math.round(mouseX / tk);
-        int tmy = Math.round(mouseY / tk);
-        g.pose().pushPose();
-        g.pose().scale(tk, tk, 1.0F);
         if (!hovered.isEmpty()) {
-            g.renderTooltip(Minecraft.getInstance().font, hovered, tmx, tmy);
+            g.renderTooltip(Minecraft.getInstance().font, hovered, mouseX, mouseY);
         } else if (this.screen.pendingTextTip != null) {
             g.renderTooltip(Minecraft.getInstance().font,
-                    Minecraft.getInstance().font.split(this.screen.pendingTextTip, 260), tmx, tmy);
+                    Minecraft.getInstance().font.split(this.screen.pendingTextTip, 260), mouseX, mouseY);
         }
-        g.pose().popPose();
         this.screen.pendingTextTip = null;
     }
 
