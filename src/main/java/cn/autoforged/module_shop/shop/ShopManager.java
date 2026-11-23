@@ -2899,6 +2899,8 @@ public final class ShopManager {
 
     /** 出货箱：本游戏日是否已经遍历结算过（避免每 tick 遍历）。服务器启动时重置，见 {@link #resetShippingTick}。 */
     private static long shippingLoggedDay = Long.MIN_VALUE;
+    /** 永昼/冻结时间自动兜底时钟（服务器启动时重置）。 */
+    private static final ShippingSettleClock SHIPPING_CLOCK = new ShippingSettleClock();
 
     /**
      * 服务器启动时调用：清掉上一个存档留下的「今天已结算」标记。
@@ -2906,6 +2908,7 @@ public final class ShopManager {
      */
     public static void resetShippingTick() {
         shippingLoggedDay = Long.MIN_VALUE;
+        SHIPPING_CLOCK.reset();
         LAST_SENT_MALL_HASH.clear();
     }
 
@@ -3113,9 +3116,19 @@ public final class ShopManager {
         if (!Config.INSTANCE.shippingEnabled.get()) {
             return;
         }
-        long dayTime = server.overworld().getDayTime();
-        long gameDay = Math.floorDiv(dayTime, 24000L);
-        long timeOfDay = Math.floorMod(dayTime, 24000L);
+        var overworld = server.overworld();
+        boolean daylightOn = overworld.getGameRules().getBoolean(net.minecraft.world.level.GameRules.RULE_DAYLIGHT);
+        ShippingSettleClock.Sample clock = SHIPPING_CLOCK.sample(daylightOn, overworld.getDayTime(), overworld.getGameTime());
+        if (clock.modeChanged()) {
+            shippingLoggedDay = Long.MIN_VALUE;
+            org.slf4j.LoggerFactory.getLogger("module_shop").info(
+                    clock.fallbackGameTime()
+                            ? "出货箱：检测到永昼/昼夜时间停滞，已自动切换为运行刻定时结算（每 20 分钟一次）"
+                            : "出货箱：检测到昼夜循环恢复，已切回按游戏时间定时结算");
+            broadcastSnapshots(server);
+        }
+        long gameDay = clock.cycleDay();
+        long timeOfDay = clock.timeOfDay();
         long start = Config.INSTANCE.shippingSettleTick.get();
         // 游戏时间被调回（/time set day、/time set 0 …会把 DayTime 设成绝对值，游戏日从 0 重新数）：旧标记作废。
         if (shippingLoggedDay != Long.MIN_VALUE && shippingLoggedDay > gameDay) {
@@ -3126,7 +3139,7 @@ public final class ShopManager {
         }
         // 以前只在 [start, start + shippingSettleWindow] 这 9 秒窗口里结算：/time add、/time set noon、
         // 或服务器在窗口内卡顿超过 9 秒，都会把窗口整个跳过，当天就不出货了。
-        // 现在改为「当天到点后的第一次 tick 结算」（每个箱子仍然每个游戏日只结算一次，由 lastSettleGameDay 保证）。
+        // 现在改为「当天到点后的第一次 tick 结算」（每个箱子仍然每个周期只结算一次，由 lastSettleGameDay 保证）。
         if (timeOfDay < start) {
             return;
         }
@@ -3737,6 +3750,7 @@ public final class ShopManager {
         }
         tag.put("shippingUpgradeSpecs", writeSpecList(upgradeSpecs));
         tag.putInt("shipSettleTick", Config.INSTANCE.shippingSettleTick.get());
+        tag.putBoolean("shipUseGameTime", SHIPPING_CLOCK.isFallbackGameTime());
         tag.putString("shipResetTime", Config.INSTANCE.shippingResetTime.get());
         List<ShippingRules.Rule> rules = ShippingRules.rules();
         List<String> errors = ShippingRules.errors();

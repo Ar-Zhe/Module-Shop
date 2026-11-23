@@ -5705,16 +5705,24 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
 
     // =========================================================== 出货箱（新增模块）
 
-    /** 客户端估算：距离下一次结算还有多少**游戏内**时间（用客户端自己的世界时间，不用服务端下发）。 */
+    /** 客户端估算：距离下一次结算还有多少时间（正常按游戏内时间，永昼兜底按运行刻真实倒计时）。 */
     private static String shippingNextText() {
         var level = Minecraft.getInstance().level;
         if (level == null) {
             return "";
         }
-        long dayTime = level.getDayTime();
-        long timeOfDay = dayTime % 24000L;
         long start = ClientShopData.shipSettleTick;
-        long remain = timeOfDay <= start ? start - timeOfDay : 24000L - timeOfDay + start;
+        if (ClientShopData.shipUseGameTime) {
+            long remain = cn.autoforged.module_shop.shop.ShippingSettleClock.remainingTicks(level.getGameTime(), start);
+            long totalSec = Math.max(0L, remain) / 20L;
+            if (totalSec < 1L) {
+                return Component.translatable("gui.module_shop.shipping.settling").getString();
+            }
+            long m = totalSec / 60L;
+            long s = totalSec % 60L;
+            return m > 0L ? (m + "分" + (s > 0L ? s + "秒后" : "后")) : (s + "秒后");
+        }
+        long remain = cn.autoforged.module_shop.shop.ShippingSettleClock.remainingTicks(level.getDayTime(), start);
         long minutes = Math.max(0L, remain) * 60L / 1000L;   // 1000 刻 = 1 游戏小时
         if (remain <= 0L || minutes < 1L) {
             return Component.translatable("gui.module_shop.shipping.settling").getString();
@@ -5757,9 +5765,11 @@ public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
         // ---------- 卡片二：结算时间（规则条数/正常与否不再占行，只有出错时才红字提醒）----------
         int card2Y = cardY + 62;
         IOStyle.card(g, cx + 2, card2Y, cw - 4, 50, 0);
-        Component settleTime = Component.translatable("gui.module_shop.shipping.settle_time",
-                String.format("%02d:%02d", (ClientShopData.shipSettleTick / 1000 + 6) % 24,
-                        (int) ((ClientShopData.shipSettleTick % 1000) * 60 / 1000)));
+        Component settleTime = ClientShopData.shipUseGameTime
+                ? Component.translatableWithFallback("gui.module_shop.shipping.settle_gametime", "永昼兜底 · 每20分钟")
+                : Component.translatable("gui.module_shop.shipping.settle_time",
+                        String.format("%02d:%02d", (ClientShopData.shipSettleTick / 1000 + 6) % 24,
+                                (int) ((ClientShopData.shipSettleTick % 1000) * 60 / 1000)));
         drawSmallLabel(g, cx + 10, card2Y + 8, settleTime, IOStyle.TEXT_2);
         drawSmallLabel(g, cx + 10, card2Y + 22, Component.translatable(
                 "gui.module_shop.shipping.reset_line", ClientShopData.shipResetTimeText), IOStyle.TEXT_2);

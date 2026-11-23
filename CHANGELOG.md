@@ -2,6 +2,14 @@
 
 遵循 [语义化版本](https://semver.org/lang/zh-CN/)。模组版本与 API 版本独立维护（当前 API `1.5.0`）。
 
+## [1.8.4]
+
+构建产物：`Module-Shop-1.8.4-for-NeoForge-1.21.1.jar` 与 `module_shop-1.8.4-api.jar`；PATCH 修复，向后兼容旧存档 / 配置 / 附属模组，保留历史全部版本 jar。
+
+### 修复
+
+- **出货箱新增永昼/时间停滞自动兜底结算机制**：新增 `ShippingSettleClock`，正常昼夜循环服 100% 保持按 `dayTime`（默认次日 06:00）结算；当检测到服务器开启 `/gamerule doDaylightCycle false`、模组冻结 `dayTime` 或命令方块/插件反复把 `dayTime` 拉回白天导致游戏日不进位时，自动平滑回退到按主世界总运行刻 `getGameTime()` 每 `24,000` 刻（现实 20 分钟）定时结算一次，并在客户端出货箱界面同步显示实时倒计时与「永昼兜底 · 每20分钟」提示（恢复正常昼夜循环后自动切回原模式）。
+
 ## [1.8.3]
 
 构建产物：`Module-Shop-1.8.3-for-NeoForge-1.21.1.jar` 与 `module_shop-1.8.3-api.jar`；PATCH 性能优化，向后兼容旧存档 / 配置 / 附属模组，保留历史全部版本 jar。

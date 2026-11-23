@@ -156,9 +156,11 @@ public final class ShippingPage implements ShopPage {
                 {tr("gui.module_shop.v2.shipping.today"), ClientShopData.shipLimit > 0
                         ? V2.money(ClientShopData.shipSoldToday) + " / " + V2.money(ClientShopData.shipLimit)
                         : V2.money(ClientShopData.shipSoldToday), ClientShopData.shipLimit > 0 ? "" : tr("gui.module_shop.v2.shipping.no_cap")},
-                {tr("gui.module_shop.v2.shipping.next"), nextSettleText(), tr("gui.module_shop.shipping.settle_time",
-                        String.format("%02d:%02d", (ClientShopData.shipSettleTick / 1000 + 6) % 24,
-                                (ClientShopData.shipSettleTick % 1000) * 60 / 1000))},
+                {tr("gui.module_shop.v2.shipping.next"), nextSettleText(), ClientShopData.shipUseGameTime
+                        ? Component.translatableWithFallback("gui.module_shop.shipping.settle_gametime", "永昼兜底 · 每20分钟").getString()
+                        : tr("gui.module_shop.shipping.settle_time",
+                                String.format("%02d:%02d", (ClientShopData.shipSettleTick / 1000 + 6) % 24,
+                                        (ClientShopData.shipSettleTick % 1000) * 60 / 1000))},
                 {tr("gui.module_shop.v2.shipping.reset"), ClientShopData.shipResetTimeText, ""}};
         float cw = w / cells.length;
         for (int i = 0; i < cells.length; i++) {
@@ -197,9 +199,18 @@ public final class ShippingPage implements ShopPage {
         if (level == null) {
             return "—";
         }
-        long timeOfDay = level.getDayTime() % 24000L;
         long start = ClientShopData.shipSettleTick;
-        long remain = timeOfDay <= start ? start - timeOfDay : 24000L - timeOfDay + start;
+        if (ClientShopData.shipUseGameTime) {
+            long remain = cn.autoforged.module_shop.shop.ShippingSettleClock.remainingTicks(level.getGameTime(), start);
+            long totalSec = Math.max(0L, remain) / 20L;
+            if (totalSec < 1L) {
+                return tr("gui.module_shop.shipping.settling");
+            }
+            long m = totalSec / 60L;
+            long s = totalSec % 60L;
+            return m > 0L ? (m + "分" + (s > 0L ? s + "秒后" : "后")) : (s + "秒后");
+        }
+        long remain = cn.autoforged.module_shop.shop.ShippingSettleClock.remainingTicks(level.getDayTime(), start);
         long minutes = Math.max(0L, remain) * 60L / 1000L;
         if (remain <= 0L || minutes < 1L) {
             return tr("gui.module_shop.shipping.settling");
