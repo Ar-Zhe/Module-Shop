@@ -164,20 +164,25 @@ public final class V2 {
         }
     }
 
-    /** 左侧筛选栏的一行（选中时淡强调底）。 */
+    /** 左侧筛选栏的一行（选中时淡强调底）：动态按计数实际宽度扣减，释放更多模组名空间。 */
     public static void filterItem(Canvas c, String label, String count, boolean on, float hover, float x, float y, float w) {
         if (on) {
             Draw.fill(c, x, y, w, 13, 3, Draw.alpha(IOStyle.BLUE, 0.18F));
         } else if (hover > 0.01F) {
             Draw.fill(c, x, y, w, 13, 3, Draw.alpha(IOStyle.ROW_HOVER, hover));
         }
+        float pad = 5.0F;
+        boolean hasCount = count != null && !count.isEmpty();
+        float countW = hasCount ? width(count, FS_XS, false) + 0.5F : 0.0F;
+        float gap = hasCount ? 4.0F : 0.0F;
+        float labelW = Math.max(8.0F, w - pad * 2.0F - countW - gap);
         if (on) {
-            bold(c, label, FS_S + 0.25F, IOStyle.TEXT, x + 6, y + 6.5F, w - 30, Text.Align.LEFT);
+            bold(c, label, FS_S + 0.25F, IOStyle.TEXT, x + pad, y + 6.5F, labelW, Text.Align.LEFT);
         } else {
-            text(c, label, FS_S + 0.25F, IOStyle.TEXT_2, x + 6, y + 6.5F, w - 30, Text.Align.LEFT);
+            text(c, label, FS_S + 0.25F, IOStyle.TEXT_2, x + pad, y + 6.5F, labelW, Text.Align.LEFT);
         }
-        if (count != null) {
-            text(c, count, FS_XS, IOStyle.TEXT_3, x + 6, y + 6.5F, w - 12, Text.Align.RIGHT);
+        if (hasCount) {
+            text(c, count, FS_XS, IOStyle.TEXT_3, x + w - pad - countW, y + 6.5F, countW, Text.Align.RIGHT);
         }
     }
 
@@ -242,30 +247,101 @@ public final class V2 {
 
     /**
      * 按列宽规格排列列：spec 里 0 表示弹性列（平分剩余宽度），其余为固定宽。返回每列 [x, w]。
+     * 窄窗时保护微固定列（图标/色条/星标 ≤24）及末尾操作/状态列，优先让中段非关键列承受压缩。
      */
     public static float[][] columns(float x, float w, float pad, float gap, float... spec) {
-        float fixed = 0;
-        int flex = 0;
-        for (float f : spec) {
-            if (f <= 0) {
-                flex++;
+        float[] mins = new float[spec.length];
+        int last = spec.length - 1;
+        for (int i = 0; i < spec.length; i++) {
+            float s = spec[i];
+            if (s <= 0.0F) {
+                mins[i] = 0.0F;
+            } else if (s <= 24.0F) {
+                mins[i] = s;
+            } else if (i == last) {
+                mins[i] = Math.min(s, Math.max(36.0F, s * 0.85F));
             } else {
-                fixed += f;
+                mins[i] = s * 0.6F;
             }
         }
-        float rest = w - pad * 2 - fixed - gap * (spec.length - 1);
-        // 窗口窄时：固定列按比例收窄（最多到 60%），保证弹性列（名称）至少 90 单位宽
-        float shrink = 1.0F;
-        float minFlex = 90.0F * flex;
-        if (flex > 0 && rest < minFlex && fixed > 0) {
-            shrink = Math.max(0.6F, (w - pad * 2 - gap * (spec.length - 1) - minFlex) / fixed);
-            rest = w - pad * 2 - fixed * shrink - gap * (spec.length - 1);
+        return columnsMin(x, w, pad, gap, spec, mins);
+    }
+
+    /** 带显式每列最小保护宽度的列布局计算。 */
+    public static float[][] columnsMin(float x, float w, float pad, float gap, float[] spec, float[] minWidths) {
+        int n = spec.length;
+        float[] mins = new float[n];
+        float[] colW = new float[n];
+        float fixed = 0.0F;
+        int flex = 0;
+        for (int i = 0; i < n; i++) {
+            float s = spec[i];
+            if (s <= 0.0F) {
+                flex++;
+                colW[i] = 0.0F;
+                mins[i] = 0.0F;
+            } else {
+                colW[i] = s;
+                fixed += s;
+                float m = (minWidths != null && i < minWidths.length) ? Math.max(0.0F, minWidths[i]) : s * 0.6F;
+                mins[i] = Math.min(s, m);
+            }
         }
-        float flexW = flex == 0 ? 0 : Math.max(30, rest / flex);
-        float[][] out = new float[spec.length][2];
+        float usable = Math.max(0.0F, w - pad * 2.0F - gap * Math.max(0, n - 1));
+        float rest = usable - fixed;
+        float minFlexPerCol = Math.min(90.0F, Math.max(54.0F, w * 0.22F));
+        float minFlex = flex > 0 ? minFlexPerCol * flex : 0.0F;
+        if (flex > 0 && rest < minFlex && fixed > 0.0F) {
+            float needReduce = minFlex - rest;
+            int last = n - 1;
+            float midSlack = 0.0F;
+            for (int i = 0; i < last; i++) {
+                if (spec[i] > 0.0F) {
+                    midSlack += Math.max(0.0F, spec[i] - mins[i]);
+                }
+            }
+            if (midSlack >= needReduce && midSlack > 0.0F) {
+                float k = needReduce / midSlack;
+                for (int i = 0; i < last; i++) {
+                    if (spec[i] > 0.0F) {
+                        colW[i] = spec[i] - (spec[i] - mins[i]) * k;
+                    }
+                }
+            } else {
+                for (int i = 0; i < last; i++) {
+                    if (spec[i] > 0.0F) {
+                        colW[i] = mins[i];
+                    }
+                }
+                float rem = needReduce - midSlack;
+                if (last >= 0 && spec[last] > 0.0F) {
+                    float lastSlack = Math.max(0.0F, spec[last] - mins[last]);
+                    colW[last] = spec[last] - Math.min(rem, lastSlack);
+                }
+                float minSum = 0.0F;
+                for (int i = 0; i < n; i++) {
+                    minSum += colW[i];
+                }
+                float minFlexFloor = 36.0F * flex;
+                if (usable - minSum < minFlexFloor && minSum > 0.0F) {
+                    float targetFixed = Math.max(0.0F, usable - minFlexFloor);
+                    float scale = targetFixed / minSum;
+                    for (int i = 0; i < n; i++) {
+                        colW[i] *= scale;
+                    }
+                }
+            }
+            float newFixed = 0.0F;
+            for (int i = 0; i < n; i++) {
+                newFixed += colW[i];
+            }
+            rest = usable - newFixed;
+        }
+        float flexW = flex == 0 ? 0.0F : Math.max(24.0F, rest / flex);
+        float[][] out = new float[n][2];
         float ox = x + pad;
-        for (int i = 0; i < spec.length; i++) {
-            float cw = spec[i] <= 0 ? flexW : spec[i] * shrink;
+        for (int i = 0; i < n; i++) {
+            float cw = spec[i] <= 0.0F ? flexW : colW[i];
             out[i][0] = ox;
             out[i][1] = cw;
             ox += cw + gap;

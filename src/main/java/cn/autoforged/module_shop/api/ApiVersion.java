@@ -24,20 +24,58 @@ package cn.autoforged.module_shop.api;
  */
 public final class ApiVersion {
     /** 当前 API 版本（语义化版本）。 */
-    public static final String API_VERSION = "1.3.0";
+    public static final String API_VERSION = "1.5.0";
     /** 主版本号：外部可用它做依赖检查。 */
     public static final int API_MAJOR = 1;
     /**
      * 次版本号：1.1 起新增客户端扩展点 {@link cn.autoforged.module_shop.api.client.ShopModules}；
-     * 1.2 起 {@link cn.autoforged.module_shop.api.client.ShopTheme} 支持皮肤（渐变端点、柔光、弹窗底板等）。
+     * 1.2 起 {@link cn.autoforged.module_shop.api.client.ShopTheme} 支持皮肤（渐变端点、柔光、弹窗底板等）；
+     * 1.3 起新增 UI v2 物品层；
+     * 1.5 起新增双账本/实体货币公共 API（{@link cn.autoforged.module_shop.api.view.CurrencyUnit} /
+     * {@link cn.autoforged.module_shop.api.view.CurrencyTierView} 及 {@link EconomyApi} / {@link RewardApi} /
+     * {@link cn.autoforged.module_shop.api.client.AddonPageHost} 实体货币与附属默认货币扩展）。
      */
-    public static final int API_MINOR = 2;
+    public static final int API_MINOR = 5;
 
     private ApiVersion() {
     }
 
     private static String runtime() {
         return API_VERSION;
+    }
+
+    /** 运行期主版本号（解析 {@link #runtime()} 字符串以防止 javac 编译期常量内联）。 */
+    public static int runtimeMajor() {
+        return parseVersionPart(runtime(), 0, API_MAJOR);
+    }
+
+    /** 运行期次版本号（解析 {@link #runtime()} 字符串以防止 javac 编译期常量内联）。 */
+    public static int runtimeMinor() {
+        return parseVersionPart(runtime(), 1, API_MINOR);
+    }
+
+    /** 检查运行期 API 是否与 {@code major} 同主版本且次版本不低于 {@code minor}。 */
+    public static boolean atLeast(int major, int minor) {
+        return runtimeMajor() == major && runtimeMinor() >= minor;
+    }
+
+    private static int parseVersionPart(String version, int index, int fallback) {
+        if (version == null || version.isBlank()) {
+            return fallback;
+        }
+        String[] parts = version.trim().split("\\.");
+        if (index < 0 || index >= parts.length) {
+            return fallback;
+        }
+        String digits = parts[index].replaceAll("[^0-9].*$", "");
+        if (digits.isEmpty()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(digits);
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
     }
 
     /** 供外部打印/日志用。 */

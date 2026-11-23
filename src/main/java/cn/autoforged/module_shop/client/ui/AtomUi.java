@@ -3,7 +3,6 @@ package cn.autoforged.module_shop.client.ui;
 import cn.autoforged.module_shop.ModuleShopMod;
 import com.atom.lib.AtomLibRuntime;
 import com.atom.lib.RuntimeHandle;
-import com.atom.lib.design.atomchat.Design;
 import com.atom.lib.font.FontId;
 import com.atom.lib.font.FontRegistry;
 import com.atom.lib.text.TextService;
@@ -57,7 +56,6 @@ public final class AtomUi {
             runtime = handle;
             fonts = registry;
             text = new TextService(registry);
-            Design.host(ShopDesign.INSTANCE);
             LOGGER.info("[module_shop] AtomLib UI 已就绪");
             // 读取保存的日间 / 暗色设置（不论最先打开的是商店还是出货箱等次级界面）
             cn.autoforged.module_shop.client.UITheme.ensureLoaded();

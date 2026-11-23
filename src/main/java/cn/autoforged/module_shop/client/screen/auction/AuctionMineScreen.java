@@ -9,8 +9,10 @@ import cn.autoforged.module_shop.client.screen.shop.PageKit;
 import cn.autoforged.module_shop.client.ui.AtomUi;
 import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
 import cn.autoforged.module_shop.client.ui.widget.Button;
 import cn.autoforged.module_shop.client.ui.widget.ScrollController;
+import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
 import cn.autoforged.module_shop.data.AuctionEntry;
 import io.github.humbleui.skija.Canvas;
 import java.util.ArrayList;
@@ -26,6 +28,8 @@ public final class AuctionMineScreen extends SkiaDialog {
     private static final String[] TABS = {"selling", "bidding", "sold", "unsold", "cancelled"};
     private static int tab;
     private final ScrollController scroll = new ScrollController();
+    private SkiaTextField skSearch;
+    private String query = "";
     private int lastTab = -1;
 
     public AuctionMineScreen() {
@@ -35,6 +39,13 @@ public final class AuctionMineScreen extends SkiaDialog {
     @Override
     protected void initSkia() {
         AuctionClient.send("auction_mine", new CompoundTag());
+        this.skSearch = field(64, Component.translatable("gui.module_shop.search.placeholder").getString())
+                .clearable(true);
+        this.skSearch.editBox().setValue(this.query);
+        this.skSearch.onChange(v -> {
+            this.query = v == null ? "" : v;
+            this.scroll.scrollTo(0, false);
+        });
     }
 
     private List<AuctionClient.History> history(int t) {
@@ -78,13 +89,26 @@ public final class AuctionMineScreen extends SkiaDialog {
             chip(c, "tab" + i, AuctionUi.tr("gui.module_shop.auction.mine_tab." + TABS[i], count), ix + i * (tw + 3), iy,
                     tw, 16, tab == i, IOStyle.BLUE, () -> tab = pick);
         }
-        float ly = iy + 22.0F;
+        if (this.skSearch != null) {
+            this.skSearch.bounds(ix, iy + 20.0F, iw, 16.0F);
+        }
+        float ly = iy + 40.0F;
         float lh = bottom - ly - 24.0F;
         float row = 30.0F;
         if (tab <= 1) {
-            List<ClientShopData.AuctionView> list = tab == 0 ? AuctionClient.mineSelling : AuctionClient.mineBidding;
+            List<ClientShopData.AuctionView> raw = tab == 0 ? AuctionClient.mineSelling : AuctionClient.mineBidding;
+            List<ClientShopData.AuctionView> list = new ArrayList<>();
+            for (ClientShopData.AuctionView v : raw) {
+                if (this.query.isBlank()
+                        || PageKit.matchesItemQuery(v.stack, this.query)
+                        || PageKit.matchesQuery(this.query, v.seller, v.topBidder)) {
+                    list.add(v);
+                }
+            }
             if (list.isEmpty()) {
-                center(c, AuctionUi.tr("gui.module_shop.auction.mine_empty"), ix, ly + lh / 2, iw, IOStyle.TEXT_3);
+                String msg = raw.isEmpty() ? AuctionUi.tr("gui.module_shop.auction.mine_empty")
+                        : Component.translatable("gui.module_shop.search.empty").getString();
+                center(c, msg, ix, ly + lh / 2, iw, IOStyle.TEXT_3);
             } else {
                 float oy = beginList(c, scroll, ix, ly, iw, lh, list.size() * row);
                 for (int i = 0; i < list.size(); i++) {
@@ -92,14 +116,24 @@ public final class AuctionMineScreen extends SkiaDialog {
                     if (ry + row < ly || ry > ly + lh) {
                         continue;
                     }
-                    activeRow(c, list.get(i), ix, ry, iw - 6, row - 3);
+                    activeRow(c, list.get(i), ix, ry, iw - 10, row - 3);
                 }
                 endList(c);
             }
         } else {
-            List<AuctionClient.History> list = history(tab);
+            List<AuctionClient.History> raw = history(tab);
+            List<AuctionClient.History> list = new ArrayList<>();
+            for (AuctionClient.History hst : raw) {
+                if (this.query.isBlank()
+                        || PageKit.matchesItemQuery(hst.stack, this.query)
+                        || PageKit.matchesQuery(this.query, hst.seller, hst.buyer, AuctionUi.status(hst.status))) {
+                    list.add(hst);
+                }
+            }
             if (list.isEmpty()) {
-                center(c, AuctionUi.tr("gui.module_shop.auction.mine_empty"), ix, ly + lh / 2, iw, IOStyle.TEXT_3);
+                String msg = raw.isEmpty() ? AuctionUi.tr("gui.module_shop.auction.mine_empty")
+                        : Component.translatable("gui.module_shop.search.empty").getString();
+                center(c, msg, ix, ly + lh / 2, iw, IOStyle.TEXT_3);
             } else {
                 float oy = beginList(c, scroll, ix, ly, iw, lh, list.size() * row);
                 for (int i = 0; i < list.size(); i++) {
@@ -107,7 +141,7 @@ public final class AuctionMineScreen extends SkiaDialog {
                     if (ry + row < ly || ry > ly + lh) {
                         continue;
                     }
-                    historyRow(c, list.get(i), ix, ry, iw - 6, row - 3);
+                    historyRow(c, list.get(i), ix, ry, iw - 10, row - 3);
                 }
                 endList(c);
             }
@@ -147,8 +181,8 @@ public final class AuctionMineScreen extends SkiaDialog {
         }
         small(c, sub, tx, y + 20, col - 30, subColor);
         long price = v.currentBid > 0L ? v.currentBid : v.startPrice;
-        Text.drawLine(c, AuctionUi.money(price), AtomUi.BOLD, Text.BODY, IOStyle.ORANGE, x + col, y + 9, w * 0.30F,
-                Text.Align.LEFT);
+        PriceDisplay.drawCell(c, this.items, v.specOf(price), x + col, y + 9.0F, w * 0.30F,
+                Text.Align.LEFT, IOStyle.ORANGE, false);
         small(c, AuctionUi.tr(v.currentBid > 0L ? "gui.module_shop.auction.label_current"
                 : "gui.module_shop.auction.label_start"), x + col, y + 20, w * 0.30F, IOStyle.TEXT_3);
         long remain = v.remainingNow();
@@ -186,17 +220,19 @@ public final class AuctionMineScreen extends SkiaDialog {
         float mx = x + col;
         float mw = w * 0.36F;
         if (sold) {
-            Text.drawLine(c, AuctionUi.money(hst.finalPrice), AtomUi.BOLD, Text.BODY, IOStyle.ORANGE, mx, y + 9, mw,
-                    Text.Align.LEFT);
+            PriceDisplay.drawCell(c, this.items, hst.specOf(hst.finalPrice), mx, y + 9.0F, mw,
+                    Text.Align.LEFT, IOStyle.ORANGE, false);
             String detail = "seller".equals(hst.role)
-                    ? AuctionUi.tr("gui.module_shop.auction.fee_net", AuctionUi.money(hst.fee), AuctionUi.money(hst.net))
+                    ? AuctionUi.tr("gui.module_shop.auction.fee_net",
+                            AuctionUi.money(hst, hst.fee), AuctionUi.money(hst, hst.net))
                     : AuctionUi.status(hst.status);
             small(c, detail, mx, y + 20, mw, "seller".equals(hst.role) ? IOStyle.GREEN : IOStyle.TEXT_3);
         } else {
             Text.drawLine(c, AuctionUi.status(hst.status), AtomUi.REGULAR, Text.BODY, AuctionUi.statusColor(hst.status),
                     mx, y + 9, mw, Text.Align.LEFT);
             if (hst.listingFee > 0L) {
-                small(c, AuctionUi.tr("gui.module_shop.auction.listing_fee_paid", AuctionUi.money(hst.listingFee)),
+                small(c, AuctionUi.tr("gui.module_shop.auction.listing_fee_paid",
+                        AuctionUi.money(hst, hst.listingFee)),
                         mx, y + 20, mw, IOStyle.TEXT_3);
             }
         }

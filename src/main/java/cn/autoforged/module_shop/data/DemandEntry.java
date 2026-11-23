@@ -71,6 +71,10 @@ public final class DemandEntry {
     /** 想要的物品清单（1~12 条）。 */
     public final List<WantLine> wants = new ArrayList<>();
     public long rewardMoney;
+    /** 新双独立账本：悬赏定价规格（支持星币或某阶实体货币×数量）。 */
+    public PriceSpec rewardSpec = PriceSpec.ZERO;
+    /** 悬赏金币中由实体货币托管的部分（旧存档兼容字段）。 */
+    public long physicalEscrow;
     public ItemStack rewardItem = ItemStack.EMPTY;
     public long createdGame;
     public long createdReal;
@@ -80,9 +84,24 @@ public final class DemandEntry {
     public DemandEntry() {
     }
 
-    /** 是否还有悬赏可付（至少金币或物品之一）。 */
+    public void setRewardSpec(PriceSpec spec) {
+        this.rewardSpec = spec == null ? PriceSpec.ZERO : spec;
+        this.rewardMoney = this.rewardSpec.supportsStar() ? this.rewardSpec.starPrice : 0L;
+    }
+
+    public PriceSpec resolveRewardSpec() {
+        if (rewardSpec == null) {
+            return PriceSpec.star(rewardMoney);
+        }
+        if (rewardSpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && rewardSpec.starPrice != rewardMoney) {
+            return PriceSpec.star(rewardMoney);
+        }
+        return rewardSpec;
+    }
+
+    /** 是否还有悬赏可付（至少金币/实体币或物品之一）。 */
     public boolean hasReward() {
-        return this.rewardMoney > 0L || (this.rewardItem != null && !this.rewardItem.isEmpty());
+        return resolveRewardSpec().isValid() || (this.rewardItem != null && !this.rewardItem.isEmpty());
     }
 
     /** 清单种类数。 */
@@ -145,7 +164,10 @@ public final class DemandEntry {
             tag.put("want", ShopNbt.saveStack(wants.get(0).stack, registries));
             tag.putInt("wantCount", wants.get(0).count);
         }
-        tag.putLong("rewardMoney", rewardMoney);
+        resolveRewardSpec().writeToParent(tag, "rewardSpec", "rewardMoney");
+        if (physicalEscrow > 0L) {
+            tag.putLong("physicalEscrow", physicalEscrow);
+        }
         tag.put("rewardItem", ShopNbt.saveStack(rewardItem, registries));
         tag.putLong("createdGame", createdGame);
         tag.putLong("createdReal", createdReal);
@@ -172,7 +194,8 @@ public final class DemandEntry {
                 entry.wants.add(new WantLine(legacy, Math.max(1, tag.getInt("wantCount"))));
             }
         }
-        entry.rewardMoney = tag.getLong("rewardMoney");
+        entry.setRewardSpec(PriceSpec.readFromParent(tag, "rewardSpec", "rewardMoney"));
+        entry.physicalEscrow = Math.min(Math.max(0L, entry.rewardMoney), Math.max(0L, tag.getLong("physicalEscrow")));
         entry.rewardItem = ShopNbt.loadStack(tag.getCompound("rewardItem"), registries);
         entry.createdGame = tag.getLong("createdGame");
         entry.createdReal = tag.getLong("createdReal");

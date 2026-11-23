@@ -24,6 +24,7 @@ import net.minecraft.world.item.ItemStack;
 public final class MallItem {
     public ItemStack stack = ItemStack.EMPTY;
     public long price;
+    public PriceSpec priceSpec = PriceSpec.ZERO;
     public Rarity rarity = Rarity.COMMON;
     /** 库存：-1 = 无限；0 = 售罄；>0 = 剩余数量。 */
     public int stock = -1;
@@ -31,6 +32,8 @@ public final class MallItem {
     public int stockMax = -1;
     /** 上架顺序（用于"默认排序"，同一次整模组导入保持注册表顺序）。 */
     public int sort = 0;
+    /** 每人永久限购（不随商城定时补货 / 周期刷新重置库存或已购记录）。 */
+    public boolean permanentLimit = false;
     /**
      * 「个人库存」模式下**每个玩家已经买走的件数**（玩家 → 已买）。
      *
@@ -40,15 +43,61 @@ public final class MallItem {
      * 刷新 / 补货（{@link #clearPersonalUsed}）时整张表清空 = 每个人的库存都恢复。
      */
     public final java.util.Map<java.util.UUID, Integer> personalUsed = new java.util.LinkedHashMap<>();
+    /** 物品 NBT 编码缓存（不存档）：购物城上万件商品重复下发时避免每次重跑 ItemStack.CODEC。 */
+    private transient Tag cachedItemTag;
+    private transient ItemStack cachedItemRef;
+    private transient int cachedItemCount;
+    private transient HolderLookup.Provider cachedItemRegs;
+
+    private CompoundTag saveCachedStack(HolderLookup.Provider registries) {
+        CompoundTag tag = new CompoundTag();
+        if (stack == null || stack.isEmpty()) {
+            return tag;
+        }
+        Tag encoded = this.cachedItemTag;
+        if (encoded == null || this.cachedItemRef != stack
+                || this.cachedItemCount != stack.getCount()
+                || this.cachedItemRegs != registries) {
+            CompoundTag fresh = ShopNbt.saveStack(stack, registries);
+            encoded = fresh.get("item");
+            this.cachedItemTag = encoded;
+            this.cachedItemRef = stack;
+            this.cachedItemCount = stack.getCount();
+            this.cachedItemRegs = registries;
+        }
+        if (encoded != null) {
+            tag.put("item", encoded);
+        }
+        return tag;
+    }
 
     public MallItem() {
     }
 
     public MallItem(ItemStack stack, long price, Rarity rarity, int stock) {
+        this(stack, PriceSpec.star(price), rarity, stock);
+    }
+
+    public MallItem(ItemStack stack, PriceSpec spec, Rarity rarity, int stock) {
         this.stack = stack;
-        this.price = price;
+        setPriceSpec(spec);
         this.rarity = rarity;
         setStock(stock);
+    }
+
+    public void setPriceSpec(PriceSpec spec) {
+        this.priceSpec = spec == null ? PriceSpec.ZERO : spec;
+        this.price = this.priceSpec.supportsStar() ? this.priceSpec.starPrice : 0L;
+    }
+
+    public PriceSpec resolvePriceSpec() {
+        if (priceSpec == null) {
+            return PriceSpec.star(price);
+        }
+        if (priceSpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && priceSpec.starPrice != price) {
+            return PriceSpec.star(price);
+        }
+        return priceSpec;
     }
 
     /** 设置库存（同时把「补货目标」记成同一个数：管理员填多少，定时补货就补回多少）。 */
@@ -97,11 +146,14 @@ public final class MallItem {
 
     public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
-        tag.putLong("price", price);
+        resolvePriceSpec().writeToParent(tag, "priceSpec", "price");
         tag.putString("rarity", rarity.id());
         tag.putInt("stock", stock);
         tag.putInt("stockMax", stockMax);
         tag.putInt("sort", sort);
+        if (permanentLimit) {
+            tag.putBoolean("permanentLimit", true);
+        }
         // 个人库存：每个玩家买了多少（空表不写，全服库存模式下这一段永远是空的）
         if (!personalUsed.isEmpty()) {
             ListTag usedList = new ListTag();
@@ -130,27 +182,35 @@ public final class MallItem {
      * 客户端只认 {@code stock} 字段，所以界面代码不需要区分两种模式。
      */
     public CompoundTag saveForView(HolderLookup.Provider registries, java.util.UUID viewer, boolean personal) {
-        // 直接按字段拼，不走 save()：save() 会把 personalUsed（每个买过的玩家一条）整表序列化，
-        // 这里又马上删掉 —— 货架上千件、买家上百人时，每次下发快照都要白白构造几十万个 NBT 节点。
-        CompoundTag tag = ShopNbt.saveStack(stack, registries);
-        tag.putLong("price", price);
+        // 直接按字段拼并复用物品 NBT 缓存：货架上万件时免去重复 ItemStack.CODEC 与 personalUsed 序列化。
+        CompoundTag tag = saveCachedStack(registries);
+        resolvePriceSpec().writeToParent(tag, "priceSpec", "price");
         tag.putString("rarity", rarity.id());
-        tag.putInt("stock", personal ? remainingFor(viewer) : stock);
+        boolean perPlayer = personal || permanentLimit;
+        int viewStock = perPlayer ? remainingFor(viewer) : stock;
+        tag.putInt("stock", viewStock);
+        if (perPlayer && viewStock != stock) {
+            tag.putInt("globalStock", stock);
+        }
         tag.putInt("stockMax", stockMax);
         tag.putInt("sort", sort);
+        if (permanentLimit) {
+            tag.putBoolean("permanentLimit", true);
+        }
         return tag;
     }
 
     public static MallItem load(CompoundTag tag, HolderLookup.Provider registries) {
         MallItem item = new MallItem();
         item.stack = ShopNbt.loadStack(tag, registries);
-        item.price = tag.getLong("price");
+        item.setPriceSpec(PriceSpec.readFromParent(tag, "priceSpec", "price"));
         item.rarity = Rarity.byId(tag.getString("rarity"));
         // 老存档没有 stock 字段时按"无限"处理（读成 0 会变成整店售罄）。
         item.stock = tag.contains("stock") ? tag.getInt("stock") : -1;
         // 老存档没有 stockMax：把当前库存当成补货目标（第一次补货时补回这个数）。
         item.stockMax = tag.contains("stockMax") ? tag.getInt("stockMax") : item.stock;
         item.sort = tag.getInt("sort");
+        item.permanentLimit = tag.getBoolean("permanentLimit");
         // 个人库存的已买记录（老存档没有这一段 = 还没人买过）
         ListTag usedList = tag.getList("personalUsed", Tag.TAG_COMPOUND);
         for (int i = 0; i < usedList.size(); i++) {

@@ -98,7 +98,20 @@ public final class ItemOverlay {
      * 登记一个横向额外压缩的物品（翻牌动画用）：高为 size，宽为 size × scaleX，(x, y) 为压缩后的左上角。
      * scaleX 很小（牌转到侧面）时不画，也不参与悬停检测。
      */
+    public void addNoHover(ItemStack stack, float x, float y, float size, boolean decorations) {
+        addInternal(stack, x, y, size, 1.0F, decorations, false);
+    }
+
+    public void addNoHover(ItemStack stack, float x, float y, float size, float scaleX, boolean decorations) {
+        addInternal(stack, x, y, size, scaleX, decorations, false);
+    }
+
     public void add(ItemStack stack, float x, float y, float size, float scaleX, boolean decorations) {
+        addInternal(stack, x, y, size, scaleX, decorations, true);
+    }
+
+    private void addInternal(ItemStack stack, float x, float y, float size, float scaleX,
+                             boolean decorations, boolean detectHover) {
         if (stack == null || stack.isEmpty() || scaleX <= 0.05F) {
             return;
         }
@@ -108,7 +121,7 @@ public final class ItemOverlay {
             return; // 完全在裁剪区外
         }
         entries.add(new Entry(stack, x, y, size, scaleX, decorations, clip, null));
-        if (hoverEnabled && mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + size
+        if (detectHover && hoverEnabled && mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + size
                 && (clip == null || clip.contains(mouseX, mouseY))) {
             hovered = stack;
         }

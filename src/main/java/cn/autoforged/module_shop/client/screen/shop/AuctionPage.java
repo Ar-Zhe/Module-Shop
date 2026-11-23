@@ -10,29 +10,33 @@ import cn.autoforged.module_shop.client.ui.render.Draw;
 import cn.autoforged.module_shop.client.ui.render.Text;
 import cn.autoforged.module_shop.client.ui.v2.CardGrid;
 import cn.autoforged.module_shop.client.ui.v2.ListTable;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
 import cn.autoforged.module_shop.client.ui.v2.V2;
+import cn.autoforged.module_shop.client.ui.widget.ScrollController;
 import cn.autoforged.module_shop.client.ui.widget.SkiaTextField;
 import cn.autoforged.module_shop.shop.auction.AuctionCategory;
 import io.github.humbleui.skija.Canvas;
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import net.minecraft.network.chat.Component;
 
 /**
- * 拍卖会大厅（UI v2 列表视图）：左侧 10 个分类（带数量），工具条搜索与「我的拍卖 / 管理 / 上架」，
+ * 拍卖会大厅（UI v2 列表视图）：左侧分类（带数量，搜索收敛且独立滚动），工具条搜索与「我的拍卖 / 管理 / 上架」，
  * 表格：拍品 · 卖家 · 当前价 · 下次最低 · 一口价 · 人数 / 出价次数 · 领先者 · 剩余 · 出价。
  * 行左侧色条：我的拍品（金）/ 我领先（绿）/ 我被超过（红）。点任一行或「出价」打开原有的详情界面（出价 / 一口价）。
  * 表头「当前价 / 人数 / 剩余」排序对应原有的 7 种排序。
  */
 public final class AuctionPage implements ShopPage {
-    private static final float FILTER_W = 86.0F;
+    private static final float FILTER_W = 96.0F;
     private static final ListTable TABLE = new ListTable();
     private static final CardGrid GRID = new CardGrid();
+    private static final ScrollController CAT_SCROLL = new ScrollController();
 
     private SkiaTextField search;
     private List<ClientShopData.AuctionView> shown = List.of();
+    private float catClipY;
+    private float catClipH;
     private final List<float[]> catRects = new ArrayList<>();
     private final List<AuctionCategory> catKeys = new ArrayList<>();
     private final List<float[]> btnRects = new ArrayList<>();
@@ -51,11 +55,14 @@ public final class AuctionPage implements ShopPage {
     @Override
     public void init(ShopHost host) {
         search = new SkiaTextField(host.screen(), host.font(), 48)
-                .placeholder(tr("gui.module_shop.auction.search_hint")).fontSize(V2.FS_S)
+                .placeholder(tr("gui.module_shop.auction.search_hint"))
+                .clearable(true)
+                .fontSize(V2.FS_S)
                 .onChange(t -> {
                     AuctionClient.search = t == null ? "" : t;
                     TABLE.scrollToTop();
                     GRID.scrollToTop();
+                    CAT_SCROLL.reset();
                 });
         search.setValue(AuctionClient.search);
         host.registerInput(search.editBox());
@@ -85,8 +92,6 @@ public final class AuctionPage implements ShopPage {
         float by = cy - V2.CTRL / 2;
         Draw.hairline(c, x, f.y() + V2.BAR - 0.5F, f.w(), IOStyle.BORDER_DIM);
         float tw = V2.bold(c, tr("tab.module_shop.auction"), V2.FS_T, IOStyle.TEXT, x + 8, cy, 90, Text.Align.LEFT);
-        search.visible(true).bounds(x + 8 + tw + 10, by, 170, V2.CTRL);
-        search.render(c, f.mouseX(), f.mouseY(), f.dtMs());
         float right = x + f.w() - 8;
         String create = tr("gui.module_shop.v2.auction.create");
         right -= V2.buttonWidth(create);
@@ -99,9 +104,22 @@ public final class AuctionPage implements ShopPage {
         String mine = tr("gui.module_shop.v2.auction.mine", st.myActive, st.maxPerPlayer);
         right -= V2.buttonWidth(mine) + 5;
         btn(c, f, mine, V2.Btn.NORMAL, right, by, AuctionUi::openMine);
-        if (!st.enabled) {
-            V2.text(c, tr("gui.module_shop.v2.auction.disabled"), V2.FS_XS, IOStyle.RED, x + 8 + tw + 190, cy,
-                    right - (x + 8 + tw + 196), Text.Align.RIGHT);
+
+        float sx = x + 8 + tw + 10;
+        float avail = right - 8 - sx;
+        float sw = st.enabled ? Math.min(170.0F, Math.max(48.0F, avail))
+                : (avail >= 140.0F ? Math.min(130.0F, avail - 60.0F) : Math.min(130.0F, Math.max(48.0F, avail)));
+        if (search != null) {
+            if (avail >= 48.0F) {
+                search.visible(true).bounds(sx, by, sw, V2.CTRL);
+                search.render(c, f.mouseX(), f.mouseY(), f.dtMs());
+            } else {
+                search.visible(false);
+            }
+        }
+        if (!st.enabled && right - 8 - (sx + sw + 8) >= 48.0F) {
+            V2.text(c, tr("gui.module_shop.v2.auction.disabled"), V2.FS_XS, IOStyle.RED, sx + sw + 8, cy,
+                    right - 8 - (sx + sw + 8), Text.Align.RIGHT);
         }
 
         float top = f.y() + V2.BAR;
@@ -125,23 +143,54 @@ public final class AuctionPage implements ShopPage {
         catRects.clear();
         catKeys.clear();
         Draw.fill(c, x + FILTER_W - 0.5F, y, 0.5F, h, 0, IOStyle.BORDER_DIM);
-        Map<AuctionCategory, Integer> counts = new EnumMap<>(AuctionCategory.class);
-        for (ClientShopData.AuctionView v : ClientShopData.auctions) {
-            counts.merge(AuctionClient.categoryOf(v), 1, Integer::sum);
+        Map<AuctionCategory, Integer> counts = AuctionClient.searchCategoryCounts();
+        boolean searching = AuctionClient.search != null && !AuctionClient.search.isBlank();
+        int allMatches = counts.getOrDefault(AuctionCategory.ALL, 0);
+        if (searching && AuctionClient.category != AuctionCategory.ALL
+                && counts.getOrDefault(AuctionClient.category, 0) == 0 && allMatches > 0) {
+            AuctionClient.category = AuctionCategory.ALL;
+            AuctionClient.page = 0;
+            TABLE.scrollToTop();
+            GRID.scrollToTop();
+            CAT_SCROLL.reset();
         }
-        float cy = y + 8;
-        V2.section(c, tr("gui.module_shop.v2.filter.category"), x + 8, cy, FILTER_W - 12);
-        cy += 6;
+        List<AuctionCategory> visibleCats = new ArrayList<>();
         for (AuctionCategory cat : AuctionCategory.values()) {
-            int n = cat == AuctionCategory.ALL ? ClientShopData.auctions.size() : counts.getOrDefault(cat, 0);
-            boolean on = cat == AuctionClient.category;
-            V2.filterItem(c, tr(cat.langKey()), String.valueOf(n), on, over(f, x + 4, cy, FILTER_W - 8, 13) ? 1 : 0, x + 4, cy,
-                    FILTER_W - 8);
-            catRects.add(new float[]{x + 4, cy, FILTER_W - 8, 13});
-            catKeys.add(cat);
-            cy += 14;
+            if (cat == AuctionCategory.ALL || !searching || counts.getOrDefault(cat, 0) > 0) {
+                visibleCats.add(cat);
+            }
         }
-        cy += 6;
+        V2.section(c, tr("gui.module_shop.v2.filter.category"), x + 8, y + 8, FILTER_W - 12);
+        float catTop = y + 16.0F;
+        float legendH = 56.0F;
+        float catViewH = Math.max(28.0F, y + h - legendH - catTop);
+        catClipY = catTop;
+        catClipH = catViewH;
+        CAT_SCROLL.setContent(visibleCats.size() * 14.0F, catViewH);
+        CAT_SCROLL.update();
+        float off = CAT_SCROLL.offset();
+        float itemW = FILTER_W - (CAT_SCROLL.canScroll() ? 11.0F : 8.0F);
+        int saved = c.save();
+        Draw.clip(c, x, catTop, FILTER_W - 1.0F, catViewH);
+        try {
+            for (int i = 0; i < visibleCats.size(); i++) {
+                AuctionCategory cat = visibleCats.get(i);
+                float iy = catTop + i * 14.0F - off;
+                if (iy + 13.0F <= catTop || iy >= catTop + catViewH) {
+                    continue;
+                }
+                int n = counts.getOrDefault(cat, 0);
+                boolean on = cat == AuctionClient.category;
+                boolean hover = f.mouseY() >= catTop && f.mouseY() < catTop + catViewH && over(f, x + 4, iy, itemW, 13);
+                V2.filterItem(c, tr(cat.langKey()), String.valueOf(n), on, hover ? 1 : 0, x + 4, iy, itemW);
+                catRects.add(new float[]{x + 4, iy, itemW, 13});
+                catKeys.add(cat);
+            }
+        } finally {
+            c.restoreToCount(saved);
+        }
+        CAT_SCROLL.drawBar(c, x, catTop, FILTER_W - 1.0F, catViewH, f.mouseX(), f.mouseY(), f.dtMs());
+        float cy = catTop + catViewH + 4.0F;
         Draw.hairline(c, x + 6, cy, FILTER_W - 12, IOStyle.BORDER_DIM);
         cy += 9;
         V2.section(c, tr("gui.module_shop.v2.auction.legend"), x + 8, cy, FILTER_W - 12);
@@ -157,7 +206,14 @@ public final class AuctionPage implements ShopPage {
     }
 
     private void drawTable(Canvas c, PageFrame f, float x, float y, float w, float h) {
-        float[][] cols = V2.columns(x, w, 10, 5, 4, 14, 0, 60, 58, 54, 54, 50, 58, 50, 40);
+        float actW = Math.max(40.0F, Math.max(V2.buttonWidth(tr("gui.module_shop.v2.auction.view")),
+                V2.buttonWidth(tr("gui.module_shop.v2.auction.bid"))));
+        float gap = 5.0F;
+        float[][] baseCols = V2.columns(x, w - actW - gap, 10, gap, 4, 14, 0, 48, 56, 46, 46, 38, 46, 42);
+        float[][] cols = new float[11][2];
+        System.arraycopy(baseCols, 0, cols, 0, 10);
+        cols[10][0] = x + w - 10 - actW;
+        cols[10][1] = actW;
         String[] heads = {"", "", tr("gui.module_shop.v2.col.lot"), tr("gui.module_shop.v2.col.seller"),
                 tr("gui.module_shop.v2.col.current"), tr("gui.module_shop.v2.col.min_next"), tr("gui.module_shop.v2.col.buyout"),
                 tr("gui.module_shop.v2.col.bidders"), tr("gui.module_shop.v2.col.leader"), tr("gui.module_shop.v2.col.remain"), ""};
@@ -187,28 +243,28 @@ public final class AuctionPage implements ShopPage {
                 Draw.fill(cv, cols[0][0], ry + 2, 2, V2.ROW - 4, 1, mark);
             }
             f.host().items().add(v.stack, cols[1][0], ry + (V2.ROW - V2.ICON) / 2, V2.ICON, true);
-            float nw = V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(v.stack), V2.FS, IOStyle.TEXT, cols[2][0], cy, cols[2][1] - 34,
+            String badgeText = !v.allowBid ? tr("gui.module_shop.v2.auction.buyout_only")
+                    : (v.own ? tr("gui.module_shop.v2.auction.st_mine") : null);
+            float tagReserve = badgeText == null ? 0.0F : (V2.tagWidth(badgeText) + 4.0F);
+            float nameMaxW = Math.max(16.0F, cols[2][1] - tagReserve);
+            float nw = V2.text(cv, cn.autoforged.module_shop.client.ui.ItemNames.display(v.stack), V2.FS, IOStyle.TEXT, cols[2][0], cy, nameMaxW,
                     Text.Align.LEFT);
-            if (!v.allowBid) {
-                V2.tag(cv, tr("gui.module_shop.v2.auction.buyout_only"), IOStyle.EPIC, cols[2][0] + nw + 4, cy);
-            } else if (v.own) {
-                V2.tag(cv, tr("gui.module_shop.v2.auction.st_mine"), IOStyle.ORANGE, cols[2][0] + nw + 4, cy);
+            if (badgeText != null) {
+                V2.tag(cv, badgeText, !v.allowBid ? IOStyle.EPIC : IOStyle.ORANGE,
+                        cols[2][0] + Math.min(nw, nameMaxW) + 4, cy);
             }
             V2.text(cv, v.seller, V2.FS_S, IOStyle.TEXT_2, cols[3][0], cy, cols[3][1], Text.Align.LEFT);
             boolean hasBid = v.currentBid > 0;
             if (v.allowBid) {
-                if (hasBid) {
-                    V2.bold(cv, AuctionUi.money(v.currentBid), V2.FS, IOStyle.ORANGE, cols[4][0], cy, cols[4][1], Text.Align.RIGHT);
-                } else {
-                    V2.text(cv, AuctionUi.money(v.startPrice), V2.FS_S, IOStyle.TEXT_2, cols[4][0], cy, cols[4][1], Text.Align.RIGHT);
-                }
-                V2.text(cv, AuctionUi.money(v.minNext), V2.FS_S, IOStyle.TEXT_2, cols[5][0], cy, cols[5][1], Text.Align.RIGHT);
+                PriceDisplay.drawCell(cv, f.host().items(), v.specOf(hasBid ? v.currentBid : v.startPrice),
+                        cols[4][0], cy, cols[4][1], Text.Align.RIGHT, hasBid ? IOStyle.ORANGE : IOStyle.TEXT_2, false);
+                drawAuctionCell(cv, f, v, v.minNext, cols[5][0], cy, cols[5][1], IOStyle.TEXT_2);
             } else {
                 V2.text(cv, "—", V2.FS_S, IOStyle.TEXT_3, cols[4][0], cy, cols[4][1], Text.Align.RIGHT);
                 V2.text(cv, "—", V2.FS_S, IOStyle.TEXT_3, cols[5][0], cy, cols[5][1], Text.Align.RIGHT);
             }
             if (v.buyout > 0) {
-                V2.bold(cv, AuctionUi.money(v.buyout), V2.FS_S, IOStyle.GREEN, cols[6][0], cy, cols[6][1], Text.Align.RIGHT);
+                drawAuctionCell(cv, f, v, v.buyout, cols[6][0], cy, cols[6][1], IOStyle.GREEN);
             } else {
                 V2.text(cv, "—", V2.FS_S, IOStyle.TEXT_3, cols[6][0], cy, cols[6][1], Text.Align.RIGHT);
             }
@@ -259,12 +315,23 @@ public final class AuctionPage implements ShopPage {
                     cx + 3, cy + 34.5F, cw - 6, Text.Align.CENTER);
 
             boolean hasBid = v.currentBid > 0;
-            String priceText = !v.allowBid
-                    ? (v.buyout > 0 ? AuctionUi.money(v.buyout) : "—")
-                    : AuctionUi.money(hasBid ? v.currentBid : v.startPrice);
             int priceCol = !v.allowBid ? IOStyle.GREEN : (hasBid ? IOStyle.ORANGE : IOStyle.TEXT_2);
-            V2.bold(cv, priceText, V2.FS, priceCol, cx + 3, cy + 45.0F, cw - 6, Text.Align.CENTER);
+            if (!v.allowBid && v.buyout <= 0L) {
+                V2.bold(cv, "—", V2.FS, IOStyle.TEXT_3, cx + 3, cy + 45.0F, cw - 6, Text.Align.CENTER);
+            } else {
+                PriceDisplay.drawCard(cv, f.host().items(), v.effectiveSpec(), cx + 3, cy + 45.0F, cx + cw * 0.5F,
+                        cw - 6, 1.0F, priceCol, false);
+            }
         });
+    }
+
+    private static void drawAuctionCell(Canvas c, PageFrame f, ClientShopData.AuctionView v, long amount,
+                                        float x, float cy, float w, int color) {
+        if (!v.isPhysCurrency() || w >= 42.0F) {
+            PriceDisplay.drawCell(c, f.host().items(), v.specOf(amount), x, cy, w, Text.Align.RIGHT, color, false);
+        } else {
+            V2.bold(c, PriceDisplay.formatNumber(amount, true), V2.FS_S, color, x, cy, w, Text.Align.RIGHT);
+        }
     }
 
     @Override
@@ -286,15 +353,20 @@ public final class AuctionPage implements ShopPage {
                 return true;
             }
         }
-        for (int i = 0; i < catRects.size(); i++) {
-            float[] r = catRects.get(i);
-            if (mx >= r[0] && mx < r[0] + r[2] && my >= r[1] && my < r[1] + r[3]) {
-                ClickSound.play();
-                AuctionClient.category = catKeys.get(i);
-                AuctionClient.page = 0;
-                TABLE.scrollToTop();
-                GRID.scrollToTop();
-                return true;
+        if (catClipH > 0.0F && CAT_SCROLL.pressBar(mx, my, f.x(), catClipY, FILTER_W - 1.0F, catClipH)) {
+            return true;
+        }
+        if (my >= catClipY && my < catClipY + catClipH) {
+            for (int i = 0; i < catRects.size(); i++) {
+                float[] r = catRects.get(i);
+                if (mx >= r[0] && mx < r[0] + r[2] && my >= r[1] && my < r[1] + r[3]) {
+                    ClickSound.play();
+                    AuctionClient.category = catKeys.get(i);
+                    AuctionClient.page = 0;
+                    TABLE.scrollToTop();
+                    GRID.scrollToTop();
+                    return true;
+                }
             }
         }
         if (UIViewMode.isGrid()) {
@@ -363,7 +435,7 @@ public final class AuctionPage implements ShopPage {
         if (search != null) {
             search.mouseReleased(mx, my, button);
         }
-        return UIViewMode.isGrid() ? GRID.releaseBar() : TABLE.releaseBar();
+        return CAT_SCROLL.releaseBar() | (UIViewMode.isGrid() ? GRID.releaseBar() : TABLE.releaseBar());
     }
 
     @Override
@@ -371,11 +443,18 @@ public final class AuctionPage implements ShopPage {
         if (search != null && search.mouseDragged(mx, my, button, dx, dy)) {
             return true;
         }
+        if (CAT_SCROLL.dragBar(my, catClipH)) {
+            return true;
+        }
         return UIViewMode.isGrid() ? GRID.dragBar(my) : TABLE.dragBar(my);
     }
 
     @Override
     public boolean mouseScrolled(PageFrame f, double mx, double my, double scrollY) {
+        if (mx >= f.x() && mx < f.x() + FILTER_W && my >= catClipY && my < catClipY + catClipH && CAT_SCROLL.canScroll()) {
+            CAT_SCROLL.wheel(scrollY);
+            return true;
+        }
         boolean page = net.minecraft.client.gui.screens.Screen.hasShiftDown();
         return UIViewMode.isGrid() ? GRID.wheel(mx, my, scrollY, page) : TABLE.wheel(mx, my, scrollY, page);
     }
@@ -385,6 +464,7 @@ public final class AuctionPage implements ShopPage {
         if (search != null) {
             search.visible(false);
         }
+        CAT_SCROLL.releaseBar();
         TABLE.releaseBar();
         GRID.releaseBar();
     }

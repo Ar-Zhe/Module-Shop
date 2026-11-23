@@ -121,10 +121,8 @@ public class NotificationSettingsScreen extends SkiaDialog {
 
     @Override
     public void onClose() {
-        // 返回主界面，不重新请求数据，保留当前页面上下文。
-        if (this.minecraft != null) {
-            this.minecraft.setScreen(new ShopScreen("daily"));
-        }
+        // 走返回栈回到原商店界面（保留当前所在页签，如管理页/主页）
+        Nav.back();
     }
 
     @Override

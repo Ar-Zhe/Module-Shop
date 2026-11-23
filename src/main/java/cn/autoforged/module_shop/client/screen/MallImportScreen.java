@@ -204,12 +204,49 @@ public class MallImportScreen extends SkiaDialog {
 
     private final cn.autoforged.module_shop.client.ui.widget.ScrollController skScroll =
             new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skSearch;
+    private String skQuery = "";
+
+    @Override
+    protected void initSkia() {
+        this.skSearch = field(48, Component.translatable("gui.module_shop.search.placeholder").getString())
+                .clearable(true);
+        this.skSearch.editBox().setValue(this.skQuery);
+        this.skSearch.onChange(v -> {
+            this.skQuery = v == null ? "" : v;
+            this.skScroll.scrollTo(0, false);
+        });
+    }
+
+    private static List<String[]> filteredMods(String query) {
+        List<String[]> all = mods();
+        if (query == null || query.isBlank()) {
+            return all;
+        }
+        String[] words = query.trim().split("\\s+");
+        List<String[]> out = new ArrayList<>();
+        for (String[] mod : all) {
+            boolean ok = true;
+            for (String word : words) {
+                if (!cn.autoforged.module_shop.client.ModNames.matchesQuery(mod[0], word)
+                        && !cn.autoforged.module_shop.client.screen.shop.PageKit.matchesQuery(word, mod[0], mod[1])) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) {
+                out.add(mod);
+            }
+        }
+        return out;
+    }
 
     @Override
     protected void paint(io.github.humbleui.skija.Canvas c) {
-        float w = 270.0F;
+        float w = 336.0F;
         float listH = this.listOpen ? 10 * 14.0F + 4 : 0;
-        float h = HEADER_H + 8 + 12 + 6 + 20 + (this.listOpen ? 6 + listH : 0) + 10 + 16 + 8
+        float searchH = this.listOpen ? 19.0F : 0.0F;
+        float h = HEADER_H + 8 + 12 + 6 + 20 + (this.listOpen ? 6 + searchH + listH : 0) + 10 + 16 + 8
                 + (this.confirmRemove ? 22 : 0) + 20 + PAD;
         float x = Math.round((this.width - w) / 2.0F);
         float y = Math.round((this.height - h) / 2.0F);
@@ -237,35 +274,50 @@ public class MallImportScreen extends SkiaDialog {
                 IOStyle.TEXT_2);
         hit(innerX, cy, innerW, 20, () -> this.listOpen = !this.listOpen, null);
         cy += 20;
+        if (this.skSearch != null) {
+            this.skSearch.visible(this.listOpen);
+        }
         if (this.listOpen) {
             cy += 6;
-            List<String[]> mods = mods();
-            card(c, innerX, cy, innerW, listH);
-            float rowH = 14.0F;
-            float oy = beginList(c, this.skScroll, innerX + 2, cy + 2, innerW - 4, listH - 4, mods.size() * rowH);
-            int first = Math.max(0, (int) ((cy + 2 - oy) / rowH));
-            for (int i = first; i < Math.min(mods.size(), first + 12); i++) {
-                String[] mod = mods.get(i);
-                float ry = oy + i * rowH;
-                boolean current = mod[0].equals(this.selected);
-                boolean rowHover = over(innerX + 2, ry, innerW - 10, rowH);
-                if (current || rowHover) {
-                    cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX + 2, ry, innerW - 10, rowH, 2,
-                            current ? IOStyle.BLUE_TINT : IOStyle.ROW_HOVER);
-                }
-                float nsW = cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, mod[0],
-                        cn.autoforged.module_shop.client.ui.AtomUi.REGULAR,
-                        cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_3, innerX + 2,
-                        ry + rowH / 2, innerW - 16, cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
-                small(c, mod[1], innerX + 8, ry + rowH / 2, innerW - 30 - nsW, current ? IOStyle.BLUE : IOStyle.TEXT);
-                final String ns = mod[0];
-                hit(innerX + 2, ry, innerW - 10, rowH, () -> {
-                    this.selected = ns;
-                    this.confirmRemove = false;
-                    this.removeCount = countInMall(ns);
-                }, null);
+            if (this.skSearch != null) {
+                this.skSearch.bounds(innerX, cy, innerW, 16);
             }
-            endList(c);
+            cy += 19;
+            List<String[]> mods = filteredMods(this.skQuery);
+            card(c, innerX, cy, innerW, listH);
+            if (mods.isEmpty()) {
+                center(c, Component.translatable("gui.module_shop.search.empty").getString(),
+                        innerX, cy + listH / 2, innerW, IOStyle.TEXT_3);
+            } else {
+                float rowH = 14.0F;
+                float oy = beginList(c, this.skScroll, innerX + 2, cy + 2, innerW - 4, listH - 4, mods.size() * rowH);
+                for (int i = 0; i < mods.size(); i++) {
+                    float ry = oy + i * rowH;
+                    if (ry + rowH < cy + 2 || ry > cy + listH - 2) {
+                        continue;
+                    }
+                    String[] mod = mods.get(i);
+                    boolean current = mod[0].equals(this.selected);
+                    boolean rowHover = over(innerX + 2, ry, innerW - 12, rowH);
+                    if (current || rowHover) {
+                        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, innerX + 2, ry, innerW - 12, rowH, 2,
+                                current ? IOStyle.BLUE_TINT : IOStyle.ROW_HOVER);
+                    }
+                    float nsW = cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, mod[0],
+                            cn.autoforged.module_shop.client.ui.AtomUi.REGULAR,
+                            cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.TEXT_3, innerX + 2,
+                            ry + rowH / 2, innerW - 20, cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
+                    small(c, mod[1], innerX + 8, ry + rowH / 2, Math.max(40.0F, innerW - 28 - nsW) + 0.5F,
+                            current ? IOStyle.BLUE : IOStyle.TEXT);
+                    final String ns = mod[0];
+                    hit(innerX + 2, ry, innerW - 12, rowH, () -> {
+                        this.selected = ns;
+                        this.confirmRemove = false;
+                        this.removeCount = countInMall(ns);
+                    }, null);
+                }
+                endList(c);
+            }
             cy += listH;
         }
         cy += 10;
@@ -419,6 +471,7 @@ public class MallImportScreen extends SkiaDialog {
         request.putString("title", "gui.module_shop.input.mall_import");
         request.put("title_args", stringList(displayName(this.selected)));
         request.put("fields", stringList("price", "quantity", "rarity"));
+        request.putBoolean("supports_price_spec", true);
         // 库存留 -1 = 无限；品质默认普通（界面上是四个按钮，点一下即改）。
         request.putString("default_quantity", "-1");
         request.putString("default_rarity", "common");

@@ -2,11 +2,15 @@ package cn.autoforged.module_shop.shop.stall;
 
 import cn.autoforged.module_shop.Config;
 import cn.autoforged.module_shop.data.PlayerAccount;
+import cn.autoforged.module_shop.data.PriceSpec;
+import cn.autoforged.module_shop.data.PriceSpec.CurrencyMode;
 import cn.autoforged.module_shop.data.ShopSavedData;
 import cn.autoforged.module_shop.data.StallEntry;
 import cn.autoforged.module_shop.network.payload.ClientboundShopSyncPayload;
 import cn.autoforged.module_shop.shop.RequestGuard;
 import cn.autoforged.module_shop.shop.ShopManager;
+import cn.autoforged.module_shop.shop.currency.CurrencySettlement;
+import cn.autoforged.module_shop.shop.currency.PhysicalCurrencyConfig;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -41,7 +45,16 @@ public final class StallService {
     }
 
     public static void reset() {
-        ITEM_CACHE.clear();
+        synchronized (ShopManager.LOCK) {
+            ITEM_CACHE.clear();
+        }
+    }
+
+    /** 商品下架 / 到期移除时清理对应物品编码缓存，防止长期运行后内存只增不减。 */
+    public static void evictItemCache(long order) {
+        synchronized (ShopManager.LOCK) {
+            ITEM_CACHE.remove(order);
+        }
     }
 
     /** @return true 表示这个动作归本类处理。 */
@@ -105,7 +118,7 @@ public final class StallService {
             for (StallEntry e : pair.getValue().stall) {
                 h = 31 * h + owner;
                 h = 31 * h + e.order;
-                h = 31 * h + e.price;
+                h = 31 * h + e.resolvePriceSpec().hashCode();
                 h = 31 * h + e.stock;
             }
         }
@@ -139,7 +152,7 @@ public final class StallService {
                 c.putUUID("owner", pair.getKey());
                 c.putString("ownerName", account.name == null ? "" : account.name);
                 c.putLong("id", e.order);
-                c.putLong("price", e.price);
+                e.resolvePriceSpec().writeToParent(c, "priceSpec", "price");
                 c.putInt("stock", e.stock);
                 c.putInt("sold", e.sold);
                 c.putBoolean("own", pair.getKey().equals(player.getUUID()));
@@ -161,60 +174,161 @@ public final class StallService {
             if (RequestGuard.duplicate(player, tag)) {
                 return;
             }
+            listFromSlot(player, tag.getInt("slot"), tag.getString("item"),
+                    tag.getInt("count"), parseStallSpecFromTag(tag), true);
+        }
+    }
+
+    /** 供公共 API 调用的背包槽位上架入口（与 {@link #list} 共享同一套校验、扣费、入库与事件发布逻辑）。 */
+    public static boolean listFromApi(ServerPlayer player, int slot, int count, long price) {
+        if (player == null || price <= 0L) {
+            return false;
+        }
+        return listFromSlot(player, slot, null, count, PriceSpec.star(price), false);
+    }
+
+    private static boolean listFromSlot(ServerPlayer player, int slot, @Nullable String expectedItemId,
+            int count, @Nullable PriceSpec spec, boolean notifyUi) {
+        synchronized (ShopManager.LOCK) {
             Inventory inventory = player.getInventory();
-            int slot = tag.getInt("slot");
             ItemStack inSlot = slotOk(slot) ? inventory.getItem(slot) : ItemStack.EMPTY;
             if (inSlot.isEmpty()
-                    || !BuiltInRegistries.ITEM.getKey(inSlot.getItem()).toString().equals(tag.getString("item"))) {
+                    || (expectedItemId != null
+                            && !BuiltInRegistries.ITEM.getKey(inSlot.getItem()).toString().equals(expectedItemId))) {
                 msg(player, "msg.module_shop.auction.err_slot_changed", ChatFormatting.RED);
-                result(player, false, "list");
-                return;
+                if (notifyUi) {
+                    result(player, false, "list");
+                }
+                return false;
             }
             int max = Config.INSTANCE.stallMaxStock.get();
-            int count = tag.getInt("count");
             // 必须真的拥有：数量不能超过这一格里实际有的
             if (count <= 0 || count > inSlot.getCount() || count > max) {
                 msg(player, "msg.module_shop.stall.err_count", ChatFormatting.RED, Math.min(max, inSlot.getCount()));
-                result(player, false, "list");
-                return;
+                if (notifyUi) {
+                    result(player, false, "list");
+                }
+                return false;
             }
-            long price = parsePrice(tag.getString("price"));
-            if (price <= 0L) {
+            if (spec == null || !spec.isValid()
+                    || (spec.mode != CurrencyMode.STAR_ONLY && spec.mode != CurrencyMode.PHYS_ONLY)) {
                 msg(player, "msg.module_shop.invalid_price", ChatFormatting.RED);
-                result(player, false, "list");
-                return;
+                if (notifyUi) {
+                    result(player, false, "list");
+                }
+                return false;
+            }
+            if (spec.mode == CurrencyMode.STAR_ONLY && spec.starPrice > Config.maxBalanceLimit()) {
+                msg(player, "msg.module_shop.invalid_price", ChatFormatting.RED);
+                if (notifyUi) {
+                    result(player, false, "list");
+                }
+                return false;
+            }
+            if (spec.mode == CurrencyMode.PHYS_ONLY) {
+                PhysicalCurrencyConfig physCfg = PhysicalCurrencyConfig.get();
+                if (!physCfg.isActive()
+                        || physCfg.findResolvedTier(spec.physTierKey, player.level().registryAccess()) == null) {
+                    msg(player, "msg.module_shop.phys_tier_unavailable", ChatFormatting.RED);
+                    if (notifyUi) {
+                        result(player, false, "list");
+                    }
+                    return false;
+                }
+                spec = spec.withPhysTierKey(physCfg.canonicalTierKey(spec.physTierKey));
             }
             PlayerAccount account = ShopManager.account(player);
             ShopSavedData data = ShopManager.data(player.server);
             if (account.stall.size() >= Config.INSTANCE.stallSlots.get()) {
                 msg(player, "msg.module_shop.stall_full", ChatFormatting.RED);
-                result(player, false, "list");
-                return;
+                if (notifyUi) {
+                    result(player, false, "list");
+                }
+                return false;
             }
             double feePercent = Config.INSTANCE.stallListingFeePercent.get();
-            long fee = feePercent <= 0.0D ? 0L : (long) Math.ceil(price * feePercent / 100.0D);
-            if (fee > 0L && account.balance < fee) {
-                msg(player, "msg.module_shop.no_money", ChatFormatting.RED);
-                result(player, false, "list");
-                return;
-            }
-            // ---- 校验完毕：收费 → 取物品 → 入库，中间没有失败分支 ----
-            if (fee > 0L && ShopManager.debit(account, fee, "fee") < 0L) {
-                result(player, false, "list");
-                return;
+            if (spec.mode == CurrencyMode.PHYS_ONLY) {
+                long fee = feePercent <= 0.0D ? 0L : (long) Math.ceil(spec.physCount * feePercent / 100.0D);
+                if (fee > 0L) {
+                    var feePay = CurrencySettlement.payPhysTier(
+                            player, spec.physTierKey, fee, ShopManager.SOURCE_EXCHANGE);
+                    if (!feePay.ok()) {
+                        player.displayClientMessage(
+                                net.minecraft.network.chat.Component.translatableWithFallback(
+                                        feePay.failKey(), feePay.failFallback()).withStyle(ChatFormatting.RED),
+                                false);
+                        if (notifyUi) {
+                            result(player, false, "list");
+                        }
+                        return false;
+                    }
+                }
+            } else {
+                long fee = feePercent <= 0.0D ? 0L : (long) Math.ceil(spec.starPrice * feePercent / 100.0D);
+                if (fee > 0L) {
+                    var feePay = CurrencySettlement.payStar(account, fee, "fee");
+                    if (!feePay.ok()) {
+                        msg(player, "msg.module_shop.no_money", ChatFormatting.RED);
+                        if (notifyUi) {
+                            result(player, false, "list");
+                        }
+                        return false;
+                    }
+                }
             }
             ItemStack taken = inSlot.split(count);
             inventory.setChanged();
-            StallEntry fresh = new StallEntry(taken.copyWithCount(1), price, data.listingCounter++, count);
+            StallEntry fresh = new StallEntry(taken.copyWithCount(1), spec, data.listingCounter++, count);
             fresh.listedGame = player.server.overworld().getGameTime();
             fresh.listedReal = System.currentTimeMillis();
             account.stall.add(fresh);
             data.setDirty();
-            msg(player, "msg.module_shop.stall_listed", ChatFormatting.GREEN, fresh.stack.getHoverName(), price, count);
-            result(player, true, "list");
+            long eventPrice = spec.supportsStar() ? spec.starPrice : 0L;
+            cn.autoforged.module_shop.api.event.ApiEvents.post(
+                    new cn.autoforged.module_shop.api.event.StallListedEvent(
+                            player.getUUID(), account.stall.size() - 1, fresh.stack, count, eventPrice));
+            if (spec.mode == CurrencyMode.PHYS_ONLY) {
+                msg(player, "msg.module_shop.stall_listed_spec", ChatFormatting.GREEN,
+                        fresh.stack.getHoverName(), CurrencySettlement.formatSpec(spec, player.server), count);
+            } else {
+                msg(player, "msg.module_shop.stall_listed", ChatFormatting.GREEN,
+                        fresh.stack.getHoverName(), spec.starPrice, count);
+            }
+            if (notifyUi) {
+                result(player, true, "list");
+            }
             ShopManager.sendSnapshot(player, "stall", true);
             ShopManager.broadcastSnapshots(player.server);
+            return true;
         }
+    }
+
+    public static @Nullable PriceSpec parseStallSpecFromTag(CompoundTag tag) {
+        if (tag == null) {
+            return null;
+        }
+        if (tag.contains("priceSpec", net.minecraft.nbt.Tag.TAG_COMPOUND)) {
+            PriceSpec parsed = PriceSpec.fromTag(tag.getCompound("priceSpec"), 0L);
+            if (parsed.mode == CurrencyMode.STAR_ONLY || parsed.mode == CurrencyMode.PHYS_ONLY) {
+                return parsed;
+            }
+            return null;
+        }
+        String tier = tag.getString("physTier").trim();
+        String mode = tag.getString("currencyMode").trim();
+        if ("phys".equalsIgnoreCase(mode) || (!tier.isEmpty() && !"star".equalsIgnoreCase(mode))) {
+            long cnt = tag.contains("physCount", net.minecraft.nbt.Tag.TAG_ANY_NUMERIC)
+                    ? tag.getLong("physCount")
+                    : parsePrice(tag.getString("price"));
+            return cnt > 0L && !tier.isEmpty() ? PriceSpec.phys(tier, cnt) : null;
+        }
+        String rawPrice = tag.getString("price");
+        PriceSpec ruleParsed = PriceSpec.parseRuleText(rawPrice);
+        if (ruleParsed != null && (ruleParsed.mode == CurrencyMode.STAR_ONLY || ruleParsed.mode == CurrencyMode.PHYS_ONLY)) {
+            return ruleParsed;
+        }
+        long star = parsePrice(rawPrice);
+        return star > 0L ? PriceSpec.star(star) : null;
     }
 
     private static long parsePrice(String text) {

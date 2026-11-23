@@ -1,6 +1,9 @@
 package cn.autoforged.module_shop.client.screen;
 
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState;
 import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
+import cn.autoforged.module_shop.data.PriceSpec;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
 import java.time.LocalDate;
 import java.time.YearMonth;
@@ -152,7 +155,8 @@ public class SignInScreen extends Screen {
                 small(g, cx, cy, Component.literal(line), IOStyle.TEXT_2, false);
                 cy += smallH;
             }
-            String moneyLine = act.money > 0L ? ClientShopData.money(act.money) : "";
+            PriceSpec actSpec = act.resolveMoneySpec();
+            String moneyLine = actSpec.isValid() ? PriceDisplay.formatPlain(actSpec) : "";
             if (act.hour >= 0) {
                 moneyLine = moneyLine.isEmpty() ? String.format("%02d:00", act.hour)
                         : moneyLine + "  " + String.format("%02d:00", act.hour);
@@ -259,11 +263,11 @@ public class SignInScreen extends Screen {
             // 第八轮：鼠标移到里程点 → 显示该里程对应的「连续签到加成」。
             if (IOStyle.inside(dx - 8, py - 8, 16, 16, this.pointerX, this.pointerY)) {
                 this.hoverTip = Component.translatable("gui.module_shop.signin.streak_bonus_tip",
-                        ClientShopData.money(tierBonusAt(days[i]))).getString();
+                        PriceDisplay.formatPlain(signInTierSpecForDay(days[i]))).getString();
             }
             small(g, dx, y + 28, Component.literal(days[i] + "d"), reached ? IOStyle.GREEN : IOStyle.TEXT_2, true);
-            long money = i < ClientShopData.signInMileMoney.length ? ClientShopData.signInMileMoney[i] : 0L;
-            small(g, dx, y + 37, Component.literal(ClientShopData.money(money)),
+            PriceSpec mileSpec = ClientShopData.signInMileSpec(i);
+            small(g, dx, y + 37, Component.literal(PriceDisplay.formatCompact(mileSpec)),
                     reached ? IOStyle.GREEN_DARK : IOStyle.TEXT_2, true);
         }
     }
@@ -281,6 +285,22 @@ public class SignInScreen extends Screen {
             }
         }
         return bonus;
+    }
+
+    private static PriceSpec signInTierSpecForDay(int day) {
+        if (!ClientShopData.signInCumulative) {
+            return PriceSpec.ZERO;
+        }
+        PriceSpec best = PriceSpec.ZERO;
+        for (int i = 0; i < ClientShopData.signInTierDays.length; i++) {
+            if (day >= ClientShopData.signInTierDays[i]) {
+                PriceSpec candidate = ClientShopData.signInTierSpec(i);
+                if (candidate.isValid()) {
+                    best = candidate;
+                }
+            }
+        }
+        return best;
     }
 
     /** 0.8 倍小字号；{@code centered} = 以 x 为水平中心。 */
@@ -389,7 +409,7 @@ public class SignInScreen extends Screen {
                     this.hoverActs = acts;
                 } else if (canMakeup) {
                     this.hoverTip = Component.translatable("gui.module_shop.signin.makeup_tip",
-                            ClientShopData.money(ClientShopData.signInMakeupCost)).getString();
+                            PriceDisplay.formatPlain(ClientShopData.signInMakeupSpec)).getString();
                 } else if (isToday) {
                     this.hoverTip = Component.translatable(signed
                             ? "gui.module_shop.signin.done" : "gui.module_shop.signin.do").getString();
@@ -499,16 +519,18 @@ public class SignInScreen extends Screen {
             case "sign_makeup" -> {
                 long makeupDay = extra == null ? 0L : extra.getLong("day");
                 if (makeupDay > 0L) {
-                    // 第三项：补签前二次确认（显示日期与花费），避免误点扣星币。
+                    PriceSpec costSpec = ClientShopData.signInMakeupSpec;
+                    // 第三项：补签前二次确认（显示日期与花费），避免误点扣款。
                     Nav.open(new ShopConfirmScreen(
                             Component.translatable("gui.module_shop.signin.makeup_title"),
                             Component.translatable("gui.module_shop.signin.makeup_tip",
-                                    ClientShopData.money(ClientShopData.signInMakeupCost),
+                                    PriceDisplay.formatPlain(costSpec),
                                     java.time.LocalDate.ofEpochDay(makeupDay).toString()),
                             ok -> {
                                 if (ok) {
                                     CompoundTag tag = new CompoundTag();
                                     tag.putLong("day", makeupDay);
+                                    tag.putString("pay_channel", PriceDisplay.resolveBuyChannel(costSpec, 1));
                                     send("sign_makeup", tag);
                                 }
                             }));
@@ -541,21 +563,28 @@ public class SignInScreen extends Screen {
             fields.add(StringTag.valueOf(f));
         }
         tag.put("fields", fields);
-        tag.putString("default_base", Long.toString(ClientShopData.signInBase));
-        tag.putString("default_makeupCost", Long.toString(ClientShopData.signInMakeupCost));
+        tag.put("baseSpec", ClientShopData.signInBaseSpec.toTag());
+        tag.put("makeupSpec", ClientShopData.signInMakeupSpec.toTag());
+        tag.putString("default_base", ClientShopData.signInBaseSpec.toRuleText());
+        tag.putString("default_makeupCost", ClientShopData.signInMakeupSpec.toRuleText());
         tag.putString("default_makeupDays", Integer.toString(ClientShopData.signInMakeupDays));
-        tag.putString("default_tiers", pairs(ClientShopData.signInTierDays, ClientShopData.signInTierBonus));
-        tag.putString("default_miles", pairs(ClientShopData.signInMileDays, ClientShopData.signInMileMoney));
+        tag.putString("default_tiers", pairs(ClientShopData.signInTierDays, ClientShopData.signInTierBonusSpecs,
+                ClientShopData.signInTierBonus));
+        tag.putString("default_miles", pairs(ClientShopData.signInMileDays, ClientShopData.signInMileSpecs,
+                ClientShopData.signInMileMoney));
         Nav.open(new ShopInputScreen(tag));
     }
 
-    private static String pairs(int[] days, long[] values) {
+    private static String pairs(int[] days, List<PriceSpec> specs, long[] values) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < days.length && i < values.length; i++) {
             if (i > 0) {
                 sb.append(',');
             }
-            sb.append(days[i]).append(':').append(values[i]);
+            String val = (specs != null && i < specs.size() && specs.get(i) != null)
+                    ? specs.get(i).toRuleText()
+                    : Long.toString(values[i]);
+            sb.append(days[i]).append(':').append(val);
         }
         return sb.toString();
     }

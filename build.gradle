@@ -143,6 +143,9 @@ dependencies {
     compileOnly "mezz.jei:jei-${minecraft_version}-common-api:${jei_version}"
     compileOnly "mezz.jei:jei-${minecraft_version}-neoforge-api:${jei_version}"
 
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+
     // Example optional mod dependency with JEI
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
     // We add the full version to localRuntime, not runtimeOnly, so that we do not publish a dependency on it
@@ -207,6 +210,46 @@ tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
 }
 
+def nonAsciiProjectPath = !projectDir.path.chars().allMatch { it < 128 }
+if (nonAsciiProjectPath) {
+    def asciiSafeRoot = new File(System.getProperty('java.io.tmpdir'), 'ms-1211-junit-safe')
+    def syncMainForTest = tasks.register('syncMainClassesForTest', Sync) {
+        from sourceSets.main.output.classesDirs
+        into new File(asciiSafeRoot, 'main-classes')
+    }
+    def syncTestClasses = tasks.register('syncTestClassesForTest', Sync) {
+        from sourceSets.test.output.classesDirs
+        into new File(asciiSafeRoot, 'test-classes')
+    }
+    def syncMcJars = tasks.register('syncMcJarsForTest', Sync) {
+        from(layout.buildDirectory.dir('moddev/artifacts')) {
+            include "neoforge-${project.neo_version}-merged.jar", "neoforge-${project.neo_version}.jar"
+        }
+        dependsOn 'createMinecraftArtifacts'
+        into new File(asciiSafeRoot, 'mc-jars')
+    }
+    def asciiRuntimeDeps = (sourceSets.test.runtimeClasspath + sourceSets.main.runtimeClasspath).filter { File f ->
+        f.isFile() && f.path.chars().allMatch { it < 128 }
+    }
+    tasks.named('test', Test).configure {
+        dependsOn syncMainForTest, syncTestClasses, syncMcJars
+        testClassesDirs = files(new File(asciiSafeRoot, 'test-classes'))
+        classpath = files(
+                new File(asciiSafeRoot, 'test-classes'),
+                new File(asciiSafeRoot, 'main-classes'),
+                asciiRuntimeDeps,
+                fileTree(new File(asciiSafeRoot, 'mc-jars'))
+        )
+    }
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+    testLogging {
+        events "passed", "failed", "skipped"
+    }
+}
+
 // AutoForge: 资源模板里的中文（如 displayName="模块商店"）必须按 UTF-8 读写。
 // 否则在默认编码为 GBK 的 Windows 上，generateModMetadata 会把中文写成非法 UTF-8 字节，
 // FML 解析 META-INF/neoforge.mods.toml 时抛 MalformedInputException → "not a valid mod file" 直接开不了服。
@@ -214,9 +257,16 @@ tasks.withType(ProcessResources).configureEach {
     filteringCharset = 'UTF-8'
 }
 
+// 主包名对齐 1.20.1 格式：Module-Shop-<mod_version>-for-NeoForge-<mc_version>.jar
+tasks.named('jar', Jar).configure {
+    archiveFileName = "Module-Shop-${mod_version}-for-NeoForge-${minecraft_version}.jar"
+}
+
 // 公共 API 单独打一个 jar（只含 cn.autoforged.module_shop.api.**）：附属模组只对它编译，
 // 从构建层面保证附属碰不到 ShopManager / ShopSavedData 等内部实现。运行时仍由完整的 module_shop jar 提供。
 def apiJar = tasks.register('apiJar', Jar) {
+    archiveBaseName = 'module_shop'
+    archiveVersion = mod_version
     archiveClassifier = 'api'
     from(sourceSets.main.output) {
         include 'cn/autoforged/module_shop/api/**'

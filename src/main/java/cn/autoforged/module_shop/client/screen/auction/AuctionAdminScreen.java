@@ -1,6 +1,7 @@
 package cn.autoforged.module_shop.client.screen.auction;
 
 import cn.autoforged.module_shop.client.AuctionClient;
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState;
 import cn.autoforged.module_shop.client.screen.IOStyle;
 import cn.autoforged.module_shop.client.screen.Nav;
 import cn.autoforged.module_shop.client.screen.SkiaDialog;
@@ -161,7 +162,12 @@ public final class AuctionAdminScreen extends SkiaDialog {
         small(c, AuctionUi.tr("gui.module_shop.auction.cfg.blacklist"), ix, ty + 8, 90, IOStyle.TEXT_2);
         fields.get("blacklist").bounds(ix + 92, ty, iw - 92, 16).visible(true);
         ty += 22;
-        small(c, AuctionUi.tr("gui.module_shop.auction.cfg_hint"), ix, ty + 4, iw, IOStyle.TEXT_3);
+        String cfgHint = AuctionUi.tr("gui.module_shop.auction.cfg_hint");
+        if (ClientHomeCurrencyState.physEnabled) {
+            cfgHint += " · " + ClientHomeCurrencyState.tr("gui.module_shop.auction.cfg_phys_note",
+                    "固定收费/起拍范围仅作星币基准；实体币拍卖按各自档位枚数结算百分比手续费");
+        }
+        small(c, cfgHint, ix, ty + 4, iw, IOStyle.TEXT_3);
         ty += 13;
         small(c, AuctionUi.tr("gui.module_shop.auction.admin_stats", data.getInt("statActive"),
                 AuctionUi.money(data.getLong("statEscrow")), data.getInt("statHistory"), data.getInt("statCorrupt")),

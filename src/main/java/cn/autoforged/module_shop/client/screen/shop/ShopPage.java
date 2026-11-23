@@ -53,4 +53,24 @@ public interface ShopPage {
     /** 界面关闭 / 切走时调用：取消按下中的按钮、拖拽等未完成的操作。 */
     default void cancelInput() {
     }
+
+    /** 按键按下；返回 true 表示页面已消费。 */
+    default boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        return false;
+    }
+
+    /** 按键松开；返回 true 表示页面已消费。 */
+    default boolean keyReleased(int keyCode, int scanCode, int modifiers) {
+        return false;
+    }
+
+    /** 字符输入；返回 true 表示页面已消费。 */
+    default boolean charTyped(char codePoint, int modifiers) {
+        return false;
+    }
+
+    /** 当前页面是否有活跃输入框（为 true 时 ShopScreen 屏蔽 1~9 切页快捷键）。 */
+    default boolean isInputFocused() {
+        return false;
+    }
 }

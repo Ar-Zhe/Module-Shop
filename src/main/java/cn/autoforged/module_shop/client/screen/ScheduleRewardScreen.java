@@ -1,6 +1,8 @@
 package cn.autoforged.module_shop.client.screen;
 
 import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
+import cn.autoforged.module_shop.data.PriceSpec;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
 import java.util.ArrayList;
 import java.util.List;
@@ -68,6 +70,11 @@ public class ScheduleRewardScreen extends SkiaDialog {
     private long currentMoney() {
         ClientShopData.ActivityView act = find(this.day);
         return act == null ? 0L : act.money;
+    }
+
+    private PriceSpec currentMoneySpec() {
+        ClientShopData.ActivityView act = find(this.day);
+        return act == null ? PriceSpec.ZERO : act.resolveMoneySpec();
     }
 
     private String currentItems() {
@@ -139,7 +146,7 @@ public class ScheduleRewardScreen extends SkiaDialog {
                 this.pointerY, true, IOStyle.Btn.PRIMARY);
         addRegion(x + 22, y + 143, 110, 22, "reward_items", null, null);
         small(g, x + 144, y + 144, Component.translatable("gui.module_shop.schedule.reward_money_line",
-                ClientShopData.money(currentMoney())), IOStyle.ORANGE);
+                PriceDisplay.formatPlain(currentMoneySpec())), IOStyle.ORANGE);
         small(g, x + 144, y + 156, Component.literal(IOStyle.ellipsize(this.font,
                 Component.literal(currentItems()), 296).getString()));
         // ---------- 底部按钮 ----------
@@ -197,7 +204,7 @@ public class ScheduleRewardScreen extends SkiaDialog {
                 cy + 8, 104, 20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, !modal,
                 this::openRewardItems);
         text(c, Component.translatable("gui.module_shop.schedule.reward_money_line",
-                ClientShopData.money(currentMoney())).getString(), innerX + 122, cy + 12, innerW - 130, IOStyle.ORANGE);
+                PriceDisplay.formatPlain(currentMoneySpec())).getString(), innerX + 122, cy + 12, innerW - 130, IOStyle.ORANGE);
         small(c, currentItems(), innerX + 122, cy + 25, innerW - 130, IOStyle.TEXT_2);
         float by = y + h - PAD - 20;
         button(c, "cancel", Component.translatable("gui.module_shop.schedule.cancel").getString(), innerX, by, 88, 20,

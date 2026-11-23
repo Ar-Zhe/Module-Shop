@@ -87,14 +87,21 @@ public final class MailEntry {
         return currencyAmount > 0L ? Long.toString(currencyAmount) : "-";
     }
 
-    /** 往邮件里再放一件物品：同种物品先叠加，叠不下再占一格。 */
+    /** 往邮件里再放一件物品：同种物品先叠加，叠不下按单叠上限拆分再占格（防止超堆叠触发编解码崩溃）。 */
     public void addStack(ItemStack add) {
         if (add == null || add.isEmpty()) {
             return;
         }
-        // 老字段 stack 里已有物品时先并入列表，否则下面的同步会把第一件覆盖掉。
+        // 老字段 stack 里已有物品时先按合法堆叠并入列表，否则下面的同步会把第一件覆盖掉。
         if (stacks.isEmpty() && stack != null && !stack.isEmpty()) {
-            stacks.add(stack.copy());
+            ItemStack legacy = stack.copy();
+            stack = ItemStack.EMPTY;
+            int legacyMax = Math.max(1, legacy.getMaxStackSize());
+            while (!legacy.isEmpty()) {
+                int take = Math.min(legacyMax, legacy.getCount());
+                stacks.add(legacy.copyWithCount(take));
+                legacy.shrink(take);
+            }
         }
         ItemStack rest = add.copy();
         for (ItemStack exist : stacks) {
@@ -112,8 +119,11 @@ public final class MailEntry {
                 break;
             }
         }
-        if (!rest.isEmpty()) {
-            stacks.add(rest.copy());
+        int maxStack = Math.max(1, rest.getMaxStackSize());
+        while (!rest.isEmpty()) {
+            int take = Math.min(maxStack, rest.getCount());
+            stacks.add(rest.copyWithCount(take));
+            rest.shrink(take);
         }
         syncLegacyStack();
     }
@@ -149,11 +159,14 @@ public final class MailEntry {
         this.sender = sender == null ? "" : sender;
     }
 
-    /** 构造一封物品类邮件（stack 需为调用方已 copy 的完整物品）。 */
+    /** 构造一封物品类邮件（自动按最大堆叠拆分，避免单叠超上限）。 */
     public static MailEntry item(ItemStack stack, String source, String sender, UUID senderUUID, long receivedDay) {
-        MailEntry entry = new MailEntry(stack, source, sender == null ? "" : sender, receivedDay);
+        MailEntry entry = new MailEntry(ItemStack.EMPTY, source, sender == null ? "" : sender, receivedDay);
         entry.type = MailType.ITEM;
         entry.senderUUID = senderUUID;
+        if (stack != null && !stack.isEmpty()) {
+            entry.addStack(stack);
+        }
         return entry;
     }
 
