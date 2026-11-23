@@ -2,6 +2,18 @@
 
 遵循 [语义化版本](https://semver.org/lang/zh-CN/)。模组版本与 API 版本独立维护（当前 API `1.5.0`）。
 
+## [1.8.3]
+
+构建产物：`Module-Shop-1.8.3-for-NeoForge-1.21.1.jar` 与 `module_shop-1.8.3-api.jar`；PATCH 性能优化，向后兼容旧存档 / 配置 / 附属模组，保留历史全部版本 jar。
+
+### 优化与修复
+
+- **彻底解决超大规模购物城（万级商品）打开商店与动钱卡顿**：
+  - `ShopManager.sendSnapshot` 新增按玩家维度的购物城视图指纹（`LAST_SENT_MALL_HASH`）：购物城商品与库存未变动时仅下发 `mallUnchanged=true`，打开商店、股市交易、领任务奖励等操作不再重传整份购物城；
+  - 取消 `adminMall` 双份重复编解码：`MallItem.saveForView` 在个人库存/永久限购场景按需附带 `globalStock`，客户端单遍解析 `mall` 并直接复用已解析 `ItemStack` 派生 `adminMall`（首次同步编解码耗时减半）；
+  - `MallItem` 增加物品 NBT 瞬态缓存且 `ShopManager.sendSnapshot` 全路径启用 `ShopNbt.beginBatchIfAbsent`，多玩家登录与货架刷新复用编码结果，大幅降低服务端主线程尖峰；
+  - `MallPage.drawFilter` 与 `MallPage.filtered` 增加分类计数与客户端附加筛选缓存，杜绝浏览万级商品时每帧全量扫描导致的帧率骤降。
+
 ## [1.8.2]
 
 构建产物：`Module-Shop-1.8.2-for-NeoForge-1.21.1.jar` 与 `module_shop-1.8.2-api.jar`；PATCH 修复，向后兼容旧存档 / 配置 / 附属模组，保留历史全部版本 jar。

@@ -36,6 +36,15 @@ public final class ShopNbt {
         batchRegistries = registries;
     }
 
+    /** 若当前不在外层批量编码窗口内则开启新窗口并返回 true（供单人 sendSnapshot 复用且不干扰 flushBroadcastSnapshots）。 */
+    public static boolean beginBatchIfAbsent(HolderLookup.Provider registries) {
+        if (batchCache != null && batchRegistries == registries) {
+            return false;
+        }
+        beginBatch(registries);
+        return true;
+    }
+
     public static void endBatch() {
         batchCache = null;
         batchRegistries = null;

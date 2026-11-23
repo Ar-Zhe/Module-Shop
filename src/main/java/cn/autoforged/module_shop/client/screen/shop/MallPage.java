@@ -48,6 +48,11 @@ public final class MallPage implements ShopPage {
 
     private SkiaTextField search;
     private List<ClientShopData.MallView> shown = List.of();
+    private String filterCacheKey = "";
+    private List<ClientShopData.MallView> cachedAllFiltered = List.of();
+    private Map<String, Integer> cachedModCounts = Map.of();
+    private String shownCacheKey = "";
+    private List<ClientShopData.MallView> cachedShown = List.of();
     private float[][] segRects = new float[0][2];
     private float segY;
     private float modBarX, modBarY, modBarW, modBarH;
@@ -99,8 +104,26 @@ public final class MallPage implements ShopPage {
         return out;
     }
 
+    private static String clientFilterKey(String category) {
+        return ClientShopData.mallVersion + "|" + ClientShopData.mall.size() + "|"
+                + (ClientShopData.mallSearch == null ? "" : ClientShopData.mallSearch) + "|"
+                + (category == null ? "" : category) + "|" + ClientShopData.mallFavOnly + "|"
+                + ClientShopData.mallSort + "|" + MallFavorites.size() + "|"
+                + onlyStock + "|" + affordable + "|"
+                + (affordable ? ClientShopData.balance : 0L) + "|"
+                + (affordable ? cn.autoforged.module_shop.client.ClientHomeCurrencyState.snapshotVersion : 0) + "|"
+                + cn.autoforged.module_shop.client.ModNames.cacheToken();
+    }
+
     private List<ClientShopData.MallView> filtered() {
-        return applyClientFilters(ShopScreen.mallFiltered());
+        String key = clientFilterKey(ClientShopData.mallCategory);
+        if (key.equals(this.shownCacheKey)) {
+            return this.cachedShown;
+        }
+        List<ClientShopData.MallView> res = applyClientFilters(ShopScreen.mallFiltered());
+        this.shownCacheKey = key;
+        this.cachedShown = res;
+        return res;
     }
 
     // ------------------------------------------------------------------ 绘制
@@ -173,12 +196,20 @@ public final class MallPage implements ShopPage {
         filterRects.clear();
         filterKeys.clear();
         Draw.fill(c, x + FILTER_W - 0.5F, y, 0.5F, h, 0, IOStyle.BORDER_DIM);
-        // 各模组数量按当前搜索 / 收藏 / 附加条件统计（只读查询，不修改 ClientShopData.mallCategory）
-        Map<String, Integer> counts = new LinkedHashMap<>();
-        List<ClientShopData.MallView> all = applyClientFilters(ShopScreen.mallFiltered(""));
-        for (ClientShopData.MallView v : all) {
-            counts.merge(v.namespace(), 1, Integer::sum);
+        // 各模组数量按当前搜索 / 收藏 / 附加条件缓存统计，上万件商品下避免每帧全量遍历。
+        String allKey = clientFilterKey("");
+        if (!allKey.equals(this.filterCacheKey)) {
+            List<ClientShopData.MallView> nextAll = applyClientFilters(ShopScreen.mallFiltered(""));
+            Map<String, Integer> nextCounts = new LinkedHashMap<>();
+            for (ClientShopData.MallView v : nextAll) {
+                nextCounts.merge(v.namespace(), 1, Integer::sum);
+            }
+            this.filterCacheKey = allKey;
+            this.cachedAllFiltered = nextAll;
+            this.cachedModCounts = nextCounts;
         }
+        List<ClientShopData.MallView> all = this.cachedAllFiltered;
+        Map<String, Integer> counts = this.cachedModCounts;
         String activeCat = ClientShopData.mallCategory == null ? "" : ClientShopData.mallCategory;
         if (!activeCat.isEmpty() && counts.getOrDefault(activeCat, 0) == 0 && !all.isEmpty()) {
             activeCat = "";
