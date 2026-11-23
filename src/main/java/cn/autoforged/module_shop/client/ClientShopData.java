@@ -142,6 +142,8 @@ public final class ClientShopData {
     public static List<PriceSpec> shippingUpgradeSpecs = List.of();
     /** 每天结算的游戏刻（0 = 早上 6:00）。 */
     public static int shipSettleTick;
+    /** 服务端检测到永昼/昼夜停滞时为 true：客户端出货箱倒计时同步切到 level.getGameTime()（每 20 分钟一次）。 */
+    public static boolean shipUseGameTime;
     /** 额度重置时间（现实时间 HH:mm；展示与「每日额度」弹窗回填用）。 */
     public static String shipResetTimeText = "00:00";
     // ---- 购物城定时补货（管理页「补货设置」弹窗回填 + 玩家页一天一行提示）----
@@ -779,6 +781,7 @@ public final class ClientShopData {
         shipUpgradeSpec = readOptionalCostSpec(tag, "shipUpgradeSpec", shipUpgradeCost);
         shippingUpgradeSpecs = readSpecList(tag.getList("shippingUpgradeSpecs", Tag.TAG_COMPOUND));
         shipSettleTick = tag.getInt("shipSettleTick");
+        shipUseGameTime = tag.getBoolean("shipUseGameTime");
         shipResetTimeText = tag.contains("shipResetTime") ? tag.getString("shipResetTime") : "00:00";
         mallRestockOn = tag.getBoolean("mallRestockOn");
         mallRestockMode = tag.contains("mallRestockMode") ? tag.getString("mallRestockMode") : "real";
@@ -1042,6 +1045,7 @@ public final class ClientShopData {
         mall = new ArrayList<>();
         adminMall = new ArrayList<>();
         adminMallPermanent = new ArrayList<>();
+        shipUseGameTime = false;
         mallVersion++;
         cn.autoforged.module_shop.client.media.ClientMediaCache.clearMemory();
         ClientAdminAuth.clearState();
