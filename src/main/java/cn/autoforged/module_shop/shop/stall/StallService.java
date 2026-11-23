@@ -45,7 +45,16 @@ public final class StallService {
     }
 
     public static void reset() {
-        ITEM_CACHE.clear();
+        synchronized (ShopManager.LOCK) {
+            ITEM_CACHE.clear();
+        }
+    }
+
+    /** 商品下架 / 到期移除时清理对应物品编码缓存，防止长期运行后内存只增不减。 */
+    public static void evictItemCache(long order) {
+        synchronized (ShopManager.LOCK) {
+            ITEM_CACHE.remove(order);
+        }
     }
 
     /** @return true 表示这个动作归本类处理。 */
@@ -165,42 +174,66 @@ public final class StallService {
             if (RequestGuard.duplicate(player, tag)) {
                 return;
             }
+            listFromSlot(player, tag.getInt("slot"), tag.getString("item"),
+                    tag.getInt("count"), parseStallSpecFromTag(tag), true);
+        }
+    }
+
+    /** 供公共 API 调用的背包槽位上架入口（与 {@link #list} 共享同一套校验、扣费、入库与事件发布逻辑）。 */
+    public static boolean listFromApi(ServerPlayer player, int slot, int count, long price) {
+        if (player == null || price <= 0L) {
+            return false;
+        }
+        return listFromSlot(player, slot, null, count, PriceSpec.star(price), false);
+    }
+
+    private static boolean listFromSlot(ServerPlayer player, int slot, @Nullable String expectedItemId,
+            int count, @Nullable PriceSpec spec, boolean notifyUi) {
+        synchronized (ShopManager.LOCK) {
             Inventory inventory = player.getInventory();
-            int slot = tag.getInt("slot");
             ItemStack inSlot = slotOk(slot) ? inventory.getItem(slot) : ItemStack.EMPTY;
             if (inSlot.isEmpty()
-                    || !BuiltInRegistries.ITEM.getKey(inSlot.getItem()).toString().equals(tag.getString("item"))) {
+                    || (expectedItemId != null
+                            && !BuiltInRegistries.ITEM.getKey(inSlot.getItem()).toString().equals(expectedItemId))) {
                 msg(player, "msg.module_shop.auction.err_slot_changed", ChatFormatting.RED);
-                result(player, false, "list");
-                return;
+                if (notifyUi) {
+                    result(player, false, "list");
+                }
+                return false;
             }
             int max = Config.INSTANCE.stallMaxStock.get();
-            int count = tag.getInt("count");
             // 必须真的拥有：数量不能超过这一格里实际有的
             if (count <= 0 || count > inSlot.getCount() || count > max) {
                 msg(player, "msg.module_shop.stall.err_count", ChatFormatting.RED, Math.min(max, inSlot.getCount()));
-                result(player, false, "list");
-                return;
+                if (notifyUi) {
+                    result(player, false, "list");
+                }
+                return false;
             }
-            PriceSpec spec = parseStallSpecFromTag(tag);
             if (spec == null || !spec.isValid()
                     || (spec.mode != CurrencyMode.STAR_ONLY && spec.mode != CurrencyMode.PHYS_ONLY)) {
                 msg(player, "msg.module_shop.invalid_price", ChatFormatting.RED);
-                result(player, false, "list");
-                return;
+                if (notifyUi) {
+                    result(player, false, "list");
+                }
+                return false;
             }
             if (spec.mode == CurrencyMode.STAR_ONLY && spec.starPrice > Config.maxBalanceLimit()) {
                 msg(player, "msg.module_shop.invalid_price", ChatFormatting.RED);
-                result(player, false, "list");
-                return;
+                if (notifyUi) {
+                    result(player, false, "list");
+                }
+                return false;
             }
             if (spec.mode == CurrencyMode.PHYS_ONLY) {
                 PhysicalCurrencyConfig physCfg = PhysicalCurrencyConfig.get();
                 if (!physCfg.isActive()
                         || physCfg.findResolvedTier(spec.physTierKey, player.level().registryAccess()) == null) {
                     msg(player, "msg.module_shop.phys_tier_unavailable", ChatFormatting.RED);
-                    result(player, false, "list");
-                    return;
+                    if (notifyUi) {
+                        result(player, false, "list");
+                    }
+                    return false;
                 }
                 spec = spec.withPhysTierKey(physCfg.canonicalTierKey(spec.physTierKey));
             }
@@ -208,8 +241,10 @@ public final class StallService {
             ShopSavedData data = ShopManager.data(player.server);
             if (account.stall.size() >= Config.INSTANCE.stallSlots.get()) {
                 msg(player, "msg.module_shop.stall_full", ChatFormatting.RED);
-                result(player, false, "list");
-                return;
+                if (notifyUi) {
+                    result(player, false, "list");
+                }
+                return false;
             }
             double feePercent = Config.INSTANCE.stallListingFeePercent.get();
             if (spec.mode == CurrencyMode.PHYS_ONLY) {
@@ -222,8 +257,10 @@ public final class StallService {
                                 net.minecraft.network.chat.Component.translatableWithFallback(
                                         feePay.failKey(), feePay.failFallback()).withStyle(ChatFormatting.RED),
                                 false);
-                        result(player, false, "list");
-                        return;
+                        if (notifyUi) {
+                            result(player, false, "list");
+                        }
+                        return false;
                     }
                 }
             } else {
@@ -232,8 +269,10 @@ public final class StallService {
                     var feePay = CurrencySettlement.payStar(account, fee, "fee");
                     if (!feePay.ok()) {
                         msg(player, "msg.module_shop.no_money", ChatFormatting.RED);
-                        result(player, false, "list");
-                        return;
+                        if (notifyUi) {
+                            result(player, false, "list");
+                        }
+                        return false;
                     }
                 }
             }
@@ -255,9 +294,12 @@ public final class StallService {
                 msg(player, "msg.module_shop.stall_listed", ChatFormatting.GREEN,
                         fresh.stack.getHoverName(), spec.starPrice, count);
             }
-            result(player, true, "list");
+            if (notifyUi) {
+                result(player, true, "list");
+            }
             ShopManager.sendSnapshot(player, "stall", true);
             ShopManager.broadcastSnapshots(player.server);
+            return true;
         }
     }
 

@@ -864,6 +864,9 @@ public final class ShopTemplate {
         if (cfg.dailyConvertValueLimit > 0L) {
             obj.addProperty("daily_convert_value_limit", cfg.dailyConvertValueLimit);
         }
+        if (cfg.addonDefaultTierKey != null && !cfg.addonDefaultTierKey.isBlank()) {
+            obj.addProperty("addon_default_tier_key", cfg.addonDefaultTierKey);
+        }
         JsonArray tiers = new JsonArray();
         if (cfg.tiers != null) {
             for (PhysicalCurrencyConfig.CurrencyTier tier : cfg.tiers) {
@@ -896,6 +899,8 @@ public final class ShopTemplate {
                 optInt(obj, "maxConvertOutputItems", 2304));
         cfg.dailyConvertValueLimit = Math.max(0L, optLong(obj, "daily_convert_value_limit",
                 optLong(obj, "dailyConvertValueLimit", 0L)));
+        cfg.addonDefaultTierKey = optString(obj, "addon_default_tier_key",
+                optString(obj, "addonDefaultTierKey", ""));
         cfg.tiers = new ArrayList<>();
         if (obj.has("tiers") && obj.get("tiers").isJsonArray()) {
             for (JsonElement el : obj.getAsJsonArray("tiers")) {

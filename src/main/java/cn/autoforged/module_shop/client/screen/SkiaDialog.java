@@ -263,21 +263,15 @@ public abstract class SkiaDialog extends Screen {
             this.items.flush(g, this.font);
         }
         this.items.setClipScale(1.0F);
-        // 提示框也按界面缩放（略放大一点，保证可读；大倍率时跟随弹窗尺度且不超过 1.35×）
-        float tk = Math.min(Math.max(1.0F, kk), kk * 1.15F);
         g.pose().popPose();
-        g.pose().pushPose();
-        g.pose().scale(tk, tk, 1.0F);
-        int tmx = Math.round(guiMx / tk);
-        int tmy = Math.round(guiMy / tk);
-        if (!this.items.renderTooltip(g, this.font, tmx, tmy) && this.pendingTip != null) {
+        // 提示框必须保持单位 pose 并传入原始 GUI 坐标 (guiMx, guiMy)，确保原版边界夹持及 ColorTooltips 等模组的 scissor / Post 重放正常
+        if (!this.items.renderTooltip(g, this.font, guiMx, guiMy) && this.pendingTip != null) {
             List<net.minecraft.util.FormattedCharSequence> lines = new ArrayList<>();
             for (Component line : this.pendingTip) {
                 lines.addAll(this.font.split(line, 220));
             }
-            g.renderTooltip(this.font, lines, tmx, tmy);
+            g.renderTooltip(this.font, lines, guiMx, guiMy);
         }
-        g.pose().popPose();
         return true;
     }
 

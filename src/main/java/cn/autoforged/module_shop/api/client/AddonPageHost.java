@@ -35,4 +35,49 @@ public interface AddonPageHost {
     default cn.autoforged.module_shop.client.ui.render.ItemOverlay items() {
         return null;
     }
+
+    /**
+     * 当前服务器是否启用了实体货币系统。
+     *
+     * @since API 1.5
+     */
+    default boolean physicalCurrencyEnabled() {
+        return false;
+    }
+
+    /**
+     * 当前客户端已知的实体货币阶梯列表（含各档位当前持有量）。
+     *
+     * @since API 1.5
+     */
+    default java.util.List<cn.autoforged.module_shop.api.view.CurrencyTierView> physicalTiers() {
+        return java.util.List.of();
+    }
+
+    /**
+     * 当前附属页面应默认使用的货币单位（若服主指定了附属默认实体币且实体货币启用则为对应实体币，否则为虚拟主货币）。
+     *
+     * @since API 1.5
+     */
+    default cn.autoforged.module_shop.api.view.CurrencyUnit activeCurrency() {
+        return cn.autoforged.module_shop.api.view.CurrencyUnit.star(currencyName());
+    }
+
+    /**
+     * 当前玩家在 {@link #activeCurrency()} 口径下的实时可用余额（实体币按背包实时可付枚数计算）。
+     *
+     * @since API 1.5
+     */
+    default long activeBalance() {
+        return balance();
+    }
+
+    /**
+     * 当前生效附属默认货币的显示名。
+     *
+     * @since API 1.5
+     */
+    default String activeCurrencyName() {
+        return activeCurrency().displayName();
+    }
 }

@@ -474,6 +474,7 @@ public final class TemplateService {
                     existing.setPriceSpec(item.resolvePriceSpec());
                     existing.stock = item.stock;
                     existing.stockMax = item.stockMax;
+                    existing.permanentLimit = item.permanentLimit;
                     existing.sort = item.sort;
                     existing.rarity = item.rarity;
                     existing.stack = item.stack;
@@ -975,6 +976,9 @@ public final class TemplateService {
         copy.formatVersion = src.formatVersion;
         copy.enabled = src.enabled;
         copy.blockBuybackAndShipping = src.blockBuybackAndShipping;
+        copy.maxConvertOutputItems = src.effectiveMaxConvertOutputItems();
+        copy.dailyConvertValueLimit = Math.max(0L, src.dailyConvertValueLimit);
+        copy.addonDefaultTierKey = src.addonDefaultTierKey == null ? "" : src.addonDefaultTierKey;
         copy.tiers = new ArrayList<>();
         if (src.tiers != null) {
             for (PhysicalCurrencyConfig.CurrencyTier tier : src.tiers) {

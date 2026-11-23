@@ -252,6 +252,9 @@ public final class PlayerAccount {
             account.shipping.ruleUsed.putAll(loaded.ruleUsed);
             account.shipping.lastSettleGameDay = loaded.lastSettleGameDay;
             account.shipping.lastPayout = loaded.lastPayout;
+            account.shipping.lastPhysPayout.clear();
+            account.shipping.lastPhysPayout.putAll(loaded.lastPhysPayout);
+            account.shipping.lastPayoutSummary = loaded.lastPayoutSummary;
             account.shipping.lastCount = loaded.lastCount;
             account.shipping.pendingNotice = loaded.pendingNotice;
         }

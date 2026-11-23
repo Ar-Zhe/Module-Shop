@@ -13,6 +13,8 @@ import cn.autoforged.module_shop.api.RewardApi;
 import cn.autoforged.module_shop.api.ShopApi;
 import cn.autoforged.module_shop.api.ModuleShopApi;
 import cn.autoforged.module_shop.api.view.BalanceView;
+import cn.autoforged.module_shop.api.view.CurrencyTierView;
+import cn.autoforged.module_shop.api.view.CurrencyUnit;
 import cn.autoforged.module_shop.api.view.MailInfo;
 import cn.autoforged.module_shop.api.view.ShopItemView;
 import cn.autoforged.module_shop.api.view.SignInView;
@@ -25,6 +27,11 @@ import cn.autoforged.module_shop.data.PlayerAccount;
 import cn.autoforged.module_shop.data.ShopSavedData;
 import cn.autoforged.module_shop.data.SignInData;
 import cn.autoforged.module_shop.data.TransactionEntry;
+import cn.autoforged.module_shop.shop.currency.CurrencySettlement;
+import cn.autoforged.module_shop.shop.currency.PhysicalCurrencyConfig;
+import cn.autoforged.module_shop.shop.currency.PhysicalCurrencyConfig.CurrencyTier;
+import cn.autoforged.module_shop.shop.currency.PhysicalCurrencyConfig.ResolvedTier;
+import cn.autoforged.module_shop.shop.currency.PhysicalCurrencyEngine;
 import cn.autoforged.module_shop.shop.mail.MailTemplates;
 import cn.autoforged.module_shop.shop.ShopManager;
 import cn.autoforged.module_shop.shop.TransactionLog;
@@ -152,7 +159,7 @@ public final class ApiImpl {
                 ShopManager.addMoneyMail(server, target, rest, ItemStack.EMPTY, SOURCE_API, "系统", null);
             }
             TransactionLog.record(server, target, TransactionLog.EXTERNAL, "API",
-                    credited, account.balance, safeReason(reason));
+                    amount, account.balance, safeReason(reason));
             data(server).setDirty();
             notifyOnline(server, target, Component.translatable("msg.module_shop.received_money", credited));
             return ApiResult.ok(credited);
@@ -190,6 +197,280 @@ public final class ApiImpl {
                             target, beforeBalance, account.balance, -amount, safeReason(reason)));
             data(server).setDirty();
             return ApiResult.ok(amount);
+        }
+
+        @Override
+        public String currencyName() {
+            MinecraftServer server = serverOrNull();
+            if (server == null) {
+                return "星币";
+            }
+            String name = ShopManager.currencyName(server);
+            return (name == null || name.isBlank()) ? "星币" : name;
+        }
+
+        @Override
+        public boolean isPhysicalCurrencyEnabled() {
+            return PhysicalCurrencyConfig.get().isActive();
+        }
+
+        @Override
+        public List<CurrencyTierView> physicalTiers(UUID target) {
+            MinecraftServer server = serverOrNull();
+            PhysicalCurrencyConfig cfg = PhysicalCurrencyConfig.get();
+            if (server == null || !cfg.isActive()) {
+                return List.of();
+            }
+            List<ResolvedTier> tiers = cfg.resolveTiers(server.registryAccess());
+            if (tiers.isEmpty()) {
+                return List.of();
+            }
+            ServerPlayer online = target == null ? null : server.getPlayerList().getPlayer(target);
+            int[] owned = online != null
+                    ? PhysicalCurrencyEngine.countInventory(online.getInventory(), tiers)
+                    : new int[tiers.size()];
+            List<CurrencyTierView> out = new ArrayList<>(tiers.size());
+            for (int i = 0; i < tiers.size(); i++) {
+                ResolvedTier rt = tiers.get(i);
+                out.add(new CurrencyTierView(
+                        rt.spec.tierKey(),
+                        tierDisplayName(rt),
+                        rt.spec.itemId,
+                        rt.spec.value,
+                        Math.max(1, rt.spec.stepRatio),
+                        rt.template,
+                        owned[i]));
+            }
+            return List.copyOf(out);
+        }
+
+        @Override
+        public CurrencyUnit activeCurrency() {
+            PhysicalCurrencyConfig cfg = PhysicalCurrencyConfig.get();
+            if (cfg.isActive() && cfg.addonDefaultTierKey != null && !cfg.addonDefaultTierKey.isBlank()) {
+                MinecraftServer server = serverOrNull();
+                if (server != null) {
+                    ResolvedTier resolved = cfg.findResolvedTier(cfg.addonDefaultTierKey, server.registryAccess());
+                    if (resolved != null && !resolved.template.isEmpty()) {
+                        return toCurrencyUnit(resolved);
+                    }
+                } else {
+                    CurrencyTier tier = cfg.findTier(cfg.addonDefaultTierKey);
+                    if (tier != null) {
+                        return CurrencyUnit.physical(tier.tierKey(), tierLabelFallback(tier), tier.value, ItemStack.EMPTY);
+                    }
+                }
+            }
+            return CurrencyUnit.star(currencyName());
+        }
+
+        /** 纯逻辑解析结果（与 {@link #resolveCurrency} 共享唯一真相源，供无 MC Bootstrap 单测直接校验）。 */
+        public record ResolvedCurrencyMeta(boolean physical, String tierKey, String displayName, long unitValue) {
+        }
+
+        public ResolvedCurrencyMeta resolveCurrencyMeta(String tierKeyOrEmpty) {
+            if (tierKeyOrEmpty == null || tierKeyOrEmpty.isBlank()
+                    || "star".equalsIgnoreCase(tierKeyOrEmpty.trim())) {
+                return new ResolvedCurrencyMeta(false, "", currencyName(), 1L);
+            }
+            String key = tierKeyOrEmpty.trim();
+            PhysicalCurrencyConfig cfg = PhysicalCurrencyConfig.get();
+            MinecraftServer server = serverOrNull();
+            if (server != null) {
+                ResolvedTier resolved = cfg.findResolvedTier(key, server.registryAccess());
+                if (resolved != null && !resolved.template.isEmpty()) {
+                    return new ResolvedCurrencyMeta(true, resolved.spec.tierKey(),
+                            tierDisplayName(resolved), resolved.spec.value);
+                }
+            }
+            CurrencyTier tier = cfg.findTier(key);
+            if (tier != null) {
+                return new ResolvedCurrencyMeta(true, tier.tierKey(), tierLabelFallback(tier), tier.value);
+            }
+            return new ResolvedCurrencyMeta(true, key, key, 1L);
+        }
+
+        @Override
+        public CurrencyUnit resolveCurrency(String tierKeyOrEmpty) {
+            ResolvedCurrencyMeta meta = resolveCurrencyMeta(tierKeyOrEmpty);
+            if (!meta.physical()) {
+                return CurrencyUnit.star(meta.displayName());
+            }
+            ItemStack icon = ItemStack.EMPTY;
+            MinecraftServer server = serverOrNull();
+            if (server != null) {
+                ResolvedTier resolved = PhysicalCurrencyConfig.get()
+                        .findResolvedTier(meta.tierKey(), server.registryAccess());
+                if (resolved != null && !resolved.template.isEmpty()) {
+                    icon = resolved.template;
+                }
+            }
+            return CurrencyUnit.physical(meta.tierKey(), meta.displayName(), meta.unitValue(), icon);
+        }
+
+        @Override
+        public long balance(UUID target, CurrencyUnit unit) {
+            if (unit == null || !unit.physical()) {
+                return balance(target);
+            }
+            MinecraftServer server = serverOrNull();
+            if (server == null || target == null) {
+                return 0L;
+            }
+            ServerPlayer online = server.getPlayerList().getPlayer(target);
+            if (online == null) {
+                return 0L;
+            }
+            PhysicalCurrencyConfig cfg = PhysicalCurrencyConfig.get();
+            if (!cfg.isActive()) {
+                return 0L;
+            }
+            List<ResolvedTier> tiers = cfg.resolveTiers(server.registryAccess());
+            if (tiers.isEmpty()) {
+                return 0L;
+            }
+            String canonical = cfg.canonicalTierKey(unit.tierKey());
+            int idx = -1;
+            for (int i = 0; i < tiers.size(); i++) {
+                String tk = tiers.get(i).spec.tierKey();
+                if (tk.equals(canonical) || tk.equals(unit.tierKey())) {
+                    idx = i;
+                    break;
+                }
+            }
+            if (idx < 0) {
+                return 0L;
+            }
+            long[] values = new long[tiers.size()];
+            for (int i = 0; i < tiers.size(); i++) {
+                values[i] = tiers.get(i).spec.value;
+            }
+            int[] owned = PhysicalCurrencyEngine.countInventory(online.getInventory(), tiers);
+            return PhysicalCurrencyEngine.maxPayableTierCount(idx, values, owned);
+        }
+
+        @Override
+        public ApiResult<Long> add(UUID target, CurrencyUnit unit, long amount, String reason) {
+            MinecraftServer server = serverOrNull();
+            ApiResult<Void> guard = checkThread(server);
+            if (guard != null) {
+                return ApiResult.fail(guard.code(), guard.message());
+            }
+            if (target == null) {
+                return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "target 不能为空");
+            }
+            if (amount <= 0L) {
+                return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "amount 必须 > 0（支出请用 take）");
+            }
+            if (unit == null || !unit.physical()) {
+                PlayerAccount account = account(server, target);
+                if (account == null) {
+                    return ApiResult.fail(ApiErrorCode.UNKNOWN_PLAYER, "找不到该玩家的账户");
+                }
+                long limit = Config.maxBalanceLimit();
+                long credited = account.balance >= limit ? 0L : ShopManager.credit(account, amount, limit);
+                long rest = amount - credited;
+                if (rest > 0L) {
+                    ShopManager.addMoneyMail(server, target, rest, ItemStack.EMPTY, SOURCE_API, "系统", null);
+                }
+                TransactionLog.record(server, target, TransactionLog.EXTERNAL, "API",
+                        amount, account.balance, safeReason(reason));
+                data(server).setDirty();
+                ServerPlayer online = server.getPlayerList().getPlayer(target);
+                if (online != null) {
+                    if (credited > 0L) {
+                        online.sendSystemMessage(Component.translatable("msg.module_shop.received_money", credited));
+                    }
+                    ShopManager.sendSnapshot(online, null, true);
+                }
+                return ApiResult.ok(amount);
+            }
+            if (unit.tierKey() == null || unit.tierKey().isBlank()) {
+                return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "实体货币档位不能为空");
+            }
+            if (PhysicalCurrencyEngine.buildPhysicalTierStacks(server.registryAccess(), unit.tierKey(), amount).isEmpty()) {
+                return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "无法解析实体货币档位：" + unit.tierKey());
+            }
+            CurrencySettlement.payoutPhysTier(server, target, unit.tierKey(), amount, SOURCE_API);
+            PlayerAccount acc = account(server, target);
+            long bal = acc != null ? acc.balance : 0L;
+            String note = safeReason(reason) + " (" + amount + " " + unit.displayName() + ")";
+            TransactionLog.record(server, target, TransactionLog.EXTERNAL, "API", amount, bal, note);
+            data(server).setDirty();
+            ServerPlayer online = server.getPlayerList().getPlayer(target);
+            if (online != null) {
+                online.sendSystemMessage(Component.translatableWithFallback(
+                        "msg.module_shop.received_phys", "已到账 %s %s", amount, unit.displayName()));
+                ShopManager.sendSnapshot(online, null, true);
+            }
+            return ApiResult.ok(amount);
+        }
+
+        @Override
+        public ApiResult<Long> take(UUID target, CurrencyUnit unit, long amount, String reason) {
+            if (unit == null || !unit.physical()) {
+                ApiResult<Long> res = take(target, amount, reason);
+                if (res.isOk()) {
+                    MinecraftServer server = serverOrNull();
+                    ServerPlayer online = server == null || target == null
+                            ? null : server.getPlayerList().getPlayer(target);
+                    if (online != null) {
+                        ShopManager.sendSnapshot(online, null, true);
+                    }
+                }
+                return res;
+            }
+            MinecraftServer server = serverOrNull();
+            ApiResult<Void> guard = checkThread(server);
+            if (guard != null) {
+                return ApiResult.fail(guard.code(), guard.message());
+            }
+            if (target == null) {
+                return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "target 不能为空");
+            }
+            if (amount <= 0L) {
+                return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "amount 必须 > 0（收入请用 add）");
+            }
+            if (unit.tierKey() == null || unit.tierKey().isBlank()) {
+                return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "实体货币档位不能为空");
+            }
+            ServerPlayer online = server.getPlayerList().getPlayer(target);
+            if (online == null) {
+                return ApiResult.fail(ApiErrorCode.PLAYER_OFFLINE, "玩家不在线，无法扣除背包实体货币");
+            }
+            CurrencySettlement.PayResult pay = CurrencySettlement.payPhysTier(
+                    online, unit.tierKey(), amount, SOURCE_API);
+            if (!pay.ok()) {
+                return ApiResult.fail(ApiErrorCode.INSUFFICIENT_FUNDS, pay.failFallback());
+            }
+            PlayerAccount acc = account(server, target);
+            long bal = acc != null ? acc.balance : 0L;
+            String note = safeReason(reason) + " (" + amount + " " + unit.displayName() + ")";
+            TransactionLog.record(server, target, TransactionLog.EXTERNAL, "API", -amount, bal, note);
+            data(server).setDirty();
+            ShopManager.sendSnapshot(online, null, true);
+            return ApiResult.ok(amount);
+        }
+
+        private static String tierDisplayName(ResolvedTier rt) {
+            if (rt.spec.label != null && !rt.spec.label.isBlank()) {
+                return rt.spec.label;
+            }
+            if (rt.template != null && !rt.template.isEmpty()) {
+                return rt.template.getHoverName().getString();
+            }
+            return rt.spec.itemId == null ? "" : rt.spec.itemId;
+        }
+
+        private static String tierLabelFallback(CurrencyTier tier) {
+            if (tier.label != null && !tier.label.isBlank()) {
+                return tier.label;
+            }
+            return tier.itemId == null ? "" : tier.itemId;
+        }
+
+        private static CurrencyUnit toCurrencyUnit(ResolvedTier rt) {
+            return CurrencyUnit.physical(rt.spec.tierKey(), tierDisplayName(rt), rt.spec.value, rt.template);
         }
     }
 
@@ -982,8 +1263,8 @@ public final class ApiImpl {
             if (playerId == null) {
                 return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "playerId 不能为空");
             }
-            if (stallIndex < 0 || slot < 0 || slot > 40) {
-                return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "stallIndex/slot 越界");
+            if (stallIndex < 0 || slot < 0 || (slot >= 36 && slot != 40)) {
+                return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "stallIndex/slot 越界（仅支持主背包 0..35 与副手 40）");
             }
             ApiResult<Void> countGuard = checkCount(count);
             if (countGuard != null) {
@@ -1005,21 +1286,10 @@ public final class ApiImpl {
                 return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT,
                         "背包第 " + slot + " 槽没有足够的物品");
             }
-            ItemStack listed = inSlot.copy();
-            listed.setCount(count);
-            int before = account.stall.size();
-            CompoundTag tag = new CompoundTag();
-            tag.putInt("index", stallIndex);
-            tag.putInt("slot", slot);
-            tag.putInt("count", count);
-            tag.putString("price", Long.toString(price));
-            ShopManager.stallSetPriceNew(online, tag);
-            if (account.stall.size() <= before) {
-                return ApiResult.fail(ApiErrorCode.INTERNAL_ERROR, "上架未生效（服务端拒绝）");
+            boolean listedOk = cn.autoforged.module_shop.shop.stall.StallService.listFromApi(online, slot, count, price);
+            if (!listedOk) {
+                return ApiResult.fail(ApiErrorCode.INTERNAL_ERROR, "上架未生效（服务端拒绝：库存上限/价格/手续费或摊位已满）");
             }
-            cn.autoforged.module_shop.api.event.ApiEvents.post(
-                    new cn.autoforged.module_shop.api.event.StallListedEvent(
-                            playerId, stallIndex, listed, count, price));
             return ApiResult.ok();
         }
 
@@ -1044,6 +1314,12 @@ public final class ApiImpl {
         @Override
         public ApiResult<Void> grantOnce(UUID target, String requestId, List<ItemStack> items, long money,
                 String reason) {
+            return grantOnce(target, requestId, items, null, money, reason);
+        }
+
+        @Override
+        public ApiResult<Void> grantOnce(UUID target, String requestId, List<ItemStack> items,
+                CurrencyUnit unit, long money, String reason) {
             MinecraftServer server = serverOrNull();
             ApiResult<Void> guard = checkThread(server);
             if (guard != null) {
@@ -1057,6 +1333,15 @@ public final class ApiImpl {
             }
             if (money < 0L) {
                 return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "money 不能为负");
+            }
+            boolean isPhys = unit != null && unit.physical();
+            if (isPhys && money > 0L) {
+                if (unit.tierKey() == null || unit.tierKey().isBlank()) {
+                    return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "实体货币档位不能为空");
+                }
+                if (PhysicalCurrencyEngine.buildPhysicalTierStacks(server.registryAccess(), unit.tierKey(), money).isEmpty()) {
+                    return ApiResult.fail(ApiErrorCode.INVALID_ARGUMENT, "无法解析实体货币档位：" + unit.tierKey());
+                }
             }
             List<ItemStack> clean = new ArrayList<>();
             if (items != null) {
@@ -1082,20 +1367,27 @@ public final class ApiImpl {
             data.apiRequests.add(key);
             data.trimApiRequests();
 
-            // 金币（受上限，溢出转金钱邮件）
+            // 货币发放（虚拟主货币受上限溢出转邮件；实体货币走背包/高阶压箱/满包或离线邮件）
             if (money > 0L) {
-                long limit = Config.maxBalanceLimit();
-                long credited = ShopManager.credit(account, money, limit);
-                long rest = money - credited;
-                if (rest > 0L) {
-                    ShopManager.addMoneyMail(server, target, rest, ItemStack.EMPTY, SOURCE_API, "系统", null);
+                if (isPhys) {
+                    CurrencySettlement.payoutPhysTier(server, target, unit.tierKey(), money, SOURCE_API);
+                    String note = safeReason(reason) + " (" + money + " " + unit.displayName() + ")";
+                    TransactionLog.record(server, target, TransactionLog.EXTERNAL, "奖励",
+                            money, account.balance, note);
+                } else {
+                    long limit = Config.maxBalanceLimit();
+                    long credited = ShopManager.credit(account, money, limit);
+                    long rest = money - credited;
+                    if (rest > 0L) {
+                        ShopManager.addMoneyMail(server, target, rest, ItemStack.EMPTY, SOURCE_API, "系统", null);
+                    }
+                    TransactionLog.record(server, target, TransactionLog.EXTERNAL, "奖励",
+                            money, account.balance, safeReason(reason));
                 }
-                TransactionLog.record(server, target, TransactionLog.EXTERNAL, "奖励",
-                        credited, account.balance, safeReason(reason));
             }
             // 物品（在线背包 / 离线邮件）
+            ServerPlayer online = server.getPlayerList().getPlayer(target);
             if (!clean.isEmpty()) {
-                ServerPlayer online = server.getPlayerList().getPlayer(target);
                 if (online != null) {
                     for (ItemStack stack : clean) {
                         ShopManager.addItemOrMail(online, stack, SOURCE_API);
@@ -1117,10 +1409,19 @@ public final class ApiImpl {
             // 事件：奖励已发放（成功后发布）
             cn.autoforged.module_shop.api.event.ApiEvents.post(
                     new cn.autoforged.module_shop.api.event.RewardGrantedEvent(
-                            target, requestId, Math.min(money, Math.max(0L, money)), clean.size(),
+                            target, requestId, Math.max(0L, money), clean.size(),
                             safeReason(reason)));
-            notifyOnline(server, target, Component.translatable("msg.module_shop.api_reward",
-                    safeReason(reason), money));
+            if (isPhys && money > 0L) {
+                notifyOnline(server, target, Component.translatableWithFallback(
+                        "msg.module_shop.api_reward_phys", "已发放奖励：%s（%s %s）",
+                        safeReason(reason), money, unit.displayName()));
+            } else {
+                notifyOnline(server, target, Component.translatable("msg.module_shop.api_reward",
+                        safeReason(reason), money));
+            }
+            if (online != null) {
+                ShopManager.sendSnapshot(online, null, true);
+            }
             return ApiResult.ok();
         }
     }

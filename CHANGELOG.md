@@ -1,6 +1,83 @@
 # 变更记录
 
-遵循 [语义化版本](https://semver.org/lang/zh-CN/)。模组版本与 API 版本独立维护（当前 API `1.3.0`）。
+遵循 [语义化版本](https://semver.org/lang/zh-CN/)。模组版本与 API 版本独立维护（当前 API `1.5.0`）。
+
+## [1.8.2]
+
+构建产物：`Module-Shop-1.8.2-for-NeoForge-1.21.1.jar` 与 `module_shop-1.8.2-api.jar`；PATCH 修复，向后兼容旧存档 / 配置 / 附属模组，保留历史全部版本 jar。
+
+### 修复
+
+- **修复玩家摊位设置「永久」仍于次日 0 点被强制下架的问题**：移除 `ShopManager.tickDaily` 中残留的旧版跨日无条件清摊逻辑（摊位到期统一由 `tickStallExpire` 按 `stallExpireMode`/`stallExpireAmount` 执行），保留 `lastStallClearDay` 负责 `mailExpireDays` 每日清理已读邮件并补齐首次初始化 `setDirty()`、防回拨与 `LOCK` 同步。
+- **修复高库存摊位退件编解码崩溃与非法堆叠**：新增 `ShopManager.splitStacks`/`addItemsOrMail` 并加固 `MailEntry.addStack`/`MailEntry.item`，统一按物品 `getMaxStackSize()` 拆堆后再入包、掉落或入邮（杜绝 1.21.1 `stock > 99` Codec 崩溃与受损装备单格非法堆叠）；`tickStallExpire` 补齐 `LOCK`、离线退件改用 `MailTemplates.Template.STALL_EXPIRED` 合并模板、`MailFormat` 补 `case "stall_expired"`，下架/到期同步淘汰 `StallService.ITEM_CACHE`。
+- **修复摊位/求购下架配置保存、时间戳同步与客户端交互边界**：
+  - `ShopManager.sendSnapshot` 补发 `listedGame`/`listedReal`，修复限时模式下「我的商店」恒显示「永久」的问题；
+  - 新增共用辅助类 `ShopExpireSupport`：`adminStallExpire`/`adminDemandExpire` 选「永久」时允许留空时长框、从永久切限时或切换 `game`↔`real` 时重置存量时间戳防止老商品 1 秒内瞬清、并增加 `SPEC.save()` 异常/竞态时的原子 TOML 回写兜底与失败回滚；
+  - `ShopInputScreen` 窗口缩放/全屏切换重建 `init()` 时保留已点选的选项与清空后的输入框、修复原版异常预设回退并为 `expire_amount` 加数字过滤；`StallPage`/`AdminPage`/`ShopScreen` 统一按 `!"permanent" && amount > 0` 判断限时态，`ShopScreen.requiresAdminAuth` 补入 `"stall_expire"`，`ClientShopData.reset()` 补齐重置摊位/求购状态。
+- **修复多项关联定时与持久化缺陷**：
+  - 购物城 `restockMall` 跳过无限库存（`stock < 0`）不再被统一补货量改写为有限库存，`tickMallRefresh` 固定恢复各自 `stockMax`，`tickMallRestock` 游戏日模式补 `/time set` 回退保护与补货后快照广播；
+  - `TemplateService.apply` 合并购物城商品补同步 `permanentLimit`；`ShopSavedData.load` 与 `ClientShopData.update` 允许每日槽位保持 `0`；`addMailDraft` 统一使用本地日历日 `currentDay()`；
+  - 修复 `ApiImpl.stallList` 误调旧 `DepositMenu` 入口 `stallSetPriceNew` 导致公共 API 摊位上架必败的问题（改为复用 `StallService.listFromApi`）；
+  - 修复活动日定时发放（`grantActivityDay`/`tickActivitySchedules`/`tickActivityDayOffline`）未到点可提前领、整小时高频空转与静态标记跨档残留问题；
+  - 修复 `PlayerAccount.load` 漏拷贝出货箱实体货币离线结算摘要 `lastPhysPayout`/`lastPayoutSummary` 的问题。
+
+## [1.8.1]
+
+构建产物：`Module-Shop-1.8.1-for-NeoForge-1.21.1.jar` 与 `module_shop-1.8.1-api.jar`；PATCH 修复，向后兼容旧存档 / 配置 / 附属模组，保留历史全部版本 jar。
+
+### 修复
+
+- **加固 `Text.sanitize` 十六进制色码与 UTF-16 代理对清洗**：修复物品名含 `§#RRGGBB` 色码时残留 `RRGGBB` 字母的问题，并将 `§` 后跳过逻辑由固定 `i += 2` 升级为按 `Character.charCount(raw.codePointAt(i))` 跳过完整 Unicode 码点，避免 `§` 紧跟 Emoji/扩展区代理对时截断出孤立低代理项 `'?'` 乱码及末尾孤立 `§` 越界风险（同步惠及所有调用 `V2.text`/`V2.bold` 的附属模组）。
+- **加固 `PhysicalCurrencyConfig` 与 `ShopTemplateStore` 的 UTF-16/UTF-8 BOM 及严格 GB18030 读取容错**：读取 `physical_currency.json` 与商店模板 JSON（含 `.json` / `.json.gz` / `.mshop`）时优先识别 UTF-16LE（`FF FE`）/ UTF-16BE（`FE FF`）与 UTF-8 BOM（`EF BB BF` / `\uFEFF`），并在无 BOM 的严格 UTF-8 解码失败时使用严格模式（`CodingErrorAction.REPORT`）回退 `GB18030`，既兼容 Windows 记事本中文保存又杜绝损坏二进制被静默解成乱码。
+- **修复 `ApiImpl.Economy.resolveCurrency` 在实体币停用或档位被删时偷换币种的问题**：空串 / `null` / `"star"` 仍返回虚拟主货币；非空实体币键不再因 `!cfg.isActive()` 退回虚拟星币，若档位被删亦不再回退第 0 档，而是原样保留 `tierKey` 交由下游兜底解析或显式报错，防止退款/领包价值错配。
+- **对齐核心与 Eco 的实体币发放前校验及流水记账口径**：`ApiImpl.Economy.add` 与 `ApiImpl.Reward.grantOnce` 在发放实体币前统一通过 `PhysicalCurrencyEngine.buildPhysicalTierStacks` 预校验能否构建真实物品栈（在写入 `apiRequests` 幂等键之前失败返回 `INVALID_ARGUMENT`，防止占键/删台账却未发出物品），并统一虚拟主货币溢出转金钱邮件场景的流水记账口径为实际发放总额。
+
+## [1.8.0]
+
+构建产物：`Module-Shop-1.8.0-for-NeoForge-1.21.1.jar` 与 `module_shop-1.8.0-api.jar`；MINOR 特性升级（公共 API 升至 `1.5.0`），向后兼容旧存档 / 配置 / 附属模组，保留历史全部版本 jar。
+
+### 新增与修复
+
+- **公共 API 1.5.0（双账本 / 实体货币与附属默认货币全链路开放）**：
+  - `ApiVersion` 升级至 `1.5.0`（`API_MAJOR = 1`、`API_MINOR = 5`），新增运行期非内联版本检测方法 `runtimeMajor()`、`runtimeMinor()`、`atLeast(int major, int minor)`。
+  - 新增 `CurrencyUnit` 与 `CurrencyTierView` 只读视图记录，扩展 `EconomyApi`（`currencyName`、`isPhysicalCurrencyEnabled`、`physicalTiers`、`activeCurrency`、`resolveCurrency`、`balance(UUID, CurrencyUnit)`、`balanceActive`、`add`/`addActive`、`take`/`takeActive`）、`RewardApi`（`grantOnce(..., CurrencyUnit, ...)`、`grantOnceActive`）及客户端 `AddonPageHost`（`physicalCurrencyEnabled`、`physicalTiers`、`activeCurrency`、`activeBalance`、`activeCurrencyName`），全部提供 `default` 方法 100% 二进制向后兼容。
+  - `ApiImpl.Economy` 新增实体货币按档精确可付枚数算法（`PhysicalCurrencyEngine.maxPayableTierCount`，兼容非倍比链）、虚拟货币整笔必达（满余额溢出转金钱邮件）、实体货币在线/离线发放与在线扣款及实时静默快照推送；`AddonPageAdapter.Host` 实时扫描本地客户端背包计算活跃币种可用余额。
+- **实体货币管理页新增「附属默认货币」可视化配置与兑换页总值修复**：
+  - `PhysicalCurrencyConfig` 新增 `addonDefaultTierKey` 持久化与规范化，`CurrencySettlement.writeSnapshot` 同步下发 `physAddonDefaultTier` 与实时背包实体货币总面值 `physPlayerValue`。
+  - `PhysicalCurrencyConfigScreen` 在右侧档位编辑区新增「`★ 附属默认` / `设为附属默认`」一键切换按钮、左侧阶梯列表「`附属默认`」徽标与顶部说明条状态联动。
+  - 修复 `PhysicalCurrencyExchangeScreen` 顶部总值与提示误拼虚拟主货币名及恒显示 `0` 的遗留问题。
+
+## [1.7.1]
+
+构建产物：`Module-Shop-1.7.1-for-NeoForge-1.21.1.jar` 与 `module_shop-1.7.1-api.jar`；PATCH 修复，向后兼容旧存档 / 配置 / 附属模组，保留历史全部版本 jar。
+
+### 修复与体验优化
+
+- **导出商店配置弹窗新增「设为默认模板」显式开关与整合包加载提示**：`ConfigExportScreen`（Skija 与非 Skia 兜底双路径）在名称输入框旁新增「`设为默认模板`」一键切换按钮（支持与手输 `shop_config` 双向联动并记忆原自定义名称），明确区分「另存时间戳备份（新世界不自动加载）」与「写入默认模板 `shop_config.*`（整合包 / 新建世界自动套用）」，并将 `.mshop` 格式标签修正为「`.mshop 完整包(含图)`」避免误导整合包作者。
+- **保存默认模板时自动归档跨后缀旧默认文件**：新增 `ShopTemplateStore.archiveOtherDefaultFiles`，当通过导出、保存默认、专用服上传同步或下载落盘写入任一后缀的 `shop_config.(mshop|json.gz|json)` 时，自动将同目录下其余后缀的旧 `shop_config.*` 备份至 `backups/` 并移除，杜绝多份默认模板并存及整合包压缩解压刷平修改时间后旧文件反压新配置。
+- **补齐配置目录非模板系统 JSON 过滤**：`ShopTemplateStore.RESERVED_NON_TEMPLATE` 与 `isReservedNonTemplate` 新增排除 `brand_default.json`、`admin_auth.json`、`mod_names.json` 及 `mod_names_*.json`，防止系统内部配置出现在可导入模板列表或被误下载/覆盖。
+
+## [1.7.0]
+
+构建产物：`Module-Shop-1.7.0-for-NeoForge-1.21.1.jar` 与 `module_shop-1.7.0-api.jar`；向后兼容旧存档 / 配置 / 附属模组，保留历史全部版本 jar。
+
+### 新增与修复
+
+- **每日收购 / 每日商店全服实时同步与「全服重抽」后台能力**：
+  - **同日增量自动补齐与删项同步**：`ensureDaily` 新增 `syncDailyShopWithPool` 与 `syncDailyBuybackWithPool`，管理员增删改商品池（单件上架、批量上架、改价、删除）时自动触发 `broadcastSnapshots` 全服静默同步；已从候选池删除或触发实体币防套利锁的条目立即从玩家当日清单移除，玩家当日槽位未满（包括「空池先登后摆」死锁场景或池内条目数 ≤ 条目上限时新增商品）自动实时补齐，无需等次日 0 点。
+  - **修复「刷新参数」仅重抽管理员本人问题**：`adminShopGenSet` 改为调用 `ShopManager.rerollDailyForAll`，保存后同步重置全服在线与离线玩家的当前模块当日标记并推送快照。
+  - **新增管理后台「全服重抽」按钮与指令增强**：每日商店与每日收购管理页底部新增「全服重抽」按钮（带二次确认与管理密码锁保护）；`/shop reload` 与「配置管理 → 导入模板 / 恢复默认」同步覆盖离线玩家账户；`/shop admin refresh` 支持无参重抽全服及 `@a` 多目标选择器。
+  - **修复每日收购品质保底失效与添加模块归属同步**：`generateDailyBuyback` 补齐 `applyBuybackGuarantee` 保底替换逻辑；`admin_add` 携带客户端当前模块 `mode` 同步服务端 `ADMIN_EDIT_TYPE`。
+
+## [1.6.2]
+
+构建产物：`Module-Shop-1.6.2-for-NeoForge-1.21.1.jar` 与 `module_shop-1.6.2-api.jar`；PATCH 修复，旧存档 / 配置 / 附属模组直接兼容，保留历史全部版本 jar。
+
+### 修复
+
+- **修复与 ColorTooltips 等第三方悬浮框模组的兼容性问题（悬停不显示、移开瞬间闪一下）及大 GUI 缩放下原版提示框越界错位**：
+  - **真正根因**：并非 Skija 污染 OpenGL 矩阵（`GlStateScope` 已完整保存/恢复 GL 状态，且 `ShellV2` 调完 `pageItems.flush` 后已 `popPose`），而是 `ShellV2.render`（商城及全部附属页面统一出口）与 `SkiaDialog.skiaRender`（竞价、求购、确认等二级弹窗）在绘制 `renderTooltip` 时额外套了一层 `g.pose().scale(tk, tk, 1.0F)`（1080p 自动缩放下 `tk ≈ 0.53 ~ 0.71`）并传入换算后的 `(mouseX / tk, mouseY / tk)`。`ColorTooltips` 在 `TooltipEventHandler.renderCustomTooltip` 内调用 `GuiGraphics.enableScissor(renderX - 2, ...)` 时，Minecraft 的 `ScissorStack` 不受 `pose()` 缩放影响（直接使用未缩放 GUI 坐标），导致裁剪框落在 `[renderX, renderX + w]` 而实际顶点画在 `[renderX * tk, (renderX + w) * tk]`，两者无交集而被 100% 裁掉；当鼠标移开物品的瞬间本帧未触发主渲染，`ColorTooltips` 的 `ScreenEvent.Render.Post` 在单位 `pose` 下按真实鼠标坐标重放淡出缓存，于是闪现一帧。同时原版 `DefaultTooltipPositioner` 按未缩放 `guiWidth/guiHeight` 夹持换算后的 `tmx/tmy`，也会使右半屏/下半屏提示框位置严重偏离鼠标。
+  - **修复方案**：移除 `ShellV2` 与 `SkiaDialog` 在 `renderTooltip` 阶段的 `pose().scale(tk, ...)` 与坐标除算，统一以单位 `pose` 与原始 GUI 坐标 `(mouseX, mouseY)` 调用 `renderTooltip`，使原版悬浮框、`ColorTooltips`（彩色流光边框、物品图标、标题栏、平滑移动与淡入淡出）及 JEI 快捷键在主界面、二级弹窗与全部附属页（任务/股票/红包/盲盒）均正常显示；新增回归单测 `shellV2AndSkiaDialogRenderTooltipsWithIdentityPoseAndGuiCoords`。
 
 ## [1.6.1]
 

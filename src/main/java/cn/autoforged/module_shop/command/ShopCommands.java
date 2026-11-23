@@ -92,19 +92,39 @@ public final class ShopCommands {
                             ShopManager.sendSnapshotOpen(ctx.getSource().getPlayerOrException(), "admin");
                             return 1;
                         })
-                        // 需求 12：指定某玩家刷新其每日商店货物与收购商品种类。
+                        // 需求 12：刷新每日商店货物与收购商品种类（不填目标 = 全服在线+离线玩家，填目标支持单人与 @a 选择器）。
                         .then(Commands.literal("refresh")
-                                .then(Commands.argument("target", EntityArgument.player())
+                                .executes(ctx -> {
+                                    if (!checkPlayerCommandUnlocked(ctx.getSource())) {
+                                        return 0;
+                                    }
+                                    var server = ctx.getSource().getServer();
+                                    ShopManager.rerollDailyForAll(server, ShopManager.data(server), true, true);
+                                    ctx.getSource().sendSuccess(() -> Component.translatableWithFallback(
+                                            "msg.module_shop.refreshed_all", "已刷新全服所有玩家的每日商店与每日收购")
+                                            .withStyle(ChatFormatting.GREEN), true);
+                                    return 1;
+                                })
+                                .then(Commands.argument("target", EntityArgument.players())
                                         .executes(ctx -> {
                                             if (!checkPlayerCommandUnlocked(ctx.getSource())) {
                                                 return 0;
                                             }
-                                            ServerPlayer target = EntityArgument.getPlayer(ctx, "target");
-                                            ShopManager.refreshDaily(target);
-                                            ctx.getSource().sendSuccess(() -> Component.translatable(
-                                                    "msg.module_shop.refreshed", target.getGameProfile().getName())
-                                                    .withStyle(ChatFormatting.GREEN), true);
-                                            return 1;
+                                            var targets = EntityArgument.getPlayers(ctx, "target");
+                                            for (ServerPlayer target : targets) {
+                                                ShopManager.refreshDaily(target);
+                                            }
+                                            if (targets.size() == 1) {
+                                                ServerPlayer single = targets.iterator().next();
+                                                ctx.getSource().sendSuccess(() -> Component.translatable(
+                                                        "msg.module_shop.refreshed", single.getGameProfile().getName())
+                                                        .withStyle(ChatFormatting.GREEN), true);
+                                            } else {
+                                                ctx.getSource().sendSuccess(() -> Component.literal(
+                                                        "已刷新 " + targets.size() + " 名玩家的每日商店与收购")
+                                                        .withStyle(ChatFormatting.GREEN), true);
+                                            }
+                                            return targets.size();
                                         })))
                         // 管理员发钱：不填目标 = 所有已知玩家（在线 + 历史离线），填目标则只发这些玩家。
                         .then(Commands.literal("money")

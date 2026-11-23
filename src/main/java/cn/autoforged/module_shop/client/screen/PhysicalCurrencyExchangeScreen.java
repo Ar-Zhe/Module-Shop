@@ -151,10 +151,17 @@ public class PhysicalCurrencyExchangeScreen extends SkiaDialog {
     private void paintOverview(Canvas canvas, float x, float y, float w, float h, List<PhysTierView> tiers) {
         float leftW = Math.min(168.0F, w * 0.44F);
         float lx = x + 9.0F;
-        small(canvas, tr("gui.module_shop.phys_ex.bag_total", "背包实体总值 · %s",
-                        ClientHomeCurrencyState.modeLabel(ClientHomeCurrencyState.physMode)),
+        small(canvas, tr("gui.module_shop.phys_ex.bag_total_v2", "背包实体总面值"),
                 lx, y + 10.0F, leftW - 10.0F, IOStyle.TEXT_3);
-        String valStr = ClientShopData.money(ClientHomeCurrencyState.physPlayerValue);
+        long totalVal = ClientHomeCurrencyState.physPlayerValue;
+        if (totalVal <= 0L && !tiers.isEmpty()) {
+            totalVal = cn.autoforged.module_shop.shop.currency.PhysicalCurrencyEngine.totalPhysicalValue(
+                    ClientHomeCurrencyState.tierValues(), ClientHomeCurrencyState.tierOwnedCounts());
+        }
+        String formattedTotal = String.format("%,d", totalVal);
+        String valStr = (!tiers.isEmpty() && tiers.get(0).value == 1L)
+                ? (formattedTotal + " " + tiers.get(0).displayName())
+                : tr("gui.module_shop.phys_ex.value_units", "%s 面值", formattedTotal);
         Text.drawLine(canvas, valStr, AtomUi.BOLD, Text.TITLE, IOStyle.GREEN,
                 lx, y + 24.5F, leftW - 10.0F, Text.Align.LEFT);
 
@@ -192,7 +199,7 @@ public class PhysicalCurrencyExchangeScreen extends SkiaDialog {
                     tx, py + 18.0F, tw, Text.Align.LEFT);
             if (over(px, py, pillW, pillH)) {
                 tip(Component.literal(tv.displayName() + " · "
-                        + tr("gui.module_shop.phys_ex.unit_val", "单枚面值 %s", ClientShopData.money(tv.value))
+                        + tr("gui.module_shop.phys_ex.unit_val", "单枚面值 %s", String.format("%,d", tv.value))
                         + " · " + tr("gui.module_shop.phys_ex.owned_tip", "持有 %s", tv.ownedCount)));
             }
         }

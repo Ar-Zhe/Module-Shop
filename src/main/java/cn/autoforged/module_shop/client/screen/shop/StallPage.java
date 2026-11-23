@@ -382,7 +382,8 @@ public final class StallPage implements ShopPage {
         }
         mineShown = nextMineShown;
         String revText = PriceDisplay.formatLedgerSummary(starRev, physRev);
-        String expire = "permanent".equals(String.valueOf(ClientShopData.stallExpireMode))
+        String expire = ("permanent".equals(String.valueOf(ClientShopData.stallExpireMode))
+                || ClientShopData.stallExpireAmount <= 0)
                 ? tr("gui.module_shop.v2.stall.permanent") : tr("gui.module_shop.v2.stall.timed");
         if (right - 8 - afterSearch >= 65.0F) {
             V2.text(c, tr("gui.module_shop.v2.stall.mine_stats", stall.size(), StallClient.slots, V2.money(totalSold),

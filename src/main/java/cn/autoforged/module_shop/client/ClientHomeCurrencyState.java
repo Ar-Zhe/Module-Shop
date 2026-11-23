@@ -65,6 +65,7 @@ public final class ClientHomeCurrencyState {
     public static long physDailyConvertLimit = 0L;
     public static long physDailyConvertUsed = 0L;
     public static long physPlayerValue;
+    public static String physAddonDefaultTier = "";
     public static List<PhysTierView> physTiers = new ArrayList<>();
 
     /** 每次成功解析快照时递增，界面据此感知服务端热同步刷新。 */
@@ -253,6 +254,7 @@ public final class ClientHomeCurrencyState {
         physDailyConvertLimit = Math.max(0L, data.getLong("physDailyConvertLimit"));
         physDailyConvertUsed = Math.max(0L, data.getLong("physDailyConvertUsed"));
         physPlayerValue = Math.max(0L, data.getLong("physPlayerValue"));
+        physAddonDefaultTier = data.getString("physAddonDefaultTier");
 
         List<PhysTierView> nextTiers = new ArrayList<>();
         ListTag tierList = data.getList("physTiers", Tag.TAG_COMPOUND);
@@ -331,6 +333,46 @@ public final class ClientHomeCurrencyState {
         return out;
     }
 
+    /** 实时扫描客户端本地背包各实体货币档位持有量；若玩家实例未就绪则回退服务端快照值。 */
+    public static int[] liveOwnedCounts() {
+        List<PhysTierView> list = physTiers;
+        if (list.isEmpty()) {
+            return new int[0];
+        }
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null || mc.player == null) {
+            return tierOwnedCounts();
+        }
+        var inv = mc.player.getInventory();
+        int[] counts = new int[list.size()];
+        for (int slot = 0; slot < inv.getContainerSize(); slot++) {
+            if (slot >= 36 && slot < 40) {
+                continue;
+            }
+            ItemStack st = inv.getItem(slot);
+            if (st.isEmpty()) {
+                continue;
+            }
+            for (int t = 0; t < list.size(); t++) {
+                ItemStack tpl = list.get(t).itemStack;
+                if (tpl != null && !tpl.isEmpty()
+                        && cn.autoforged.module_shop.shop.currency.PhysicalCurrencyEngine.matchesTier(st, tpl)) {
+                    counts[t] += st.getCount();
+                    break;
+                }
+            }
+        }
+        return counts;
+    }
+
+    /** 若实体货币已启用且配置了有效的附属默认货币档位，返回该档位视图；否则返回 {@code null}（使用虚拟主货币）。 */
+    public static @Nullable PhysTierView activeAddonPhysTier() {
+        if (!physEnabled || physAddonDefaultTier == null || physAddonDefaultTier.isBlank()) {
+            return null;
+        }
+        return findTier(physAddonDefaultTier);
+    }
+
     public static void togglePreferredEitherChannel() {
         preferredEitherChannel = CHANNEL_PHYS.equals(preferredEitherChannel) ? CHANNEL_STAR : CHANNEL_PHYS;
     }
@@ -357,6 +399,7 @@ public final class ClientHomeCurrencyState {
         physDailyConvertLimit = 0L;
         physDailyConvertUsed = 0L;
         physPlayerValue = 0L;
+        physAddonDefaultTier = "";
         physTiers = new ArrayList<>();
         snapshotVersion++;
         cn.autoforged.module_shop.client.media.ClientMediaCache.clearMemory();

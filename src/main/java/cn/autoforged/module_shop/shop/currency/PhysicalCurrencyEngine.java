@@ -151,6 +151,53 @@ public final class PhysicalCurrencyEngine {
     }
 
     /**
+     * 计算玩家当前背包在实体货币链内按目标档位 {@code targetTierIdx} 可精确支付的最大枚数：
+     * 先按总面值上界尝试，若非倍比链存在找零限制则向下回退 + 二分调用 {@link #planPhysicalTierPay} 精确求解。
+     */
+    public static long maxPayableTierCount(int targetTierIdx, long[] values, int[] owned) {
+        return maxPayableTierCount(targetTierIdx, values, owned, DEFAULT_MAX_CHANGE_ITEMS);
+    }
+
+    public static long maxPayableTierCount(int targetTierIdx, long[] values, int[] owned, int maxChangeItems) {
+        int n = values == null ? 0 : values.length;
+        if (n == 0 || owned == null || owned.length < n || targetTierIdx < 0 || targetTierIdx >= n) {
+            return 0L;
+        }
+        long unitVal = values[targetTierIdx];
+        if (unitVal <= 0L) {
+            return 0L;
+        }
+        long totalVal = totalPhysicalValue(values, owned);
+        long upper = totalVal / unitVal;
+        if (upper <= 0L) {
+            return 0L;
+        }
+        if (planPhysicalTierPay(targetTierIdx, upper, values, owned, maxChangeItems).ok()) {
+            return upper;
+        }
+        long lo = Math.min(upper, Math.max(0L, (long) owned[targetTierIdx]));
+        long scanMin = Math.max(lo + 1L, upper - 16L);
+        for (long candidate = upper - 1L; candidate >= scanMin; candidate--) {
+            if (planPhysicalTierPay(targetTierIdx, candidate, values, owned, maxChangeItems).ok()) {
+                return candidate;
+            }
+        }
+        long best = lo;
+        long left = lo + 1L;
+        long right = scanMin - 1L;
+        while (left <= right) {
+            long mid = left + ((right - left) >>> 1);
+            if (planPhysicalTierPay(targetTierIdx, mid, values, owned, maxChangeItems).ok()) {
+                best = mid;
+                left = mid + 1L;
+            } else {
+                right = mid - 1L;
+            }
+        }
+        return best;
+    }
+
+    /**
      * 按指定目标档位规划实体货币发放：
      * 优先按标定档位 {@code targetTierIdx × tierCount} 直接发放；若超过最大物品件数上限则自动向高阶压缩。
      */
