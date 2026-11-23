@@ -1,7 +1,10 @@
 package cn.autoforged.module_shop.data;
 
-import net.minecraft.core.RegistryAccess;
+import cn.autoforged.module_shop.shop.currency.PhysicalCurrencyConfig;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 
 /**
@@ -19,13 +22,23 @@ public final class ExchangeEntry {
     public ItemStack stack = ItemStack.EMPTY;
     /** 单个物品可兑换的星币数。 */
     public long value;
+    /** 每人每日存入（物品 → 星币）数量上限；0 = 不限。 */
+    public int dailyDepositLimit;
+    /** 每人每日取出（星币 → 物品）数量上限；0 = 不限。 */
+    public int dailyWithdrawLimit;
 
     public ExchangeEntry() {
     }
 
     public ExchangeEntry(ItemStack stack, long value) {
+        this(stack, value, 0, 0);
+    }
+
+    public ExchangeEntry(ItemStack stack, long value, int dailyDepositLimit, int dailyWithdrawLimit) {
         this.stack = stack == null ? ItemStack.EMPTY : stack;
         this.value = value;
+        this.dailyDepositLimit = Math.max(0, dailyDepositLimit);
+        this.dailyWithdrawLimit = Math.max(0, dailyWithdrawLimit);
     }
 
     /** 归一化：模板恒为 1 个，避免把数量当成价格的一部分。 */
@@ -36,22 +49,42 @@ public final class ExchangeEntry {
         if (!stack.isEmpty()) {
             stack.setCount(1);
         }
+        dailyDepositLimit = Math.max(0, dailyDepositLimit);
+        dailyWithdrawLimit = Math.max(0, dailyWithdrawLimit);
     }
 
     public boolean valid() {
         return !stack.isEmpty() && value > 0L;
     }
 
-    public CompoundTag save(RegistryAccess registries) {
+    public String quotaKey(@javax.annotation.Nullable HolderLookup.Provider registries) {
+        if (stack == null || stack.isEmpty()) {
+            return "";
+        }
+        ResourceLocation rl = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        String id = rl == null ? "" : rl.toString();
+        String snbt = PhysicalCurrencyConfig.extractComponentsSnbt(stack, registries);
+        return snbt.isEmpty() ? id : id + "|" + snbt;
+    }
+
+    public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = ShopNbt.saveStack(stack, registries);
         tag.putLong("value", value);
+        if (dailyDepositLimit > 0) {
+            tag.putInt("dailyDepositLimit", dailyDepositLimit);
+        }
+        if (dailyWithdrawLimit > 0) {
+            tag.putInt("dailyWithdrawLimit", dailyWithdrawLimit);
+        }
         return tag;
     }
 
-    public static ExchangeEntry load(CompoundTag tag, RegistryAccess registries) {
+    public static ExchangeEntry load(CompoundTag tag, HolderLookup.Provider registries) {
         ExchangeEntry entry = new ExchangeEntry();
         entry.stack = ShopNbt.loadStack(tag, registries);
         entry.value = tag.getLong("value");
+        entry.dailyDepositLimit = Math.max(0, tag.getInt("dailyDepositLimit"));
+        entry.dailyWithdrawLimit = Math.max(0, tag.getInt("dailyWithdrawLimit"));
         entry.normalize();
         return entry;
     }

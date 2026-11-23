@@ -23,7 +23,7 @@ import net.minecraft.network.chat.Component;
  * </ul>
  * 底部按钮：{@code [日程奖励][删除该日程]} …… {@code [保存][取消]}。
  */
-public class ScheduleEditScreen extends Screen {
+public class ScheduleEditScreen extends SkiaDialog {
     private static final int PANEL_W = 396;
     private static final int PANEL_H = 216;
     private static final int[] PALETTE = {
@@ -98,7 +98,9 @@ public class ScheduleEditScreen extends Screen {
 
     @Override
     protected void init() {
-        super.init();
+        if (skiaInit()) {
+            return;
+        }
         ClientShopData.ActivityView act = find(this.day);
         int x = left();
         int y = top();
@@ -120,6 +122,9 @@ public class ScheduleEditScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         this.regions.clear();
         this.pointerX = mouseX;
         this.pointerY = mouseY;
@@ -171,6 +176,94 @@ public class ScheduleEditScreen extends Screen {
         // ---------- 最后重画输入框，确保浮在面板之上 ----------
         renderBox(g, this.titleBox, mouseX, mouseY, partialTick);
         renderBox(g, this.bodyBox, mouseX, mouseY, partialTick);
+    }
+
+    // ------------------------------------------------------------------ Skija
+
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skTitle;
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skBody;
+
+    @Override
+    protected void initSkia() {
+        ClientShopData.ActivityView act = find(this.day);
+        this.skTitle = field(240, Component.translatable("gui.module_shop.field.title").getString());
+        this.skBody = field(240, Component.translatable("gui.module_shop.field.note").getString());
+        this.titleBox = this.skTitle.editBox();
+        this.bodyBox = this.skBody.editBox();
+        if (act != null) {
+            this.skTitle.setValue(act.title);
+            this.skBody.setValue(act.note);
+        }
+        this.skTitle.focus();
+    }
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 380.0F;
+        float h = 236.0F;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        panel(c, x, y, w, h, this.title.getString() + " · " + LocalDate.ofEpochDay(this.day));
+        float cy = y + HEADER_H + 8;
+        // 内容
+        small(c, Component.translatable("gui.module_shop.schedule.section_content").getString(), innerX, cy + 4,
+                innerW, IOStyle.TEXT_3);
+        cy += 10;
+        card(c, innerX, cy, innerW, 58);
+        float labelW = 56;
+        text(c, Component.translatable("gui.module_shop.field.title").getString(), innerX + 8, cy + 16, labelW,
+                IOStyle.TEXT_2);
+        this.skTitle.bounds(innerX + 8 + labelW, cy + 7, innerW - 16 - labelW, 18);
+        text(c, Component.translatable("gui.module_shop.field.note").getString(), innerX + 8, cy + 41, labelW,
+                IOStyle.TEXT_2);
+        this.skBody.bounds(innerX + 8 + labelW, cy + 32, innerW - 16 - labelW, 18);
+        cy += 58 + 10;
+        // 颜色
+        small(c, Component.translatable("gui.module_shop.schedule.section_color").getString(), innerX, cy + 4,
+                innerW, IOStyle.TEXT_3);
+        cy += 10;
+        card(c, innerX, cy, innerW, 32);
+        text(c, Component.translatable("gui.module_shop.schedule.label_color").getString(), innerX + 8, cy + 16,
+                labelW, IOStyle.TEXT_2);
+        float sw = 16;
+        for (int i = 0; i < PALETTE.length; i++) {
+            float sx = innerX + 8 + labelW + i * (sw + 6);
+            float sy = cy + 8;
+            boolean sel = (this.color & 0xFFFFFF) == (PALETTE[i] & 0xFFFFFF);
+            float hv = hover("sw" + i, sx, sy, sw, sw);
+            float grow = hv * 1.5F;
+            cn.autoforged.module_shop.client.ui.render.Draw.fill(c, sx - grow / 2, sy - grow / 2, sw + grow, sw + grow,
+                    (sw + grow) / 2, PALETTE[i]);
+            if (sel) {
+                cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, sx - 3, sy - 3, sw + 6, sw + 6, (sw + 6) / 2,
+                        1.5F, IOStyle.BLUE);
+            }
+            final int idx = i;
+            hit(sx, sy, sw, sw, () -> this.color = PALETTE[idx], null);
+        }
+        // 底部
+        float by = y + h - PAD - 20;
+        boolean ready = ready();
+        if (!ready) {
+            small(c, Component.translatable("gui.module_shop.schedule.need_title").getString(), innerX, by - 8,
+                    innerW, IOStyle.RED);
+        }
+        cn.autoforged.module_shop.client.ui.widget.Button.Kind n =
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL;
+        button(c, "reward", Component.translatable("gui.module_shop.schedule.reward_btn").getString(), innerX, by, 92,
+                20, n, true, () -> onAction("reward"));
+        if (this.existed) {
+            button(c, "delete", Component.translatable("gui.module_shop.schedule.delete_btn").getString(),
+                    innerX + 98, by, 88, 20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.DANGER, true,
+                    () -> onAction("delete"));
+        }
+        button(c, "save", Component.translatable("gui.module_shop.schedule.save").getString(), innerX + innerW - 84,
+                by, 84, 20, cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, ready,
+                () -> onAction("save"));
+        button(c, "cancel", Component.translatable("gui.module_shop.schedule.cancel").getString(),
+                innerX + innerW - 84 - 6 - 76, by, 76, 20, n, true, () -> onAction("cancel"));
     }
 
     private static boolean focused(EditBox box) {
@@ -226,6 +319,9 @@ public class ScheduleEditScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         for (Region region : this.regions) {
             if (!IOStyle.inside(region.x, region.y, region.w, region.h, mouseX, mouseY)) {
                 continue;

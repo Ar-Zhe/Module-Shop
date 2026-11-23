@@ -1,14 +1,40 @@
 package cn.autoforged.module_shop.client.screen;
 
-
-import net.minecraft.resources.ResourceLocation;
 import cn.autoforged.module_shop.Config;
+import cn.autoforged.module_shop.client.ClientAdminAuth;
+import cn.autoforged.module_shop.client.ClientHomeCurrencyState;
 import cn.autoforged.module_shop.client.ClientNotifications;
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.MallFavorites;
 import cn.autoforged.module_shop.client.UITheme;
+import cn.autoforged.module_shop.client.media.ClientMediaCache;
+import cn.autoforged.module_shop.client.screen.shop.AuctionPage;
+import cn.autoforged.module_shop.client.screen.shop.BuybackPage;
+import cn.autoforged.module_shop.client.screen.shop.DemandPage;
+import cn.autoforged.module_shop.client.screen.shop.DailyPage;
+import cn.autoforged.module_shop.client.screen.shop.SignInPage;
+import cn.autoforged.module_shop.client.screen.shop.MallPage;
+import cn.autoforged.module_shop.client.screen.shop.AdminPage;
+import cn.autoforged.module_shop.client.screen.shop.ExchangePage;
+import cn.autoforged.module_shop.client.screen.shop.PlayerPickerPage;
+import cn.autoforged.module_shop.client.screen.shop.ProfileHomePage;
+import cn.autoforged.module_shop.client.screen.shop.StallPage;
+import cn.autoforged.module_shop.client.screen.shop.MailFormat;
+import cn.autoforged.module_shop.client.screen.shop.MailPage;
+import cn.autoforged.module_shop.client.screen.shop.PageFrame;
+import cn.autoforged.module_shop.client.screen.shop.ShopHost;
+import cn.autoforged.module_shop.client.screen.shop.ShopPage;
+import cn.autoforged.module_shop.client.screen.shop.ShippingPage;
+import cn.autoforged.module_shop.client.ui.AtomUi;
+import cn.autoforged.module_shop.client.ui.render.Draw;
+import cn.autoforged.module_shop.client.ui.render.ItemOverlay;
+import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.render.SkiaFrame;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
+import cn.autoforged.module_shop.client.ui.widget.Motion;
 import cn.autoforged.module_shop.data.ConfiguredOffer;
 import cn.autoforged.module_shop.data.NotificationType;
+import cn.autoforged.module_shop.data.PriceSpec;
 import cn.autoforged.module_shop.data.Rarity;
 import cn.autoforged.module_shop.data.SidebarLayout;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
@@ -32,9 +58,146 @@ import net.minecraft.world.item.ItemStack;
 import org.lwjgl.glfw.GLFW;
 
 /** 单界面、标签页切换的商店主界面。没有真实槽位，所有操作通过操作包发给服务端。 */
-public class ShopScreen extends Screen implements JeiHoverSource {
+public class ShopScreen extends Screen implements JeiHoverSource, ShopHost {
     /** JEI 桥接用：本帧鼠标悬停的物品（换页签/离开图标即清空）。 */
-    private net.minecraft.world.item.ItemStack jeiHover = net.minecraft.world.item.ItemStack.EMPTY;
+    net.minecraft.world.item.ItemStack jeiHover = net.minecraft.world.item.ItemStack.EMPTY;
+
+    // ================= AtomLib 迁移：已迁移的页面 =================
+    // 迁移期新旧并存：页签 id 在这里注册了页面、且 AtomLib 可用时，内容区由页面用 Skija 绘制；
+    // 否则走下面原有的 drawXxx 方法（非 Windows 等 AtomLib 不可用的环境因此仍可正常使用）。
+    /** 已迁移页面（页签 id → 页面）。每次迁移一个模块就在这里加一行。 */
+    private final Map<String, ShopPage> pages = registerPages(
+            new ProfileHomePage(),
+            new DailyPage(),
+            new SignInPage(),
+            new MallPage(),
+            new AdminPage(),
+            new ExchangePage(),
+            new ShippingPage(),
+            new MailPage(),
+            new BuybackPage(),
+            new AuctionPage(),
+            new StallPage(),
+            new DemandPage(),
+            new PlayerPickerPage(false),
+            new PlayerPickerPage(true));
+    /** 上一帧显示的页面：切换页签时让旧页面取消未完成的操作（输入框失焦等）。 */
+    ShopPage lastPage;
+    /** UI v2 外壳（AtomLib 可用且不在编辑布局时接管绘制与输入，见 ShellV2）。 */
+    private final ShellV2 shellV2 = new ShellV2(this);
+
+    private boolean v2Active() {
+        return AtomUi.available() && !this.layoutEdit;
+    }
+
+    private static Map<String, ShopPage> registerPages(ShopPage... list) {
+        Map<String, ShopPage> map = new HashMap<>();
+        for (ShopPage p : list) {
+            map.put(p.id(), p);
+        }
+        // 附属模组通过 ShopModules.registerPage 注册的内容区页面：和内置页面走同一套路由（内置 id 优先）。
+        for (cn.autoforged.module_shop.api.client.ShopModules.Entry entry
+                : cn.autoforged.module_shop.api.client.ShopModules.entries()) {
+            if (entry.hasPage() && !map.containsKey(entry.id()) && !List.of(TAB_IDS).contains(entry.id())) {
+                try {
+                    map.put(entry.id(), new cn.autoforged.module_shop.client.screen.shop.AddonPageAdapter(
+                            entry.id(), entry.page(), entry.screen()));
+                } catch (Throwable error) {
+                    org.slf4j.LoggerFactory.getLogger("module_shop").error(
+                            "[module_shop] 附属页面 {} 创建失败，改用回退界面", entry.id(), error);
+                }
+            }
+        }
+        return java.util.Collections.unmodifiableMap(map);
+    }
+    /** 页面物品层：Skija 画完内容区后统一用原版绘制物品。 */
+    final ItemOverlay pageItems = new ItemOverlay();
+    private final Motion.Clock pageClock = new Motion.Clock();
+    /** 换页过渡时长与开始时间（0 = 没有在过渡）。 */
+    private static final float PAGE_SWITCH_MS = 200.0F;
+    long pageSwitchNanos;
+    private float pageDtMs;
+
+    /** 当前页签对应的已迁移页面；没迁移、编辑布局中或 AtomLib 不可用时返回 null（走旧绘制）。 */
+    ShopPage activePage() {
+        if (this.layoutEdit || !AtomUi.available()) {
+            return null;
+        }
+        return this.pages.get(this.currentTab);
+    }
+
+    /** 页面的内容区几何（绘制与输入共用）。 */
+    private PageFrame pageFrame(double mouseX, double mouseY) {
+        return new PageFrame(this, contentX(), contentY(), contentW(), contentH(),
+                (float) mouseX, (float) mouseY, this.pageDtMs);
+    }
+
+    @Override
+    public void action(String action, CompoundTag extra) {
+        onAction(action, extra);
+    }
+
+    @Override
+    public ItemOverlay items() {
+        return this.pageItems;
+    }
+
+    @Override
+    public net.minecraft.client.gui.Font font() {
+        return this.font;
+    }
+
+    /** 页面上报的文字提示（本帧），在 render 最后统一画出。 */
+    Component pendingTextTip;
+
+    @Override
+    public void textTooltip(Component text) {
+        this.pendingTextTip = text;
+    }
+
+    @Override
+    public Screen screen() {
+        return this;
+    }
+
+    @Override
+    public void registerInput(net.minecraft.client.gui.components.EditBox box) {
+        addWidget(box);
+    }
+
+    @Override
+    public String adminMode() {
+        return this.adminMode;
+    }
+
+    @Override
+    public int adminPage() {
+        return this.adminPage;
+    }
+
+    @Override
+    public void clampAdminPage(int pages) {
+        this.adminPage = Mth.clamp(this.adminPage, 0, Math.max(0, pages - 1));
+    }
+
+    @Override
+    public boolean signInEditing() {
+        return this.signInEdit;
+    }
+
+    @Override
+    public List<String> adminModules() {
+        List<String> ids = new ArrayList<>();
+        for (AdminModule m : ADMIN_MODULES) {
+            ids.add(m.id());
+        }
+        return ids;
+    }
+
+    @Override
+    public Component moduleName(String id) {
+        return tabLabelWithOriginal(id);
+    }
 
     @Override
     public net.minecraft.world.item.ItemStack jeiHoveredStack(double mouseX, double mouseY) {
@@ -70,13 +233,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
      * 文字颜色：不是常量，每帧由 {@link Theme} 按日间/暗色主题刷新（见 render 开头），
      * 这样切换主题后原有全部绘制代码无需改动即可跟随换色。
      */
-    private static int COLOR_TEXT = IOStyle.TEXT;
-    private static int COLOR_MUTED = IOStyle.TEXT_2;
-    private static int COLOR_GOLD = IOStyle.ORANGE;
     private static final int GEAR_TEX_SIZE = 128;
     /** 需求 2：齿轮入口纹理（源文件 user-assets/577940.png，128×128）。 */
     private static final net.minecraft.resources.ResourceLocation GEAR_ICON =
-            new ResourceLocation(
+            new net.minecraft.resources.ResourceLocation(
                     "module_shop", "textures/gui/gear.png");
 
     // 需求：模块放在左侧从上往下排；钱包格去掉。管理页签不再占用侧栏（见左下角小按钮）。
@@ -86,15 +246,60 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     //   ③ 在 render 的内容区 switch 里补一个分支。
     // 左侧菜单（visibleTabs）与编辑模式下的「模块管理」（所有模块 = 已启用 + 已移除）都由这个数组推导，
     // **不要再另写一份模块清单**，否则新模块会「侧栏有、模块管理里没有」。
-    private static final String[] TAB_IDS = {"daily", "buyback", "mall", "shipping", "auction", "stall", "demand", "mail",
-            "exchange", "signin", "trade", "transfer"};
+    private static final String[] TAB_IDS = {"home", "daily", "buyback", "mall", "shipping", "auction",
+            "stall", "demand", "mail", "exchange", "signin", "trade", "transfer"};
 
     /** 侧栏里**固定置顶**的模块（顺序即显示顺序）。 */
     private static final List<String> PINNED_TOP = List.of("signin", "trade", "transfer");
 
     /** 全部模块 id（侧栏、模块管理、服务端校验共用同一份）。 */
     static List<String> allModuleIds() {
-        return List.of(TAB_IDS);
+        // 内置模块 + 附属模组通过 ShopModules 注册的功能条目（排在内置后面，同名的忽略）。
+        List<String> ids = new ArrayList<>(List.of(TAB_IDS));
+        for (cn.autoforged.module_shop.api.client.ShopModules.Entry entry
+                : cn.autoforged.module_shop.api.client.ShopModules.entries()) {
+            if (!ids.contains(entry.id()) && !"admin".equals(entry.id())) {
+                ids.add(entry.id());
+            }
+        }
+        return ids;
+    }
+
+    /** 某个 id 是否是附属模组注册的功能条目（内置模块优先，不会被覆盖）。 */
+    private static cn.autoforged.module_shop.api.client.ShopModules.Entry extensionOf(String id) {
+        if (id == null || List.of(TAB_IDS).contains(id) || "admin".equals(id)) {
+            return null;
+        }
+        return cn.autoforged.module_shop.api.client.ShopModules.get(id);
+    }
+
+    /**
+     * 附属条目是否是「弹出式」：只注册了界面，或注册了页面但 AtomLib 不可用 / 页面创建失败（走回退界面）。
+     * 弹出式条目点了是开界面，不能当作「当前页签」。
+     */
+    boolean isPopupExtension(String id) {
+        cn.autoforged.module_shop.api.client.ShopModules.Entry entry = extensionOf(id);
+        return entry != null && !(entry.hasPage() && AtomUi.available() && this.pages.containsKey(id)
+                && !cn.autoforged.module_shop.client.screen.shop.AddonPageAdapter.failed(id));
+    }
+
+    /** 弹出式附属条目：打开它的界面（二级界面）；返回是否处理了。内容区页面返回 false（照常切页签）。 */
+    private boolean openExtension(String id) {
+        if (!isPopupExtension(id)) {
+            return false;
+        }
+        cn.autoforged.module_shop.api.client.ShopModules.Entry entry = extensionOf(id);
+        if (entry.screen() != null) {
+            Nav.open(entry.screen().get());
+        }
+        return true;
+    }
+
+    /** 侧栏里能当「当前页签」的模块（去掉弹出式附属条目）。 */
+    private List<String> builtInVisibleTabs() {
+        List<String> tabs = new ArrayList<>(visibleTabs());
+        tabs.removeIf(this::isPopupExtension);
+        return tabs;
     }
 
     /**
@@ -184,7 +389,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     private final java.util.Map<Integer, Boolean> flipFrom = new java.util.HashMap<>();
     /** 一次翻牌的时长（tick）：10 tick = 0.5s，接近真实纸牌翻转的节奏。 */
     private static final float FLIP_TICKS = 10.0F;
-    private String currentTab;
+    String currentTab;
     private int tickCounter;
     private int auctionPage;
     private int adminPage;
@@ -196,7 +401,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     private int scrollFadeBottom = Integer.MIN_VALUE;
     // ---- 侧栏拖拽（管理员编辑模式）----
     /** 是否处于布局编辑模式（从「商店设置」页的「编辑布局」进入）。 */
-    private boolean layoutEdit;
+    boolean layoutEdit;
     /** 签到页：管理员「编辑日程」态（点日历上的日期 = 新建 / 修改那天的日程）。 */
     private boolean signInEdit;
     /** 签到页本帧要画的悬浮提示：单个 Tooltip 与日程多行 Tooltip（都留到最后统一画，避免被后画的格子盖住）。 */
@@ -285,9 +490,17 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     /** 分类缓存：货架上出现过的模组命名空间（按显示名首字母排序）。 */
     private static List<String> mallModCache = List.of();
     private static int mallModCacheSize = -1;
+    private static String mallModCacheToken = "";
     /** 过滤结果缓存（避免每帧对上千件商品重排）。 */
     private static List<ClientShopData.MallView> mallFilterCache = List.of();
     private static String mallFilterKey = "";
+    private static List<ClientShopData.MallView> mallAllCatCache = List.of();
+    private static String mallAllCatKey = "";
+    /** 布局编辑 / 回退模式：侧栏与模块管理面板滚动条命中区及拖拽状态。 */
+    private final float[] sidebarBarRect = new float[5];
+    private final float[] managerBarRect = new float[5];
+    private boolean sidebarBarDragging;
+    private boolean managerBarDragging;
     private int poolPressX;
     private int poolPressY;
     private boolean poolMoved;
@@ -379,8 +592,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     @Override
     protected void init() {
         super.init();
-        // 读取客户端保存的日间 / 暗色主题（config/module_shop_ui_theme.txt）。
+        // 读取客户端保存的日间 / 暗色主题（config/module_shop_ui_theme.txt）与视图模式（config/module_shop_ui_view.txt）。
         UITheme.ensureLoaded();
+        cn.autoforged.module_shop.client.UIViewMode.ensureLoaded();
         // 还原上次的页数与编辑模块：服务端每次操作后会重建界面（编辑条目、买卖等），
         // 不还原的话管理员改完一条就被弹回第一页，翻页很痛苦。
         this.auctionPage = ClientShopData.lastAuctionPage;
@@ -389,8 +603,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         this.adminMode = ClientShopData.lastAdminMode;
         // 管理页只能由 /shop admin 指令打开，不作为可见页签，但打开后不能被重置掉。
         // 当前页签已被移除（例如把「每日商店」删掉）时，退回到左侧第一个可见模块，避免停在一个不存在的页面上。
-        if (!"admin".equals(currentTab) && !visibleTabs().contains(currentTab)) {
-            List<String> tabs = visibleTabs();
+        if (!"admin".equals(currentTab)
+                && (!visibleTabs().contains(currentTab) || isPopupExtension(currentTab))) {
+            List<String> tabs = builtInVisibleTabs();
             currentTab = tabs.isEmpty() ? TAB_IDS[0] : tabs.get(0);
         }
         // 需求 11：进入管理页时把当前编辑模块同步给服务端，物品放入时据此归属列表。
@@ -421,6 +636,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         this.tradeSearchBox.setResponder(text -> this.tradePage = 0);
         this.tradeSearchBox.setVisible(false);
         this.addRenderableWidget(this.tradeSearchBox);
+        // 已迁移的页面：创建 / 重新挂上它们自己的（不绘制的）输入框
+        this.pages.values().forEach(p -> p.init(this));
     }
 
     private void sendAdminType() {
@@ -448,7 +665,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         return false;
     }
 
-    private List<String> visibleTabs() {
+    List<String> visibleTabs() {
         List<String> all = allModuleIds();
         List<String> ordered = new ArrayList<>();
         for (String id : ClientShopData.sidebarOrder) {
@@ -471,6 +688,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     private static String tabKey(String id) {
         return switch (id) {
+            case "home" -> "tab.module_shop.home";
             case "shop" -> "tab.module_shop.daily";
             case "daily" -> "tab.module_shop.daily";
             case "buyback" -> "tab.module_shop.buyback";
@@ -491,6 +709,11 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     /** 模块的**原始**名字（lang 里的默认翻译名，改名后仍然用它做括号里的说明）。 */
     private static Component tabOriginal(String id) {
+        cn.autoforged.module_shop.api.client.ShopModules.Entry extension = extensionOf(id);
+        if (extension != null) {
+            Component name = extension.name().get();
+            return name == null ? Component.literal(id) : name;
+        }
         return Component.translatable(tabKey(id));
     }
 
@@ -500,7 +723,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
      * <p>「右键重命名模块」这个功能已经去掉了：模块名和商店主标题不再混在一起，
      * 只保留左上角「模块商店」主标题可以改（编辑布局 → 右键主标题）。
      */
-    private static Component tabLabel(String id) {
+    static Component tabLabel(String id) {
         return tabOriginal(id);
     }
 
@@ -596,34 +819,57 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         this.pointerY = mouseY;
         // 每帧兜一层：当前页签被移除（自己删的，或别的管理员热同步过来）时，
         // 立刻退到左侧第一个可见模块，绝不停在一个侧栏里已经不存在的页面上。
-        if (!"admin".equals(currentTab) && !visibleTabs().contains(currentTab)) {
-            List<String> tabs = visibleTabs();
+        if (!"admin".equals(currentTab)
+                && (!visibleTabs().contains(currentTab) || isPopupExtension(currentTab))) {
+            List<String> tabs = builtInVisibleTabs();
             currentTab = tabs.isEmpty() ? TAB_IDS[0] : tabs.get(0);
         }
-        // 主题取色：每帧刷新，切换日间/暗色后本界面所有文字立即跟随。
-        COLOR_TEXT = Theme.text();
-        COLOR_MUTED = Theme.muted();
-        COLOR_GOLD = Theme.gold();
+        if (v2Active()) {
+            // UI v2：外壳与页面全部由 ShellV2 绘制（自有缩放）；旧输入框不显示
+            if (this.mallSearchBox != null) {
+                this.mallSearchBox.setVisible(false);
+            }
+            if (this.tradeSearchBox != null) {
+                this.tradeSearchBox.setVisible(false);
+            }
+            super.render(g, mouseX, mouseY, partialTick);
+            this.shellV2.render(g, mouseX, mouseY);
+            return;
+        }
+        // 主题取色：日间 / 暗色切换过渡中时，每帧推进调色板插值。
+        IOStyle.tickTheme();
         // 购物城搜索框：位置跟着面板走；只有购物城页、非编辑模式、非「最近购买」视图时显示。
         if (this.mallSearchBox != null) {
             this.mallSearchBox.setPosition(contentX() + 5, contentY() + 4);
+            // 购物城已迁移时由页面自己的 Skija 输入框负责，旧输入框隐藏
             this.mallSearchBox.setVisible("mall".equals(currentTab) && !this.layoutEdit
-                    && !ClientShopData.mallViewRecent);
+                    && !ClientShopData.mallViewRecent && activePage() == null);
         }
         if (this.tradeSearchBox != null) {
             this.tradeSearchBox.setPosition(contentX() + 5, contentY() + 2);
+            // 交易 / 转账页已迁移时由页面自己的 Skija 输入框负责，旧输入框隐藏
             this.tradeSearchBox.setVisible(("trade".equals(currentTab) || "transfer".equals(currentTab))
-                    && !this.layoutEdit);
+                    && !this.layoutEdit && activePage() == null);
         }
         super.render(g, mouseX, mouseY, partialTick);
         int x = left();
         int y = top();
         boolean editing = this.layoutEdit && ClientShopData.canAdmin;
-        // 扁平直角版式：整块面板，左栏（导航）比右栏（内容）深一档。
-        Bricks.panel(g, x, y, PANEL_W, PANEL_H);
-        IOStyle.sections(g, x, y, PANEL_W, PANEL_H, SIDEBAR_W);
-        drawSidebar(g, x, y, mouseX, mouseY);
-        drawProfileBlock(g, x, y, mouseX, mouseY);
+        if (editing && AtomUi.available()) {
+            // 编辑布局也用 Skija 画，跟随主题配色（几何、命中区与旧绘制完全一致）
+            renderLayoutEditSkia(g, x, y, mouseX, mouseY);
+            return;
+        }
+        // 阶段 4：AtomLib 可用且不在编辑布局时，外壳（面板 / 侧栏 / 资料块 / 标题栏）与页面一起用 Skija 画
+        // （见 drawShellSkia）；编辑布局与 AtomLib 不可用时仍走下面的旧绘制。
+        boolean skiaShell = !editing && activePage() != null;
+        if (!skiaShell) {
+            // 扁平直角版式：整块面板，左栏（导航）比右栏（内容）深一档。
+            Bricks.panel(g, x, y, PANEL_W, PANEL_H);
+            IOStyle.sections(g, x, y, PANEL_W, PANEL_H, SIDEBAR_W);
+            drawSidebar(g, x, y, mouseX, mouseY);
+            drawProfileBlock(g, x, y, mouseX, mouseY);
+        }
         int contentX = contentX();
         int contentY = contentY();
         int contentW = contentW();
@@ -639,8 +885,22 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             }
             return;
         }
-        drawHeader(g, x, y, contentX, contentY, contentW, mouseX, mouseY);
-        switch (currentTab) {
+        if (!skiaShell) {
+            drawHeader(g, x, y, contentX, contentY, contentW, mouseX, mouseY);
+        }
+        this.pageDtMs = this.pageClock.tick();
+        ShopPage page = activePage();
+        if (page != this.lastPage) {
+            if (this.lastPage != null) {
+                this.lastPage.cancelInput();
+                this.pageSwitchNanos = System.nanoTime();
+            }
+            this.lastPage = page;
+        }
+        if (page != null) {
+            renderPage(g, page, mouseX, mouseY, skiaShell);
+        } else switch (currentTab) {
+            case "home" -> drawHomeFallback(g, contentX, contentY, contentW, contentH, mouseX, mouseY);
             case "daily" -> drawDaily(g, contentX, contentY, contentW, contentH, mouseX, mouseY, partialTick);
             case "buyback" -> drawBuyback(g, contentX, contentY, contentW, contentH, mouseX, mouseY);
             case "mall" -> drawMall(g, contentX, contentY, contentW, contentH, mouseX, mouseY);
@@ -671,7 +931,907 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         if (!this.pendingItemTip.isEmpty()) {
             g.renderTooltip(this.font, this.pendingItemTip, mouseX, mouseY);
             this.pendingItemTip = ItemStack.EMPTY;
+        } else if (this.pendingTextTip != null) {
+            g.renderTooltip(this.font, this.font.split(this.pendingTextTip, 200), mouseX, mouseY);
         }
+        this.pendingTextTip = null;
+    }
+
+    /**
+     * 用 Skija 绘制已迁移页面的内容区：Skija 内容 → 原版物品层；
+     * 悬停物品交给原有的统一 tooltip 出口（pendingItemTip）与 JEI 桥接（jeiHover）。
+     */
+    private void renderPage(GuiGraphics g, ShopPage page, int mouseX, int mouseY, boolean shell) {
+        // 皮肤菜单展开时，菜单下面的页面不响应悬停
+        boolean menuBlocks = this.skinMenuOpen && skinMenuContains(mouseX, mouseY);
+        PageFrame frame = menuBlocks ? pageFrame(-10000, -10000) : pageFrame(mouseX, mouseY);
+        this.pageItems.begin(mouseX, mouseY, !menuBlocks);
+        // 换页过渡：新页面淡入并从下方 6px 滑上来（物品层同步位移）
+        float switchT = this.pageSwitchNanos == 0L ? 1.0F
+                : Math.min(1.0F, (System.nanoTime() - this.pageSwitchNanos) / 1_000_000.0F / PAGE_SWITCH_MS);
+        float switchE = Motion.easeOutCubic(switchT);
+        float slide = 6.0F * (1.0F - switchE);
+        SkiaFrame.draw(g, canvas -> {
+            if (shell) {
+                drawShellSkia(canvas, mouseX, mouseY);
+            }
+            // 外壳登记的头像 / 红点 / 铃铛不参与换页滑动
+            this.pageItems.markFixed();
+            if (switchT >= 1.0F) {
+                page.render(canvas, frame);
+            } else {
+                int saved = canvas.save();
+                Draw.clip(canvas, contentX() - 6, contentY() - 4, contentW() + 12, contentH() + 8);
+                int layer = Draw.beginOpacity(canvas, 0.25F + 0.75F * switchE);
+                try {
+                    canvas.translate(0.0F, slide);
+                    page.render(canvas, frame);
+                } finally {
+                    canvas.restoreToCount(layer);
+                    canvas.restoreToCount(saved);
+                }
+            }
+        });
+        this.pageItems.flush(g, this.font, slide > 0.01F ? slide : 0.0F);
+        // 皮肤菜单要盖住页面上的物品图标，所以在物品层之后再单独画一层
+        if (shell && (this.skinMenuOpen || this.shellAnim.getOrDefault("skinMenu", 0.0F) > 0.01F)) {
+            SkiaFrame.draw(g, canvas -> drawSkinMenuSkia(canvas, mouseX, mouseY));
+        }
+        ItemStack hovered = this.pageItems.hovered();
+        if (!hovered.isEmpty()) {
+            this.jeiHover = hovered;
+            this.pendingItemTip = hovered;
+        }
+    }
+
+    // ================= 阶段 4：外壳（面板 / 侧栏 / 资料块 / 标题栏）的 Skija 版 =================
+    // 几何、命中区（addRegion）、滚动与换位动画都与旧绘制完全一致，只换绘制；点击仍走原有的 regions。
+    // 头像、通知红点、铃铛图标是原版绘制，登记到页面物品层（Skija 之后统一画）。
+
+    /** 外壳控件的悬停动画值（key → 0..1）。 */
+    private final Map<String, Float> shellAnim = new HashMap<>();
+    /** 侧栏选中块当前所在的行（小数，弹簧跟随）；-1 表示还没初始化。 */
+    // 静态：服务端操作后界面会重建，选中块位置要跨实例保留，否则滑动动画会被打断
+    private static float navSelSlot = -1.0F;
+    private static Motion.Spring navSelSpring = new Motion.Spring(0.0F);
+
+    private float shellAnim(String key, boolean on, float tauMs) {
+        // 悬停类动画：移入快、移出慢
+        float tau = tauMs == Motion.HOVER_MS && !on ? Motion.HOVER_OUT_MS : tauMs;
+        float v = Motion.approach(this.shellAnim.getOrDefault(key, on ? 1.0F : 0.0F), on ? 1.0F : 0.0F,
+                this.pageDtMs, tau);
+        this.shellAnim.put(key, v);
+        return v;
+    }
+
+    private void drawShellSkia(io.github.humbleui.skija.Canvas c, int mouseX, int mouseY) {
+        int x = left();
+        int y = top();
+        drawShellBackground(c, x, y);
+        drawSidebarSkia(c, x, y, mouseX, mouseY);
+        drawProfileSkia(c, x, y, mouseX, mouseY, false);
+        drawHeaderSkia(c, x, y, mouseX, mouseY);
+    }
+
+    /** 主面板底：半透明玻璃（侧栏比内容区深一档），各区只铺一次底色，避免叠加后变得不透明。 */
+    private static void drawShellBackground(io.github.humbleui.skija.Canvas c, int x, int y) {
+        Draw.outerShadow(c, x, y, PANEL_W, PANEL_H, 0.0F, 14.0F, 4.0F, IOStyle.SHADOW_TINT);
+        // 侧栏竖直渐变、内容区对角渐变（日间 / 夜间两端相同 = 纯色）
+        Draw.gradientV(c, x, y, SIDEBAR_W, PANEL_H, 0.0F, Draw.alpha(IOStyle.SIDEBAR, IOStyle.GLASS),
+                Draw.alpha(IOStyle.SIDEBAR_2, IOStyle.GLASS));
+        Draw.gradientD(c, x + SIDEBAR_W, y, PANEL_W - SIDEBAR_W, PANEL_H, 0.0F,
+                Draw.alpha(IOStyle.CONTENT, IOStyle.GLASS), Draw.alpha(IOStyle.CONTENT_2, IOStyle.GLASS));
+        // 两团柔光：右上一团、左下一团，被卡片挡住的部分只在缝隙里透出来
+        if ((IOStyle.GLOW_1 >>> 24) != 0 || (IOStyle.GLOW_2 >>> 24) != 0) {
+            int saved = c.save();
+            Draw.clip(c, x + 1, y + 1, PANEL_W - 2, PANEL_H - 2);
+            Draw.glow(c, x + PANEL_W - 30.0F, y + 6.0F, PANEL_H * 0.75F, IOStyle.GLOW_1);
+            Draw.glow(c, x + 18.0F, y + PANEL_H - 12.0F, PANEL_H * 0.6F, IOStyle.GLOW_2);
+            c.restoreToCount(saved);
+        }
+        Draw.fill(c, x + 1, y + 1, PANEL_W - 2, 1.0F, 0.0F, IOStyle.INNER_LIGHT);
+        Draw.fill(c, x + SIDEBAR_W, y + 1, 1.0F, PANEL_H - 2, 0.0F, IOStyle.BORDER_DIM);
+        Draw.stroke(c, x, y, PANEL_W, PANEL_H, 0.0F, 1.0F, IOStyle.BORDER);
+    }
+
+    /**
+     * 通知角标（Skija 版）：红色胶囊 + 白色粗体数字，外圈一层缓慢呼吸的淡红光晕。
+     * right 为右边缘，cy 为垂直中心。
+     */
+    private static void drawBadgeSkia(io.github.humbleui.skija.Canvas c, NotificationType type, float right, float cy) {
+        int count = ClientNotifications.count(type);
+        if (count <= 0) {
+            return;
+        }
+        String text = count > 99 ? "99+" : String.valueOf(count);
+        float h = 9.0F;
+        float w = Math.max(h, Text.width(text, AtomUi.BOLD, 6.0F) + 5.0F);
+        float bx = right - w;
+        float by = cy - h / 2.0F;
+        float pulse = (float) (Math.sin((System.currentTimeMillis() % 2000L) / 2000.0 * Math.PI * 2.0) * 0.5 + 0.5);
+        float g = 1.0F + 1.5F * pulse;
+        Draw.fill(c, bx - g, by - g, w + g * 2, h + g * 2, h / 2.0F + g, Draw.alpha(IOStyle.RED, 0.28F * (1.0F - pulse)));
+        Draw.fill(c, bx, by, w, h, h / 2.0F, IOStyle.RED);
+        Text.drawLine(c, text, AtomUi.BOLD, 6.0F, 0xFFFFFFFF, bx, cy, w, Text.Align.CENTER);
+    }
+
+    // ================= 皮肤菜单 =================
+
+    private boolean skinMenuOpen;
+    private int skinBtnX;
+    private int skinBtnY;
+    private static final float SKIN_MENU_W = 124.0F;
+    private static final float SKIN_ROW_H = 17.0F;
+    private static final float SKIN_HEAD_H = 15.0F;
+
+    /** 菜单矩形：右边缘对齐皮肤按钮，顶边在按钮下方 4px。 */
+    private float[] skinMenuRect() {
+        float h = SKIN_HEAD_H + IOStyle.SKINS.size() * SKIN_ROW_H + 5.0F;
+        float x = this.skinBtnX + 14.0F - SKIN_MENU_W;
+        float y = this.skinBtnY + 18.0F;
+        return new float[]{x, y, SKIN_MENU_W, h};
+    }
+
+    private boolean skinMenuContains(double mx, double my) {
+        float[] r = skinMenuRect();
+        return mx >= r[0] && mx < r[0] + r[2] && my >= r[1] && my < r[1] + r[3];
+    }
+
+    /**
+     * 皮肤菜单：每一行左侧是一张迷你预览（侧栏 → 内容区的底色渐变 + 一条强调色渐变），右侧名字，当前皮肤打勾。
+     * 展开 / 收起从按钮处轻微缩放 + 淡入淡出。
+     */
+    private void drawSkinMenuSkia(io.github.humbleui.skija.Canvas c, int mouseX, int mouseY) {
+        float a = shellAnim("skinMenu", this.skinMenuOpen, 70.0F);
+        if (a < 0.01F) {
+            return;
+        }
+        float[] r = skinMenuRect();
+        float x = r[0];
+        float y = r[1];
+        float w = r[2];
+        float h = r[3];
+        int saved = c.save();
+        int layer = Draw.beginOpacity(c, a);
+        try {
+            float s = 0.94F + 0.06F * Motion.easeOutBack(a);
+            float px = x + w - 7.0F;
+            float py = y;
+            c.translate(px, py);
+            c.scale(s, s);
+            c.translate(-px, -py);
+            Draw.shadow(c, x, y, w, h, 4.0F, 10.0F, 3.0F, IOStyle.SHADOW_TINT);
+            Draw.gradientV(c, x, y, w, h, 4.0F, IOStyle.SHEET, IOStyle.SHEET_2);
+            Draw.stroke(c, x, y, w, h, 4.0F, 1.0F, IOStyle.BORDER);
+            Text.drawLine(c, Component.translatable("gui.module_shop.skin.title").getString(), AtomUi.BOLD,
+                    Text.SMALL, IOStyle.TEXT_2, x + 8.0F, y + 8.5F, w - 16.0F, Text.Align.LEFT);
+            float rowY = y + SKIN_HEAD_H;
+            String current = IOStyle.currentSkin();
+            for (IOStyle.Skin skin : IOStyle.SKINS) {
+                String id = skin.id();
+                boolean selected = id.equals(current);
+                boolean hover = this.skinMenuOpen && mouseX >= x + 3 && mouseX < x + w - 3
+                        && mouseY >= rowY && mouseY < rowY + SKIN_ROW_H;
+                float ht = shellAnim("skin.h." + id, hover, Motion.HOVER_MS);
+                float st = shellAnim("skin.s." + id, selected, 90.0F);
+                if (ht > 0.01F || st > 0.01F) {
+                    Draw.fill(c, x + 3.0F, rowY + 1.0F, w - 6.0F, SKIN_ROW_H - 2.0F, 3.0F,
+                            Draw.lerp(Draw.alpha(IOStyle.ROW_HOVER, ht), IOStyle.BLUE_TINT, st));
+                }
+                // 迷你预览：底色渐变 + 强调色条 + 一个柔光点
+                float sx = x + 8.0F;
+                float sy = rowY + 3.5F;
+                float sw = 18.0F;
+                float sh = 10.0F;
+                Draw.gradientD(c, sx, sy, sw, sh, 2.5F, IOStyle.skinColor(id, "SIDEBAR"),
+                        IOStyle.skinColor(id, "CONTENT_2"));
+                int glow = IOStyle.skinColor(id, "GLOW_1");
+                if ((glow >>> 24) != 0) {
+                    int cs = c.save();
+                    Draw.clip(c, sx, sy, sw, sh);
+                    Draw.glow(c, sx + sw - 3.0F, sy + 2.0F, 9.0F, glow);
+                    c.restoreToCount(cs);
+                }
+                Draw.gradientH(c, sx + 3.0F, sy + sh - 4.0F, 9.0F, 2.0F, 1.0F, IOStyle.skinColor(id, "BLUE"),
+                        IOStyle.skinColor(id, "ACCENT_2"));
+                Draw.fill(c, sx + 3.0F, sy + 2.5F, 6.0F, 1.2F, 0.6F, IOStyle.skinColor(id, "TEXT"));
+                Draw.stroke(c, sx, sy, sw, sh, 2.5F, 1.0F, Draw.alpha(IOStyle.TEXT, 0.18F));
+                Text.drawLine(c, Component.translatable(skin.nameKey()).getString(),
+                        selected ? AtomUi.BOLD : AtomUi.REGULAR, Text.BODY,
+                        Draw.lerp(IOStyle.TEXT, IOStyle.BLUE, st * 0.85F), sx + sw + 7.0F, rowY + SKIN_ROW_H / 2.0F,
+                        w - sw - 34.0F, Text.Align.LEFT);
+                if (st > 0.01F) {
+                    // 勾：两段线，随选中“画”出来
+                    float cx = x + w - 13.0F;
+                    float cy = rowY + SKIN_ROW_H / 2.0F;
+                    int col = Draw.alpha(IOStyle.BLUE, st);
+                    Draw.line(c, cx - 3.0F, cy, cx - 1.0F, cy + 2.2F, 1.3F, col);
+                    Draw.line(c, cx - 1.0F, cy + 2.2F, cx - 1.0F + 4.0F * st, cy + 2.2F - 4.6F * st, 1.3F, col);
+                }
+                if (this.skinMenuOpen) {
+                    addRegion(Math.round(x + 3), Math.round(rowY), Math.round(w - 6), Math.round(SKIN_ROW_H),
+                            "skin_pick:" + id, null, null);
+                }
+                rowY += SKIN_ROW_H;
+            }
+        } finally {
+            c.restoreToCount(layer);
+            c.restoreToCount(saved);
+        }
+    }
+
+    // ================= 编辑布局（Skija 版）=================
+    // 几何约定与旧版 drawSidebar / drawLayoutOverlay / drawModuleManager / handleLayoutClick 完全一致，只换绘制。
+
+    static NotificationType badgeOf(String id) {
+        return switch (id) {
+            case "daily" -> NotificationType.SHOP;
+            case "buyback" -> NotificationType.BUYBACK;
+            case "auction" -> NotificationType.AUCTION;
+            case "stall" -> NotificationType.STALL;
+            case "mail" -> NotificationType.MAIL;
+            default -> null;
+        };
+    }
+
+    private void renderLayoutEditSkia(GuiGraphics g, int x, int y, int mouseX, int mouseY) {
+        this.pageDtMs = this.pageClock.tick();
+        this.pageItems.begin(mouseX, mouseY, false);
+        this.tabRects.clear();
+        int cx = contentX();
+        int cy = contentY();
+        int cw = contentW();
+        int ch = contentH();
+        SkiaFrame.draw(g, c -> {
+            drawShellBackground(c, x, y);
+            drawEditSidebarSkia(c, x, y, mouseX, mouseY);
+            drawProfileSkia(c, x, y, mouseX, mouseY, true);
+            drawEditOverlaySkia(c, x, y, cx, cy, cw, ch, mouseX, mouseY);
+            if (this.dragTab != null && this.dragMoved) {
+                float[] free = dragTabPixel();
+                drawEditTabSkia(c, this.dragTab, x + free[0], y + free[1], true, mouseX, mouseY);
+            }
+        });
+        this.pageItems.flush(g, this.font);
+        if (this.pendingTextTip != null && this.dragTab == null && this.poolDrag == null) {
+            g.renderTooltip(this.font, this.font.split(this.pendingTextTip, 220), mouseX, mouseY);
+        }
+        this.pendingTextTip = null;
+    }
+
+    private void drawEditSidebarSkia(io.github.humbleui.skija.Canvas c, int x, int y, int mouseX, int mouseY) {
+        // 品牌行：左键打开「品牌与图标设置」，右键改全服主标题（只在编辑布局里可点）
+        String brand = ClientShopData.shopTitle == null || ClientShopData.shopTitle.isBlank()
+                ? Component.translatable("gui.module_shop.title").getString() : ClientShopData.shopTitle;
+        io.github.humbleui.skija.Image brandImg = ClientShopData.brandIconId == null || ClientShopData.brandIconId.isBlank()
+                ? null : ClientMediaCache.getSkiaImage(ClientShopData.brandIconId);
+        if (brandImg != null) {
+            com.atom.lib.design.atomchat.SkiaDraw.drawRoundedImage(
+                    c, brandImg, x + 6.0F, y + 5.0F, 13.0F, 13.0F, 3.5F,
+                    io.github.humbleui.skija.SamplingMode.LINEAR);
+        } else {
+            Draw.gradientH(c, x + 6.0F, y + 5.0F, 13.0F, 13.0F, 3.5F, IOStyle.BLUE, IOStyle.ACCENT_2);
+            Text.drawLine(c, brand.substring(0, Math.min(1, brand.length())), AtomUi.BOLD, 7.0F, 0xFFFFFFFF,
+                    x + 6.0F, y + 11.5F, 13.0F, Text.Align.CENTER);
+        }
+        float textX = x + 23.0F;
+        float maxTextW = SIDEBAR_W - 27.0F;
+        Text.drawLine(c, brand, AtomUi.BOLD, 9.0F, IOStyle.BLUE, textX, y + 11.5F, maxTextW, Text.Align.LEFT);
+        float brandW = Math.min(maxTextW, Text.width(brand, AtomUi.BOLD, 9.0F));
+        int brandIW = Math.round(brandW);
+        boolean brandHover = shellRectHover(x + 4, y + 4, SIDEBAR_W - 8, 15, mouseX, mouseY);
+        float hb = shellAnim("edit.brand", brandHover, Motion.HOVER_MS);
+        if (hb > 0.01F) {
+            Draw.fill(c, textX, y + 18.0F, brandIW * hb, 0.8F, 0.0F, Draw.alpha(IOStyle.BLUE, 0.7F));
+        }
+        if (brandHover) {
+            this.pendingTextTip = Component.translatable("gui.module_shop.shop_title_hint", brand);
+        }
+        addRegion(x + 4, y + 4, SIDEBAR_W - 8, 15, "open_brand_settings", "rename_shop_title", null);
+
+        List<String> tabs = visibleTabs();
+        int rowsFit = sidebarRowsFit();
+        int pitch = TAB_H + GRID_GAP_Y;
+        if (!this.sidebarBarDragging) {
+            ensureSidebarVisible(tabs);
+        }
+        this.sidebarScroll = Mth.clamp(this.sidebarScroll, 0, sidebarMaxScroll());
+        float dt = this.frameDeltaSeconds();
+        float k = approach(dt, 20.0F);
+        float targetPx = this.sidebarScroll * (float) pitch;
+        if (this.sidebarScrollPx < 0.0F) {
+            this.sidebarScrollPx = targetPx;
+        } else if (!this.sidebarBarDragging) {
+            float distance = targetPx - this.sidebarScrollPx;
+            float scrollRate = 26.0F * (1.0F + Math.min(0.6F, Math.abs(distance) / pitch * 0.12F));
+            this.sidebarScrollPx += distance * approach(dt, scrollRate);
+            if (Math.abs(targetPx - this.sidebarScrollPx) < 0.02F) {
+                this.sidebarScrollPx = targetPx;
+            }
+        }
+        int bandTop = y + GRID_Y;
+        int bandBottom = bandTop + rowsFit * pitch - GRID_GAP_Y;
+
+        int maxScroll = sidebarMaxScroll();
+        if (maxScroll > 0) {
+            float trackX = x + SIDEBAR_W - 5;
+            float trackH = bandBottom - bandTop;
+            float thumbH = Math.max(18.0F, trackH * rowsFit / Math.max(1, tabs.size() + 1));
+            float progress = Mth.clamp(this.sidebarScrollPx / (maxScroll * (float) pitch), 0.0F, 1.0F);
+            boolean hot = this.sidebarBarDragging || (mouseX >= trackX - 5 && mouseX <= trackX + 7
+                    && mouseY >= bandTop - 2 && mouseY <= bandTop + trackH + 2);
+            float bw = (hot || this.sidebarBarDragging) ? 3.0F : 2.0F;
+            float bx = trackX - (bw - 2.0F) * 0.5F;
+            Draw.fill(c, bx, bandTop, bw, trackH, bw * 0.5F, Draw.alpha(IOStyle.BORDER_DIM, 0.75F));
+            Draw.fill(c, bx, bandTop + (trackH - thumbH) * progress, bw, thumbH, bw * 0.5F,
+                    this.sidebarBarDragging ? IOStyle.ACCENT_2 : IOStyle.BLUE);
+            this.sidebarBarRect[0] = trackX;
+            this.sidebarBarRect[1] = bandTop;
+            this.sidebarBarRect[2] = trackH;
+            this.sidebarBarRect[3] = thumbH;
+            this.sidebarBarRect[4] = maxScroll;
+        } else {
+            this.sidebarBarRect[4] = 0.0F;
+        }
+
+        int saved = c.save();
+        Draw.clip(c, x + 1, bandTop, SIDEBAR_W - 2, bandBottom - bandTop + 1);
+        this.pageItems.pushClip(x + 1, bandTop, SIDEBAR_W - 2, bandBottom - bandTop + 1);
+        try {
+            int first = Math.max(0, (int) Math.floor(this.sidebarScrollPx / pitch) - 1);
+            int last = Math.min(tabs.size() - 1,
+                    (int) Math.ceil((this.sidebarScrollPx + rowsFit * (float) pitch) / pitch));
+            for (int i = first; i <= last; i++) {
+                String id = tabs.get(i);
+                float slot = easeSlot(id, i, k);
+                float px = x + slotX(0);
+                float py = bandTop + slot * pitch - this.sidebarScrollPx;
+                boolean dragging = id.equals(this.dragTab) && this.dragMoved;
+                if (dragging || py > bandBottom || py + TAB_H < bandTop) {
+                    continue;   // 拖拽中的页签最后单独画在最上层
+                }
+                drawEditTabSkia(c, id, px, py, false, mouseX, mouseY);
+                this.tabRects.add(new TabRect(id, Math.round(px), Math.round(py), TAB_W, TAB_H));
+            }
+            // 列表末尾预留的空槽（新模块的落点）：只在整格露出来时画
+            float emptyY = bandTop + tabs.size() * (float) pitch - this.sidebarScrollPx;
+            if (emptyY >= bandTop && emptyY + TAB_H <= bandBottom + 1) {
+                float ex = x + GRID_X;
+                Draw.fill(c, ex, emptyY, TAB_W, TAB_H, 2.0F, Draw.alpha(IOStyle.CARD, 0.35F));
+                for (float dx = ex + 2; dx < ex + TAB_W - 2; dx += 5.0F) {
+                    Draw.fill(c, dx, emptyY, 2.5F, 1.0F, 0.0F, IOStyle.BORDER);
+                    Draw.fill(c, dx, emptyY + TAB_H - 1, 2.5F, 1.0F, 0.0F, IOStyle.BORDER);
+                }
+                for (float dy = emptyY + 2; dy < emptyY + TAB_H - 2; dy += 5.0F) {
+                    Draw.fill(c, ex, dy, 1.0F, 2.5F, 0.0F, IOStyle.BORDER);
+                    Draw.fill(c, ex + TAB_W - 1, dy, 1.0F, 2.5F, 0.0F, IOStyle.BORDER);
+                }
+                Text.drawLine(c, Component.translatable("gui.module_shop.layout_empty_slot").getString(),
+                        AtomUi.REGULAR, Text.BODY, IOStyle.TEXT_3, ex + 9, emptyY + TAB_H / 2.0F, TAB_W - 17,
+                        Text.Align.LEFT);
+            }
+        } finally {
+            this.pageItems.popClip();
+            c.restoreToCount(saved);
+        }
+    }
+
+    /** 编辑模式的页签：可拖的描边 + 右侧抓手；lifted = 正被拖着（放大一点 + 投影）。 */
+    private void drawEditTabSkia(io.github.humbleui.skija.Canvas c, String id, float px, float py, boolean lifted,
+                                 int mouseX, int mouseY) {
+        boolean selected = id.equals(currentTab);
+        boolean hover = this.dragTab == null && shellRectHover(px, py, TAB_W, TAB_H, mouseX, mouseY);
+        float ht = lifted ? 1.0F : shellAnim("edit.h." + id, hover, Motion.HOVER_MS);
+        int saved = c.save();
+        try {
+            if (lifted) {
+                float cx = px + TAB_W / 2.0F;
+                float cy = py + TAB_H / 2.0F;
+                c.translate(cx, cy);
+                c.scale(1.05F, 1.05F);
+                c.translate(-cx, -cy);
+                Draw.shadow(c, px, py, TAB_W, TAB_H, 2.0F, 6.0F, 3.0F, IOStyle.SHADOW_3);
+            }
+            if (selected) {
+                Draw.gradientH(c, px, py, TAB_W, TAB_H, 2.0F, IOStyle.BLUE, IOStyle.ACCENT_2);
+            } else {
+                Draw.fill(c, px, py, TAB_W, TAB_H, 2.0F,
+                        Draw.alpha(Draw.lerp(IOStyle.CARD, IOStyle.ROW_HOVER, ht), lifted ? 1.0F : 0.6F + 0.4F * ht));
+            }
+            Draw.stroke(c, px, py, TAB_W, TAB_H, 2.0F, 1.0F,
+                    selected ? IOStyle.BORDER_HOVER : Draw.lerp(Draw.alpha(IOStyle.BLUE, 0.45F), IOStyle.BLUE, ht));
+            int fg = selected ? 0xFFFFFFFF : IOStyle.TEXT;
+            Text.drawLine(c, tabLabel(id).getString(), selected ? AtomUi.BOLD : AtomUi.REGULAR, Text.BODY, fg,
+                    px + 9.0F, py + TAB_H / 2.0F, TAB_W - 32.0F, Text.Align.LEFT);
+            NotificationType badge = badgeOf(id);
+            if (badge != null) {
+                drawBadgeSkia(c, badge, px + TAB_W - 19.0F, py + TAB_H / 2.0F);
+            }
+            // 抓手：2 列 × 3 行小圆点
+            int dot = selected ? Draw.alpha(0xFFFFFFFF, 0.85F) : Draw.lerp(IOStyle.TEXT_3, IOStyle.BLUE, ht);
+            for (int r = 0; r < 3; r++) {
+                for (int col = 0; col < 2; col++) {
+                    Draw.fill(c, px + TAB_W - 12.0F + col * 3.6F, py + TAB_H / 2.0F - 4.4F + r * 3.6F,
+                            1.8F, 1.8F, 0.9F, dot);
+                }
+            }
+        } finally {
+            c.restoreToCount(saved);
+        }
+    }
+
+    private void drawEditOverlaySkia(io.github.humbleui.skija.Canvas c, int x, int y, int contentX, int contentY,
+                                     int contentW, int contentH, int mouseX, int mouseY) {
+        int cardW = Math.min(324, contentW - 12);
+        int cardH = 50;
+        int cardX = contentX + (contentW - cardW) / 2;
+        int cardY = y + 4;
+        boolean trashMode = this.dragTab != null && this.dragMoved
+                && IOStyle.inside(cardX, cardY, cardW, cardH, mouseX, mouseY);
+        this.trashZone[0] = cardX;
+        this.trashZone[1] = cardY;
+        this.trashZone[2] = cardW;
+        this.trashZone[3] = cardH;
+        float tt = shellAnim("edit.trash", trashMode, 70.0F);
+        Draw.shadow(c, cardX, cardY, cardW, cardH, 4.0F, 6.0F, 2.0F, IOStyle.SHADOW_1);
+        Draw.fill(c, cardX, cardY, cardW, cardH, 4.0F, Draw.lerp(IOStyle.CARD, Draw.alpha(IOStyle.RED, 0.9F), tt));
+        Draw.stroke(c, cardX, cardY, cardW, cardH, 4.0F, 1.0F, Draw.lerp(IOStyle.BORDER_DIM, IOStyle.RED, tt));
+        if (trashMode) {
+            int ix = cardX + cardW / 2 - 6;
+            int iy = cardY + 6;
+            this.pageItems.addCustom(ix, iy, 12.0F, 12.0F, (gg, f) -> Icons.trash(gg, ix, iy, 0xFFFFFFFF));
+            Text.drawLine(c, Component.translatable("gui.module_shop.layout_delete_module").getString(), AtomUi.BOLD,
+                    Text.BODY, 0xFFFFFFFF, cardX, cardY + 27.0F, cardW, Text.Align.CENTER);
+            Text.drawLine(c, Component.translatable("gui.module_shop.layout_delete_hint").getString(), AtomUi.REGULAR,
+                    Text.SMALL, Draw.alpha(0xFFFFFFFF, 0.85F), cardX, cardY + 40.0F, cardW, Text.Align.CENTER);
+            return;
+        }
+        Text.drawLine(c, Component.translatable("gui.module_shop.layout_title").getString(), AtomUi.BOLD, Text.BODY,
+                IOStyle.TEXT, cardX, cardY + 11.0F, cardW, Text.Align.CENTER);
+        int gap = 6;
+        int btnW = Math.max(70, (cardW - 20 - gap * 2) / 3);
+        int btnH = 16;
+        int bx = cardX + (cardW - (btnW * 3 + gap * 2)) / 2;
+        int by = cardY + 24;
+        SkiaDialog.flatButton(c, bx, by, btnW, btnH, Component.translatable("gui.module_shop.layout_done").getString(),
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT, true, mouseX, mouseY);
+        SkiaDialog.flatButton(c, bx + btnW + gap, by, btnW, btnH,
+                Component.translatable("gui.module_shop.brand.title").getString(),
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, mouseX, mouseY);
+        SkiaDialog.flatButton(c, bx + (btnW + gap) * 2, by, btnW, btnH,
+                Component.translatable("gui.module_shop.layout_reset").getString(),
+                cn.autoforged.module_shop.client.ui.widget.Button.Kind.DANGER, true, mouseX, mouseY);
+        drawEditModuleManagerSkia(c, contentX, contentY, contentW, contentH, cardY + cardH + 6, mouseX, mouseY);
+        if (this.pendingDelete != null) {
+            int coverTop = y + 2;
+            int coverBottom = contentY + contentH + 4;
+            Draw.fill(c, contentX - 6, coverTop, contentW + 12, coverBottom - coverTop, 0.0F,
+                    Draw.alpha(0xFF000000, 0.35F));
+            int w = 210;
+            int h = 54;
+            int px2 = contentX + (contentW - w) / 2;
+            int py2 = contentY + (contentH - h) / 2;
+            Draw.shadow(c, px2, py2, w, h, 4.0F, 10.0F, 3.0F, IOStyle.SHADOW_TINT);
+            Draw.fill(c, px2, py2, w, h, 4.0F, IOStyle.SHEET);
+            Draw.stroke(c, px2, py2, w, h, 4.0F, 1.0F, IOStyle.BORDER);
+            Text.drawLine(c, Component.translatable("gui.module_shop.layout_delete_confirm",
+                            tabLabelWithOriginal(this.pendingDelete)).getString(), AtomUi.BOLD, Text.BODY,
+                    IOStyle.TEXT, px2 + 6, py2 + 12.0F, w - 12, Text.Align.CENTER);
+            Text.drawLine(c, Component.translatable("gui.module_shop.layout_delete_warn").getString(), AtomUi.REGULAR,
+                    Text.SMALL, IOStyle.TEXT_2, px2 + 6, py2 + 24.0F, w - 12, Text.Align.CENTER);
+            int bw = 84;
+            int bh = 16;
+            int bx2 = px2 + (w - (bw * 2 + 10)) / 2;
+            int by2 = py2 + h - bh - 8;
+            SkiaDialog.flatButton(c, bx2, by2, bw, bh,
+                    Component.translatable("gui.module_shop.layout_delete_yes").getString(),
+                    cn.autoforged.module_shop.client.ui.widget.Button.Kind.DANGER, true, mouseX, mouseY);
+            addRegion(bx2, by2, bw, bh, "delete_yes", null, null);
+            SkiaDialog.flatButton(c, bx2 + bw + 10, by2, bw, bh,
+                    Component.translatable("gui.module_shop.layout_delete_no").getString(),
+                    cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true, mouseX, mouseY);
+            addRegion(bx2 + bw + 10, by2, bw, bh, "delete_no", null, null);
+        }
+    }
+
+    private void drawEditModuleManagerSkia(io.github.humbleui.skija.Canvas c, int contentX, int contentY,
+                                           int contentW, int contentH, int top, int mouseX, int mouseY) {
+        int panelW = contentW - 12;
+        int px = contentX + 6;
+        int py = top;
+        int panelH = contentY + contentH - 8 - py;
+        if (panelH < 50) {
+            return;
+        }
+        Draw.shadow(c, px, py, panelW, panelH, 4.0F, 6.0F, 2.0F, IOStyle.SHADOW_1);
+        Draw.fill(c, px, py, panelW, panelH, 4.0F, IOStyle.CARD);
+        Draw.stroke(c, px, py, panelW, panelH, 4.0F, 1.0F, IOStyle.BORDER_DIM);
+        List<String> visible = visibleTabs();
+        List<String> available = hiddenTabs();
+        List<String> all = new ArrayList<>(visible);
+        all.addAll(available);
+        boolean canRemove = visible.size() > 1;
+        int rowH = 16;
+        int step = rowH + 1;
+        int rowY = py + (canRemove ? 16 : 26);
+        int rowsBottom = py + panelH - 6;
+        int rowsFit = Math.max(1, (rowsBottom - rowY) / step);
+        int maxScroll = Math.max(0, all.size() - rowsFit);
+        this.managerScroll = Mth.clamp(this.managerScroll, 0, maxScroll);
+        this.managerRect[0] = px;
+        this.managerRect[1] = py;
+        this.managerRect[2] = panelW;
+        this.managerRect[3] = panelH;
+        int last = Math.min(all.size(), this.managerScroll + rowsFit);
+        Text.drawLine(c, Component.translatable("gui.module_shop.layout_modules").getString(), AtomUi.BOLD,
+                Text.BODY, IOStyle.TEXT, px + 6, py + 8.5F, panelW - 60, Text.Align.LEFT);
+        if (maxScroll > 0) {
+            String range = (this.managerScroll + 1) + "-" + last + "/" + all.size();
+            Text.drawLine(c, range, AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_3, px, py + 8.5F, panelW - 8,
+                    Text.Align.RIGHT);
+        }
+        if (!canRemove) {
+            Text.drawLine(c, Component.translatable("gui.module_shop.layout_keep_one").getString(), AtomUi.REGULAR,
+                    Text.SMALL, IOStyle.RED, px + 6, py + 19.5F, panelW - 12, Text.Align.LEFT);
+        }
+        for (int i = this.managerScroll; i < last; i++) {
+            String id = all.get(i);
+            int cy2 = rowY + (i - this.managerScroll) * step;
+            boolean rowEnabled = visible.contains(id);
+            boolean hover = IOStyle.inside(px + 6, cy2, panelW - 12, rowH, mouseX, mouseY);
+            boolean dragging = id.equals(this.poolDrag);
+            float ht = shellAnim("edit.row." + id, hover, Motion.HOVER_MS);
+            Draw.fill(c, px + 6, cy2, panelW - 12, rowH, 2.0F,
+                    dragging ? IOStyle.BLUE : Draw.lerp(IOStyle.SIDEBAR, IOStyle.ROW_HOVER, ht));
+            Draw.stroke(c, px + 6, cy2, panelW - 12, rowH, 2.0F, 1.0F,
+                    dragging ? IOStyle.BORDER_HOVER : Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER, ht));
+            int fg = dragging ? 0xFFFFFFFF : (rowEnabled ? IOStyle.TEXT : IOStyle.TEXT_2);
+            Text.drawLine(c, tabLabelWithOriginal(id).getString(), AtomUi.REGULAR, Text.BODY, fg, px + 12,
+                    cy2 + rowH / 2.0F, panelW - 70, Text.Align.LEFT);
+            boolean canToggle = !rowEnabled || canRemove;
+            int btnW2 = 36;
+            int btnX = px + panelW - 12 - btnW2;
+            SkiaDialog.flatButton(c, btnX, cy2 + 1, btnW2, rowH - 2,
+                    Component.translatable(rowEnabled
+                            ? "gui.module_shop.layout_remove" : "gui.module_shop.layout_join").getString(),
+                    rowEnabled ? cn.autoforged.module_shop.client.ui.widget.Button.Kind.DANGER
+                            : cn.autoforged.module_shop.client.ui.widget.Button.Kind.ACCENT,
+                    canToggle, mouseX, mouseY);
+            if (canToggle) {
+                addRegion(btnX, cy2 + 1, btnW2, rowH - 2,
+                        (rowEnabled ? "pool_remove:" : "pool_join:") + id, null, null);
+            }
+            if (!rowEnabled) {
+                addRegion(px + 6, cy2, panelW - 12 - btnW2 - 4, rowH, "pool_add:" + id, null, null);
+            }
+        }
+        if (maxScroll > 0) {
+            int viewH = rowsFit * step - 2;
+            float trackX = px + panelW - 4.5F;
+            float thumbH = Math.max(18.0F, viewH * rowsFit / (float) Math.max(1, all.size()));
+            float thumbY = rowY + (viewH - thumbH) * this.managerScroll / Math.max(1, maxScroll);
+            boolean hot = this.managerBarDragging || (mouseX >= trackX - 5 && mouseX <= trackX + 7
+                    && mouseY >= rowY - 2 && mouseY <= rowY + viewH + 2);
+            float bw = (hot || this.managerBarDragging) ? 3.0F : 2.0F;
+            float bx = trackX - (bw - 2.0F) * 0.5F;
+            Draw.fill(c, bx, rowY, bw, viewH, bw * 0.5F, Draw.alpha(IOStyle.BORDER_DIM, 0.75F));
+            Draw.fill(c, bx, thumbY, bw, thumbH, bw * 0.5F,
+                    this.managerBarDragging ? IOStyle.ACCENT_2 : IOStyle.BLUE);
+            this.managerBarRect[0] = trackX;
+            this.managerBarRect[1] = rowY;
+            this.managerBarRect[2] = viewH;
+            this.managerBarRect[3] = thumbH;
+            this.managerBarRect[4] = maxScroll;
+        } else {
+            this.managerBarRect[4] = 0.0F;
+        }
+    }
+
+    private void drawSidebarSkia(io.github.humbleui.skija.Canvas c, int x, int y, int mouseX, int mouseY) {
+        String brand = ClientShopData.shopTitle == null || ClientShopData.shopTitle.isBlank()
+                ? Component.translatable("gui.module_shop.title").getString() : ClientShopData.shopTitle;
+        Text.drawLine(c, brand, AtomUi.BOLD, 9.0F, IOStyle.BLUE, x + 4, y + 12, SIDEBAR_W - 8, Text.Align.CENTER);
+
+        List<String> tabs = visibleTabs();
+        int rowsFit = sidebarRowsFit();
+        int pitch = TAB_H + GRID_GAP_Y;
+        ensureSidebarVisible(tabs);
+        this.sidebarScroll = Mth.clamp(this.sidebarScroll, 0, sidebarMaxScroll());
+        float dt = this.frameDeltaSeconds();
+        float k = approach(dt, 20.0F);
+        float targetPx = this.sidebarScroll * (float) pitch;
+        if (this.sidebarScrollPx < 0.0F) {
+            this.sidebarScrollPx = targetPx;
+        }
+        float distance = targetPx - this.sidebarScrollPx;
+        float scrollRate = 26.0F * (1.0F + Math.min(0.6F, Math.abs(distance) / pitch * 0.12F));
+        this.sidebarScrollPx += distance * approach(dt, scrollRate);
+        if (Math.abs(targetPx - this.sidebarScrollPx) < 0.02F) {
+            this.sidebarScrollPx = targetPx;
+        }
+        int bandTop = y + GRID_Y;
+        int bandBottom = bandTop + rowsFit * pitch - GRID_GAP_Y;
+
+        // 滚动条（模块多于一屏时）
+        int maxScroll = sidebarMaxScroll();
+        if (maxScroll > 0) {
+            float trackX = x + SIDEBAR_W - 5;
+            float trackH = bandBottom - bandTop;
+            Draw.fill(c, trackX, bandTop, 2.0F, trackH, 1.0F, Draw.alpha(IOStyle.BORDER_DIM, 0.75F));
+            float thumbH = Math.max(12.0F, trackH * rowsFit / Math.max(1, tabs.size()));
+            float progress = Mth.clamp(this.sidebarScrollPx / (maxScroll * (float) pitch), 0.0F, 1.0F);
+            Draw.fill(c, trackX, bandTop + (trackH - thumbH) * progress, 2.0F, thumbH, 1.0F, IOStyle.BLUE);
+        }
+
+        int saved = c.save();
+        Draw.clip(c, x + 1, bandTop, SIDEBAR_W - 2, bandBottom - bandTop + 1);
+        this.pageItems.pushClip(x + 1, bandTop, SIDEBAR_W - 2, bandBottom - bandTop + 1);
+        try {
+            int first = Math.max(0, (int) Math.floor(this.sidebarScrollPx / pitch) - 1);
+            int last = Math.min(tabs.size() - 1,
+                    (int) Math.ceil((this.sidebarScrollPx + rowsFit * (float) pitch) / pitch));
+            float tabX = x + slotX(0);
+            // easeSlot 每调用一次推进一步换位动画，所以每帧只算一次
+            float[] slots = new float[Math.max(0, last - first + 1)];
+            for (int i = first; i <= last; i++) {
+                slots[i - first] = easeSlot(tabs.get(i), i, k);
+            }
+            // 第一遍：每个页签的底色与描边（悬停高亮）
+            for (int i = first; i <= last; i++) {
+                String id = tabs.get(i);
+                float ty = bandTop + slots[i - first] * pitch - this.sidebarScrollPx;
+                if (ty > bandBottom || ty + TAB_H < bandTop) {
+                    continue;
+                }
+                boolean selected = id.equals(currentTab);
+                boolean hover = !selected && mouseX >= tabX && mouseX < tabX + TAB_W && mouseY >= ty
+                        && mouseY < ty + TAB_H && mouseY >= bandTop && mouseY <= bandBottom;
+                float ht = shellAnim("nav.h." + id, hover, Motion.HOVER_MS);
+                // 页签底色也半透明：和玻璃面板融在一起，悬停时才实起来
+                Draw.fill(c, tabX, ty, TAB_W, TAB_H, 2.0F,
+                        Draw.alpha(Draw.lerp(IOStyle.CARD, IOStyle.ROW_HOVER, ht), 0.55F + 0.45F * ht));
+                Draw.stroke(c, tabX, ty, TAB_W, TAB_H, 2.0F, 1.0F,
+                        Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, ht));
+            }
+            // 选中块：一整块强调色在页签之间滑动（弹簧跟随），而不是旧页签褪色、新页签亮起
+            int selIndex = tabs.indexOf(currentTab);
+            if (selIndex >= 0) {
+                float targetSlot = selIndex >= first && selIndex <= last ? slots[selIndex - first] : selIndex;
+                if (this.navSelSlot < -0.5F) {
+                    this.navSelSlot = targetSlot;
+                    this.navSelSpring = new Motion.Spring(targetSlot);
+                }
+                this.navSelSlot = this.navSelSpring.step(targetSlot, this.pageDtMs, 420.0F, 34.0F);
+            }
+            float selAlpha = shellAnim("nav.sel", selIndex >= 0, 80.0F);
+            if (selAlpha > 0.01F && this.navSelSlot > -0.5F) {
+                float sy = bandTop + this.navSelSlot * pitch - this.sidebarScrollPx;
+                Draw.shadow(c, tabX, sy, TAB_W, TAB_H, 2.0F, 5.0F, 1.5F,
+                        Draw.alpha(IOStyle.BLUE, 0.35F * selAlpha));
+                Draw.gradientH(c, tabX, sy, TAB_W, TAB_H, 2.0F, Draw.alpha(IOStyle.BLUE, selAlpha),
+                        Draw.alpha(IOStyle.ACCENT_2, selAlpha));
+                Draw.stroke(c, tabX, sy, TAB_W, TAB_H, 2.0F, 1.0F, Draw.alpha(0xFFFFFFFF, 0.14F * selAlpha));
+            }
+            // 第二遍：文字、红点、点击区（画在选中块之上）
+            for (int i = first; i <= last; i++) {
+                String id = tabs.get(i);
+                float slot = slots[i - first];
+                float tx = tabX;
+                float ty = bandTop + slot * pitch - this.sidebarScrollPx;
+                if (ty > bandBottom || ty + TAB_H < bandTop) {
+                    continue;
+                }
+                boolean selected = id.equals(currentTab);
+                // 文字颜色按选中块覆盖的程度变白，选中块滑过时文字跟着反色
+                float cover = this.navSelSlot > -0.5F
+                        ? Math.max(0.0F, 1.0F - Math.abs(this.navSelSlot - slot)) * selAlpha : 0.0F;
+                int fg = Draw.lerp(IOStyle.TEXT, 0xFFFFFFFF, cover);
+                Text.drawLine(c, tabLabel(id).getString(), selected ? AtomUi.BOLD : AtomUi.REGULAR, Text.BODY, fg,
+                        tx + 9.0F, ty + TAB_H / 2.0F, TAB_W - 17.0F, Text.Align.LEFT);
+                NotificationType badge = switch (id) {
+                    case "daily" -> NotificationType.SHOP;
+                    case "buyback" -> NotificationType.BUYBACK;
+                    case "auction" -> NotificationType.AUCTION;
+                    case "stall" -> NotificationType.STALL;
+                    case "mail" -> NotificationType.MAIL;
+                    default -> null;
+                };
+                int itx = Math.round(tx);
+                int ity = Math.round(ty);
+                if (badge != null) {
+                    // 角标放在页签右侧、垂直居中，离滚动条留出距离
+                    drawBadgeSkia(c, badge, tx + TAB_W - 6.0F, ty + TAB_H / 2.0F);
+                }
+                // 命中区裁到列表带内：滑出一半的条目不会盖住资料块的点击
+                int top = Math.max(ity, bandTop);
+                int bottom = Math.min(ity + TAB_H, bandBottom + 1);
+                if (bottom > top) {
+                    CompoundTag extra = new CompoundTag();
+                    extra.putString("tab", id);
+                    addRegion(itx, top, TAB_W, bottom - top, "set_tab", null, extra);
+                }
+            }
+        } finally {
+            this.pageItems.popClip();
+            c.restoreToCount(saved);
+        }
+    }
+
+    private void drawProfileSkia(io.github.humbleui.skija.Canvas c, int x, int y, int mouseX, int mouseY,
+                                 boolean editing) {
+        int bx = x + 7;
+        int by = y + PANEL_H - PROFILE_H - 6;
+        int bw = SIDEBAR_W - 12;
+        Draw.fill(c, bx, by, bw, PROFILE_H, 3.0F, IOStyle.CARD);
+        Draw.stroke(c, bx, by, bw, PROFILE_H, 3.0F, 1.0F, IOStyle.BORDER_DIM);
+        int avatar = 18;
+        int ax = bx + 5;
+        int ay = by + (PROFILE_H - avatar) / 2;
+        Draw.fill(c, ax - 1, ay - 1, avatar + 2, avatar + 2, 3.0F, Draw.alpha(IOStyle.TEXT, 0.2F));
+        this.pageItems.addCustom(ax, ay, avatar, avatar, (g, font) -> {
+            var player = Minecraft.getInstance().player;
+            if (player != null) {
+                net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, player.getSkinTextureLocation(), ax, ay, avatar);
+            } else {
+                g.fill(ax, ay, ax + avatar, ay + avatar, IOStyle.GRAY_BTN);
+            }
+        });
+        float textX = ax + avatar + 6;
+        float textMax = bx + bw - 5 - textX;
+        String name = ClientShopData.playerName.isEmpty() ? "-" : ClientShopData.playerName;
+        Text.drawLine(c, name, AtomUi.REGULAR, Text.BODY, IOStyle.TEXT, textX, by + 11.5F, textMax, Text.Align.LEFT);
+        if (ClientShopData.balance != this.lastShownBalance) {
+            if (this.lastShownBalance != Long.MIN_VALUE) {
+                IOStyle.flash("balance");
+            }
+            this.lastShownBalance = ClientShopData.balance;
+        }
+        float flash = IOStyle.flashProgress("balance", 600L);
+        String balance = Component.translatable("gui.module_shop.balance_prefix",
+                ClientShopData.money(ClientShopData.balance)).getString();
+        boolean balanceHover = shellRectHover(textX - 2, by + 17, textMax + 4, 12, mouseX, mouseY);
+        float hb = shellAnim("balance", balanceHover, Motion.HOVER_MS);
+        int color = Draw.lerp(Draw.lerp(IOStyle.BLUE, IOStyle.BLUE_HOVER, hb), IOStyle.TEXT, flash * 0.6F);
+        float bwidth = Text.drawLine(c, balance, AtomUi.BOLD, 7.0F, color, textX, by + 23.0F, textMax, Text.Align.LEFT);
+        if (hb > 0.01F) {
+            Draw.fill(c, textX, by + 27.5F, bwidth * hb, 0.8F, 0.0F, Draw.alpha(color, 0.7F));
+        }
+        if (balanceHover) {
+            this.pendingTextTip = Component.translatable("gui.module_shop.bill.open_tip");
+            if (editing) {
+                // 编辑布局：多一行「右键修改货币名称」，否则这个入口没人能发现
+                this.pendingTextTip = Component.translatable("gui.module_shop.bill.open_tip").copy()
+                        .append(" / ").append(Component.translatable("gui.module_shop.currency_hint"));
+            }
+        }
+        if (editing) {
+            addRegion(Math.round(textX) - 2, by + 17, Math.round(bwidth) + 4, 12, null, "rename_currency", null);
+        } else {
+            addRegion(Math.round(textX) - 2, by + 17, Math.round(bwidth) + 4, 12, "open_bill", null, null);
+        }
+    }
+
+    /**
+     * 主题图标：p = 0 是月亮（圆被“咬掉”一块），p = 1 是太阳（完整小圆 + 8 道光芒）。
+     * 过渡时咬痕移出、光芒旋转着长出来。bg 是按钮底色（用来画咬痕）。
+     */
+    private static void drawThemeIcon(io.github.humbleui.skija.Canvas c, float cx, float cy, int color, int bg) {
+        float p = IOStyle.themeProgress();
+        float r = 3.6F - 1.0F * p;
+        Draw.fill(c, cx - r, cy - r, r * 2, r * 2, r, color);
+        // 月亮的咬痕：从右上角滑出
+        float bite = 1.0F - p;
+        if (bite > 0.01F) {
+            float br = 3.0F;
+            float bx = cx + 1.6F + 3.5F * p;
+            float by = cy - 1.6F - 3.5F * p;
+            Draw.fill(c, bx - br, by - br, br * 2, br * 2, br, bg);
+        }
+        // 太阳光芒：旋转着长出
+        if (p > 0.01F) {
+            double spin = (1.0F - p) * Math.PI / 2.0;
+            for (int i = 0; i < 8; i++) {
+                double a = spin + i * Math.PI / 4.0;
+                float inner = r + 1.3F;
+                float outer = inner + 1.6F * p;
+                Draw.line(c, cx + (float) Math.cos(a) * inner, cy + (float) Math.sin(a) * inner,
+                        cx + (float) Math.cos(a) * outer, cy + (float) Math.sin(a) * outer, 1.0F,
+                        Draw.alpha(color, p));
+            }
+        }
+    }
+
+    private static boolean shellRectHover(float x, float y, float w, float h, int mx, int my) {
+        return mx >= x && mx < x + w && my >= y && my < y + h;
+    }
+
+    private void drawHeaderSkia(io.github.humbleui.skija.Canvas c, int x, int y, int mouseX, int mouseY) {
+        // 关闭（×）
+        int closeX = x + PANEL_W - 22;
+        int closeY = y + 7;
+        float hc = shellAnim("close", shellRectHover(closeX, closeY, 14, 14, mouseX, mouseY), Motion.HOVER_MS);
+        Draw.fill(c, closeX, closeY, 14, 14, 2.0F, Draw.lerp(IOStyle.GRAY_BTN, IOStyle.RED_TINT_HOVER, hc));
+        Draw.stroke(c, closeX, closeY, 14, 14, 2.0F, 1.0F, Draw.lerp(IOStyle.BORDER_DIM, IOStyle.RED, hc));
+        Draw.cross(c, closeX + 7.0F, closeY + 7.0F, 2.5F, 1.2F, Draw.lerp(IOStyle.TEXT_2, IOStyle.RED, hc));
+        addRegion(closeX, closeY, 14, 14, "close_ui", null, null);
+
+        // 提醒音效（铃铛，原版像素图标）
+        int bellX = closeX - 20;
+        boolean bellHover = shellRectHover(bellX, closeY, 14, 14, mouseX, mouseY);
+        float hb = shellAnim("bell", bellHover, Motion.HOVER_MS);
+        Draw.fill(c, bellX, closeY, 14, 14, 2.0F, Draw.lerp(IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER, hb));
+        Draw.stroke(c, bellX, closeY, 14, 14, 2.0F, 1.0F, Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, hb));
+        int bellColor = bellHover ? IOStyle.BLUE : IOStyle.TEXT;
+        this.pageItems.addCustom(bellX, closeY, 14.0F, 14.0F, (g, font) -> Icons.bell(g, bellX + 1, closeY + 1, bellColor));
+        addRegion(bellX, closeY, 14, 14, "notif_settings", null, null);
+        if (bellHover) {
+            this.pendingTextTip = Component.translatable("gui.module_shop.notify.settings_title");
+        }
+
+        // 日间 / 暗色切换（太阳 ⇄ 月亮，图标随主题过渡一起变形）
+        int themeX = bellX - 20;
+        this.skinBtnX = themeX;
+        this.skinBtnY = closeY;
+        boolean themeHover = shellRectHover(themeX, closeY, 14, 14, mouseX, mouseY) || this.skinMenuOpen;
+        float hth = shellAnim("theme", themeHover, Motion.HOVER_MS);
+        Draw.fill(c, themeX, closeY, 14, 14, 2.0F, Draw.lerp(IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER, hth));
+        Draw.stroke(c, themeX, closeY, 14, 14, 2.0F, 1.0F, Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, hth));
+        drawThemeIcon(c, themeX + 7.0F, closeY + 7.0F, Draw.lerp(IOStyle.TEXT, IOStyle.BLUE, hth),
+                Draw.lerp(IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER, hth));
+        addRegion(themeX, closeY, 14, 14, "toggle_theme", null, null);
+        if (themeHover && !this.skinMenuOpen) {
+            this.pendingTextTip = Component.translatable("gui.module_shop.skin.tip");
+        }
+
+        // 管理员药丸：编辑布局 / 商店设置（从右往左排）
+        int pillH = 16;
+        int pillY = y + 6;
+        float px = themeX - 6;
+        if (ClientShopData.canAdmin) {
+            boolean locked = ClientShopData.isAdminLocked();
+            for (String action : new String[]{"sidebar_edit", "admin_open"}) {
+                String label = Component.translatable("sidebar_edit".equals(action)
+                        ? "gui.module_shop.layout_edit" : "gui.module_shop.admin_open").getString();
+                float lockExtra = locked ? 7.5F : 0.0F;
+                float w = Text.width(label, AtomUi.REGULAR, Text.BODY) + 14.0F + lockExtra;
+                px -= w;
+                boolean hovered = shellRectHover(px, pillY, w, pillH, mouseX, mouseY);
+                boolean selected = !locked && ("sidebar_edit".equals(action) ? this.layoutEdit : "admin".equals(currentTab));
+                float h = shellAnim("pill." + action, hovered, Motion.HOVER_MS);
+                if (selected) {
+                    Draw.gradientH(c, px, pillY, w, pillH, 2.0F, IOStyle.BLUE, IOStyle.ACCENT_2);
+                } else {
+                    Draw.fill(c, px, pillY, w, pillH, 2.0F, Draw.lerp(IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER, h));
+                }
+                Draw.stroke(c, px, pillY, w, pillH, 2.0F, 1.0F, selected ? IOStyle.BORDER_HOVER
+                        : (locked ? Draw.lerp(Draw.alpha(IOStyle.ORANGE, 0.6F), IOStyle.ORANGE, h)
+                                : Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, h)));
+                if (locked) {
+                    float lcy = pillY + pillH / 2.0F;
+                    Draw.stroke(c, px + 6.0F, lcy - 3.0F, 3.0F, 2.6F, 1.4F, 0.7F, IOStyle.ORANGE);
+                    Draw.fill(c, px + 5.3F, lcy - 1.0F, 4.4F, 3.4F, 0.8F, IOStyle.ORANGE);
+                }
+                Text.drawLine(c, label, AtomUi.REGULAR, Text.BODY, selected ? 0xFFFFFFFF : IOStyle.TEXT,
+                        px + lockExtra, pillY + pillH / 2.0F, w - lockExtra, Text.Align.CENTER);
+                int ipx = Math.round(px);
+                int iw = Math.round(w);
+                addRegion(ipx, pillY, iw, pillH, action, null, null);
+                if ("admin_open".equals(action)) {
+                    drawBadgeSkia(c, NotificationType.MAIL, px + w + 3.0F, pillY + 1.0F);
+                }
+                if (locked && hovered) {
+                    this.pendingTextTip = Component.translatable("msg.module_shop.auth_required");
+                }
+                px -= 4.0F;
+            }
+        }
+
+        // 标题（管理页带上当前编辑的模块）；宽度让给右侧按钮
+        String title = ("admin".equals(currentTab)
+                ? Component.translatable("gui.module_shop.admin_title", tabLabelWithOriginal(adminMode))
+                : tabLabel(currentTab)).getString();
+        int cx = contentX();
+        Text.drawLine(c, title, AtomUi.BOLD, 9.5F, IOStyle.TEXT, cx, y + 14.0F, px - 6.0F - cx, Text.Align.LEFT);
     }
 
     /**
@@ -695,7 +1855,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         int textMax = bx + bw - 5 - textX;
         String name = ClientShopData.playerName.isEmpty() ? "-" : ClientShopData.playerName;
         g.drawString(this.font, IOStyle.ellipsize(this.font, Component.literal(name), textMax).getString(),
-                textX, by + 6, COLOR_TEXT, false);
+                textX, by + 6, IOStyle.TEXT, false);
         // 余额（第二行，强调色）：点它进账单。
         // 用 **0.8 倍字号**绘制：数字再长也稳稳在信息块边框以内（以前 1.0 倍字号 + 省略号，
         // 看着像是顶到了边框上）；可用宽度也按缩放折算，能显示的数字更多。
@@ -786,14 +1946,14 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 ? Component.translatable("gui.module_shop.admin_title",
                         tabLabelWithOriginal(adminMode))
                 : tabLabel(currentTab);
-        g.drawString(this.font, headerTitle, contentX, titleY, COLOR_TEXT, false);
+        g.drawString(this.font, headerTitle, contentX, titleY, IOStyle.TEXT, false);
         // 关闭（右上角的 ×）：直角方块 + 1px 硬边框
         int closeX = x + PANEL_W - 22;
         int closeY = y + 7;
         boolean closeHover = IOStyle.inside(closeX, closeY, 14, 14, mouseX, mouseY);
         IOStyle.rounded(g, closeX, closeY, 14, 14, 0, closeHover ? IOStyle.GRAY_BTN_HOVER : IOStyle.GRAY_BTN);
         IOStyle.ring(g, closeX, closeY, 14, 14, 0, IOStyle.BORDER_DIM);
-        int cc = closeHover ? COLOR_TEXT : COLOR_MUTED;
+        int cc = closeHover ? IOStyle.TEXT : IOStyle.TEXT_2;
         for (int i = 0; i < 6; i++) {
             g.fill(closeX + 4 + i, closeY + 4 + i, closeX + 5 + i, closeY + 5 + i, cc);
             g.fill(closeX + 4 + i, closeY + 9 - i, closeX + 5 + i, closeY + 10 - i, cc);
@@ -819,6 +1979,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             actions.add("sidebar_edit");
             actions.add("admin_open");
         }
+        boolean locked = ClientShopData.isAdminLocked();
         for (String action : actions) {
             String key = switch (action) {
                 case "sidebar_edit" -> "gui.module_shop.layout_edit";
@@ -828,10 +1989,16 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             int w = this.font.width(Component.translatable(key)) + 14;
             px -= w;
             boolean hover = IOStyle.inside(px, pillY, w, pillH, mouseX, mouseY);
-            boolean selected = "sidebar_edit".equals(action)
+            boolean selected = !locked && ("sidebar_edit".equals(action)
                     ? this.layoutEdit
-                    : ("admin".equals(currentTab) && "admin_open".equals(action));
+                    : ("admin".equals(currentTab) && "admin_open".equals(action)));
             IOStyle.pill(g, this.font, px, pillY, w, pillH, Component.translatable(key), selected, hover, true);
+            if (locked) {
+                IOStyle.ring(g, px, pillY, w, pillH, 0, IOStyle.ORANGE);
+                if (hover) {
+                    g.renderTooltip(this.font, Component.translatable("msg.module_shop.auth_required"), mouseX, mouseY);
+                }
+            }
             addRegion(px, pillY, w, pillH, action, null, null);
             if ("admin_open".equals(action)) {
                 ClientNotifications.drawBadge(g, this.font, NotificationType.MAIL, px + w, pillY);
@@ -867,8 +2034,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         int brandX = x + (SIDEBAR_W - this.font.width(brand)) / 2;
         g.drawString(this.font, brand, brandX, y + 8, IOStyle.BLUE, false);
         if (this.layoutEdit && ClientShopData.canAdmin) {
-            // 主标题改名只在「编辑布局」里可点：平时右键标题什么都不发生，避免误触把全服标题改掉。
-            addRegion(brandX - 2, y + 6, this.font.width(brand) + 4, 12, null, "rename_shop_title", null);
+            // 品牌区左键进「品牌与图标设置」，右键改主标题；平时不响应，避免误触。
+            addRegion(brandX - 2, y + 6, this.font.width(brand) + 4, 12, "open_brand_settings", "rename_shop_title", null);
             if (IOStyle.inside(brandX - 2, y + 6, this.font.width(brand) + 4, 12, mouseX, mouseY)) {
                 g.renderTooltip(this.font, Component.translatable("gui.module_shop.shop_title_hint", brand),
                         mouseX, mouseY);
@@ -994,6 +2161,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     private void drawSidebarScrollBar(GuiGraphics g, int x, int y, List<String> tabs, int rowsFit, boolean editing) {
         int maxScroll = sidebarMaxScroll();
         if (maxScroll <= 0) {
+            this.sidebarBarRect[4] = 0.0F;
             return;
         }
         int pitch = TAB_H + GRID_GAP_Y;
@@ -1002,10 +2170,16 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         int trackH = rowsFit * pitch - GRID_GAP_Y;
         g.fill(trackX, trackY, trackX + 2, trackY + trackH, IOStyle.withAlpha(IOStyle.BORDER_DIM, 190));
         int rows = tabs.size() + (editing ? 1 : 0);
-        int thumbH = Math.max(12, trackH * rowsFit / Math.max(1, rows));
+        int thumbH = Math.max(18, trackH * rowsFit / Math.max(1, rows));
         float progress = Mth.clamp(this.sidebarScrollPx / (maxScroll * (float) pitch), 0.0F, 1.0F);
         int thumbY = trackY + Math.round((trackH - thumbH) * progress);
-        g.fill(trackX, thumbY, trackX + 2, thumbY + thumbH, IOStyle.BLUE);
+        g.fill(trackX, thumbY, trackX + 2, thumbY + thumbH,
+                this.sidebarBarDragging ? IOStyle.ACCENT_2 : IOStyle.BLUE);
+        this.sidebarBarRect[0] = trackX;
+        this.sidebarBarRect[1] = trackY;
+        this.sidebarBarRect[2] = trackH;
+        this.sidebarBarRect[3] = thumbH;
+        this.sidebarBarRect[4] = maxScroll;
     }
 
 
@@ -1137,7 +2311,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         int coverBottom = contentY + contentH + 4;
         IOStyle.frosted(g, contentX - 6, coverTop, contentW + 12, coverBottom - coverTop);
         // ② 工具条卡片：水平居中于内容区，垂直贴着面板顶部（同时是「拖到这里删除」的丢弃区）。
-        int cardW = Math.min(300, contentW - 16);
+        int cardW = Math.min(324, contentW - 12);
         int cardH = 50;
         int cardX = contentX + (contentW - cardW) / 2;
         int cardY = y + 4;
@@ -1161,15 +2335,18 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         IOStyle.card(g, cardX, cardY, cardW, cardH, 0);
         IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.layout_title"),
                 cardX + cardW / 2, cardY + 6, IOStyle.TEXT);
-        int btnW = 92;
+        int gap = 6;
+        int btnW = Math.max(70, (cardW - 20 - gap * 2) / 3);
         int btnH = 16;
-        int gap = 8;
-        int bx = cardX + (cardW - (btnW * 2 + gap)) / 2;
+        int bx = cardX + (cardW - (btnW * 3 + gap * 2)) / 2;
         // 卡片里没有说明文字了（按需求删掉），按钮往下挪一点，卡片上下留白对称。
         int by = cardY + 24;
         IOStyle.button(g, bx, by, btnW, btnH, Component.translatable("gui.module_shop.layout_done"), this.font,
                 mouseX, mouseY, true, IOStyle.Btn.PRIMARY);
         IOStyle.button(g, bx + btnW + gap, by, btnW, btnH,
+                Component.translatable("gui.module_shop.brand.title"), this.font, mouseX, mouseY, true,
+                IOStyle.Btn.GRAY);
+        IOStyle.button(g, bx + (btnW + gap) * 2, by, btnW, btnH,
                 Component.translatable("gui.module_shop.layout_reset"), this.font, mouseX, mouseY, true,
                 IOStyle.Btn.DANGER_TINT);
         // ③ 模块管理：一张列表装下所有模块，右侧按钮「移除 / 添加」；拖到左侧列表也能加入。
@@ -1285,9 +2462,17 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             int viewH = rowsFit * step - 2;
             int trackX = px + panelW - 4;
             g.fill(trackX, rowY, trackX + 1, rowY + viewH, IOStyle.HAIR);
-            int thumbH = Math.max(12, viewH * rowsFit / Math.max(1, all.size()));
+            int thumbH = Math.max(18, viewH * rowsFit / Math.max(1, all.size()));
             int thumbY = rowY + (viewH - thumbH) * this.managerScroll / Math.max(1, maxScroll);
-            g.fill(trackX, thumbY, trackX + 1, thumbY + thumbH, IOStyle.BLUE);
+            g.fill(trackX, thumbY, trackX + 2, thumbY + thumbH,
+                    this.managerBarDragging ? IOStyle.ACCENT_2 : IOStyle.BLUE);
+            this.managerBarRect[0] = trackX;
+            this.managerBarRect[1] = rowY;
+            this.managerBarRect[2] = viewH;
+            this.managerBarRect[3] = thumbH;
+            this.managerBarRect[4] = maxScroll;
+        } else {
+            this.managerBarRect[4] = 0.0F;
         }
     }
 
@@ -1316,6 +2501,36 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     private record TabRect(String id, int x, int y, int w, int h) {
     }
 
+    private static boolean overBarTrack(float[] rect, double mx, double my) {
+        return rect[4] > 0.0F && mx >= rect[0] - 5.0F && mx <= rect[0] + 7.0F
+                && my >= rect[1] - 2.0F && my <= rect[1] + rect[2] + 2.0F;
+    }
+
+    private static float barProgress(float[] rect, double my) {
+        float usable = Math.max(1.0F, rect[2] - rect[3]);
+        return Mth.clamp((float) ((my - rect[1] - rect[3] * 0.5F) / usable), 0.0F, 1.0F);
+    }
+
+    private void applySidebarBarAt(double my) {
+        if (this.sidebarBarRect[4] <= 0.0F) {
+            return;
+        }
+        float p = barProgress(this.sidebarBarRect, my);
+        int max = Math.max(0, Math.round(this.sidebarBarRect[4]));
+        int pitch = TAB_H + GRID_GAP_Y;
+        this.sidebarScroll = Mth.clamp(Math.round(p * max), 0, max);
+        this.sidebarScrollPx = p * max * (float) pitch;
+    }
+
+    private void applyManagerBarAt(double my) {
+        if (this.managerBarRect[4] <= 0.0F) {
+            return;
+        }
+        float p = barProgress(this.managerBarRect, my);
+        int max = Math.max(0, Math.round(this.managerBarRect[4]));
+        this.managerScroll = Mth.clamp(Math.round(p * max), 0, max);
+    }
+
     /** 编辑模式下接管鼠标按下：工具条按钮 + 模块管理器 + 侧栏页签（按下先不切换，等松开时再判定点击/拖拽）。 */
     private boolean handleLayoutClick(double mouseX, double mouseY) {
         int x = left();
@@ -1336,8 +2551,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             int by2 = py2 + h - bh - 8;
             if (IOStyle.inside(bx2, by2, bw, bh, mouseX, mouseY)) {
                 Bricks.click();
-                removeModule(this.pendingDelete);
+                String targetId = this.pendingDelete;
                 this.pendingDelete = null;
+                ClientAdminAuth.guard(() -> removeModule(targetId));
                 return true;
             }
             if (IOStyle.inside(bx2 + bw + 10, by2, bw, bh, mouseX, mouseY)) {
@@ -1347,24 +2563,46 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             }
             return true;
         }
-        // 工具条卡片的几何必须与 drawLayoutOverlay 完全一致（画在哪就点在哪）。
-        int cardW = Math.min(300, contentW - 16);
+        if (overBarTrack(this.sidebarBarRect, mouseX, mouseY)) {
+            Bricks.click();
+            this.sidebarBarDragging = true;
+            applySidebarBarAt(mouseY);
+            return true;
+        }
+        if (overBarTrack(this.managerBarRect, mouseX, mouseY)) {
+            Bricks.click();
+            this.managerBarDragging = true;
+            applyManagerBarAt(mouseY);
+            return true;
+        }
+        // 工具条卡片的几何必须与 drawLayoutOverlay / drawEditOverlaySkia 完全一致（画在哪就点在哪）。
+        int cardW = Math.min(324, contentW - 12);
         int cardH = 50;
         int cardX = contentX + (contentW - cardW) / 2;
         int cardY = y + 4;
-        int btnW = 92;
+        int gap = 6;
+        int btnW = Math.max(70, (cardW - 20 - gap * 2) / 3);
         int btnH = 16;
-        int gap = 8;
-        int bx = cardX + (cardW - (btnW * 2 + gap)) / 2;
+        int bx = cardX + (cardW - (btnW * 3 + gap * 2)) / 2;
         int by = cardY + 24;
         if (IOStyle.inside(bx, by, btnW, btnH, mouseX, mouseY)) {
             Bricks.click();
-            this.layoutEdit = false;
+            if (this.layoutEdit) {
+                ClientAdminAuth.guard(() -> {
+                    this.layoutEdit = false;
+                    send("admin_layout_commit", null);
+                });
+            }
             return true;
         }
         if (IOStyle.inside(bx + btnW + gap, by, btnW, btnH, mouseX, mouseY)) {
             Bricks.click();
-            send("admin_sidebar_reset", null);
+            ClientAdminAuth.guard(() -> Nav.open(new BrandSettingsScreen(this)));
+            return true;
+        }
+        if (IOStyle.inside(bx + (btnW + gap) * 2, by, btnW, btnH, mouseX, mouseY)) {
+            Bricks.click();
+            ClientAdminAuth.guard(() -> send("admin_sidebar_reset", null));
             return true;
         }
         // 模块管理器：直接按本帧已注册的命中区判定（几何只写一份，画在哪就点在哪）。
@@ -1373,9 +2611,15 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             if (action == null || !IOStyle.inside(region.x(), region.y(), region.w(), region.h(), mouseX, mouseY)) {
                 continue;
             }
+            if ("open_brand_settings".equals(action)) {
+                Bricks.click();
+                ClientAdminAuth.guard(() -> Nav.open(new BrandSettingsScreen(this)));
+                return true;
+            }
             if (action.startsWith("pool_join:")) {
                 Bricks.click();
-                addModule(action.substring("pool_join:".length()), visibleTabs().size());
+                String id = action.substring("pool_join:".length());
+                ClientAdminAuth.guard(() -> addModule(id, visibleTabs().size()));
                 return true;
             }
             if (action.startsWith("pool_remove:")) {
@@ -1383,12 +2627,16 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 String id = action.substring("pool_remove:".length());
                 // 任何模块（含每日商店）都能移除，只要求「至少留一个」——否则侧栏空了就没入口再加回来。
                 if (visibleTabs().size() > 1) {
-                    removeModule(id);
+                    ClientAdminAuth.guard(() -> removeModule(id));
                 }
                 return true;
             }
             if (action.startsWith("pool_add:")) {
                 Bricks.click();
+                if (!ClientShopData.canEditAdmin()) {
+                    ClientAdminAuth.guard(() -> {});
+                    return true;
+                }
                 this.poolDrag = action.substring("pool_add:".length());
                 this.poolMoved = false;
                 this.poolPressX = (int) Math.round(mouseX);
@@ -1414,6 +2662,22 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+        if (v2Active()) {
+            return this.shellV2.mouseDragged(mouseX, mouseY, button, dragX, dragY)
+                    || super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+        }
+        if (button == 0 && this.sidebarBarDragging) {
+            applySidebarBarAt(mouseY);
+            return true;
+        }
+        if (button == 0 && this.managerBarDragging) {
+            applyManagerBarAt(mouseY);
+            return true;
+        }
+        ShopPage page = activePage();
+        if (page != null && page.mouseDragged(pageFrame(mouseX, mouseY), mouseX, mouseY, button, dragX, dragY)) {
+            return true;
+        }
         // 从「模块库」拖模块：拖到左侧列表任意位置松手即加入。
         if (this.poolDrag != null && this.layoutEdit) {
             if (!this.poolMoved
@@ -1452,6 +2716,18 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (v2Active()) {
+            return this.shellV2.mouseReleased(mouseX, mouseY, button) || super.mouseReleased(mouseX, mouseY, button);
+        }
+        if (button == 0 && (this.sidebarBarDragging || this.managerBarDragging)) {
+            this.sidebarBarDragging = false;
+            this.managerBarDragging = false;
+            return true;
+        }
+        ShopPage page = activePage();
+        if (page != null && page.mouseReleased(pageFrame(mouseX, mouseY), mouseX, mouseY, button)) {
+            return true;
+        }
         // 模块库拖拽结束：落在左侧列表里 → 按最近的槽位加入；只是点一下 → 直接加到末尾。
         if (this.poolDrag != null) {
             String id = this.poolDrag;
@@ -1482,14 +2758,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 return true;
             }
             if (moved) {
-                // 松手：把顺序列表交给服务端保存并热同步（被拖的页签会自己 lerp 回网格槽位）。
-                ListTag list = new ListTag();
-                for (String tab : visibleTabs()) {
-                    list.add(StringTag.valueOf(tab));
-                }
-                CompoundTag tag = new CompoundTag();
-                tag.put("order", list);
-                send("admin_sidebar_order", tag);
+                // 松手：把顺序 + 已隐藏列表一并交给服务端保存并热同步，避免覆盖清空 hidden（被拖页签会 lerp 回槽位）。
+                List<String> order = visibleTabs();
+                List<String> hidden = new ArrayList<>(ClientShopData.sidebarHidden);
+                ClientAdminAuth.guard(() -> applyLayout(order, hidden));
             } else if (!this.layoutEdit) {
                 // 没超过阈值 = 普通点击：照常切换右侧界面（编辑模式下禁用一切跳转）。
                 selectTab(id);
@@ -1547,7 +2819,12 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     }
 
     /** 切换页签（普通点击与快捷键共用）。 */
-    private void selectTab(String tab) {        if (tab == null || tab.isEmpty()) {
+    void selectTab(String tab) {
+        if (tab == null || tab.isEmpty()) {
+            return;
+        }
+        // 弹出式附属条目：不切页签，直接打开它自己的界面（返回时回到当前页签）；内容区页面照常切页签。
+        if (openExtension(tab)) {
             return;
         }
         this.adminModuleOpen = false;
@@ -1567,7 +2844,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     private void drawDaily(GuiGraphics g, int cx, int cy, int cw, int ch, int mx, int my, float partialTick) {
         int count = ClientShopData.dailyShop.size();
         if (count == 0) {
-            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.empty"), cx + cw / 2, cy + 40, COLOR_MUTED);
+            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.empty"), cx + cw / 2, cy + 40, IOStyle.TEXT_2);
             return;
         }
         // 需求 8：牌数超过 6 张时改为每行 1 个横向长条（滚轮整行滚动、内容自适应）。
@@ -1613,15 +2890,15 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 int itemX = x + (cardW - 16) / 2;
                 g.renderItem(entry.stack, itemX, cardY + 6);
                 g.renderItemDecorations(this.font, entry.stack, itemX, cardY + 6);
-                IOStyle.centerAt(g, this.font, Component.literal(ClientShopData.money(entry.price)),
-                        x + cardW / 2, cardY + 24, COLOR_TEXT);
+                IOStyle.centerAt(g, this.font, Component.literal(PriceDisplay.formatCompact(entry.resolvePriceSpec())),
+                        x + cardW / 2, cardY + 24, IOStyle.TEXT);
                 // 剩余数量（小字）+ 品质（品质色）
                 int remaining = entry.remaining();
                 g.pose().pushPose();
                 g.pose().translate(x + cardW / 2.0F, cardY + 34, 0.0F);
                 g.pose().scale(0.8F, 0.8F, 1.0F);
                 IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.remaining", remaining),
-                        0, 0, remaining > 0 ? COLOR_MUTED : IOStyle.RED);
+                        0, 0, remaining > 0 ? IOStyle.TEXT_2 : IOStyle.RED);
                 g.pose().popPose();
                 IOStyle.centerAt(g, this.font, Component.translatable(entry.rarity.translationKey()),
                         x + cardW / 2, cardY + 42, entry.rarity.color());
@@ -1656,7 +2933,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         // 付费刷新按钮：小尺寸，悬停显示本次花费与今日剩余次数（统一摆在底栏右下角）。
         int refreshX = refreshBtnX(cx, cw);
         int refreshY = refreshBtnY(cy, ch);
-        boolean canRefresh = ClientShopData.refreshCost >= 0L;
+        PriceSpec refreshSpec = ClientShopData.resolveRefreshSpec();
+        boolean canRefresh = refreshSpec != null;
         addRegion(refreshX, refreshY, REFRESH_W, REFRESH_H, "refresh_daily_shop", null, null);
         drawButton(g, refreshX, refreshY, REFRESH_W, REFRESH_H,
                 Component.translatable("gui.module_shop.refresh_daily"), canRefresh);
@@ -1664,7 +2942,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             int left = Math.max(0, ClientShopData.refreshMax - ClientShopData.refreshUsed);
             if (canRefresh) {
                 g.renderTooltip(this.font, Component.translatable("gui.module_shop.refresh_tooltip",
-                        ClientShopData.money(ClientShopData.refreshCost), left, ClientShopData.refreshMax), mx, my);
+                        PriceDisplay.formatPlain(refreshSpec), left, ClientShopData.refreshMax), mx, my);
             } else {
                 g.renderTooltip(this.font, Component.translatable("gui.module_shop.refresh_tooltip_none",
                         ClientShopData.refreshMax), mx, my);
@@ -1756,8 +3034,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             Component name = IOStyle.ellipsize(this.font, plainNameComponent(entry.stack), priceX - (cx + 40) - 6);
             IOStyle.text(g, this.font, name, cx + 40, y + 6, IOStyle.TEXT);
             IOStyle.text(g, this.font, Component.translatable(entry.rarity.translationKey()), cx + 40, y + 17, rarity);
-            IOStyle.text(g, this.font, Component.literal(ClientShopData.money(entry.price)), priceX, y + 6,
-                    IOStyle.ORANGE);
+            IOStyle.text(g, this.font, Component.literal(PriceDisplay.formatPlain(entry.resolvePriceSpec())),
+                    priceX, y + 6, IOStyle.ORANGE);
             int remaining = entry.remaining();
             IOStyle.text(g, this.font, Component.translatable("gui.module_shop.remaining", remaining),
                     priceX, y + 17, remaining > 0 ? IOStyle.TEXT_2 : IOStyle.RED);
@@ -1799,7 +3077,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     private void drawBuyback(GuiGraphics g, int cx, int cy, int cw, int ch, int mx, int my) {
         var list = ClientShopData.dailyBuyback;
         if (list.isEmpty()) {
-            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.empty"), cx + cw / 2, cy + 40, COLOR_MUTED);
+            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.empty"), cx + cw / 2, cy + 40, IOStyle.TEXT_2);
             return;
         }
         // 需求 5：一行一个共 6 行横条，最左物品图标、中间收购价、右侧还能收购的数量。
@@ -1833,18 +3111,18 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             g.renderItem(entry.stack, cx + 14, iconY);
             g.renderItemDecorations(this.font, entry.stack, cx + 14, iconY);
             String price = Component.translatable("gui.module_shop.buyback_price",
-                    ClientShopData.money(entry.price)).getString();
+                    PriceDisplay.formatPlain(entry.resolvePriceSpec())).getString();
             // 品质只用左侧色条表示，不再写品质文字（原来那一行会显得很挤）；物品名超宽自动省略，避免压到右侧价格。
             int priceLeft = cx + cw - 12 - Math.round(this.font.width(price) * numScale);
             Component itemName = IOStyle.ellipsize(this.font, plainNameComponent(entry.stack),
                     Math.max(24, priceLeft - 6 - (cx + 36)));
-            g.drawString(this.font, itemName, cx + 36, textY, COLOR_TEXT, false);
-            drawLabelRight(g, cx + cw - 12, blockTop, Component.literal(price), COLOR_GOLD, numScale);
+            g.drawString(this.font, itemName, cx + 36, textY, IOStyle.TEXT, false);
+            drawLabelRight(g, cx + cw - 12, blockTop, Component.literal(price), IOStyle.ORANGE, numScale);
             // 需求 9：剩余可收购数量来自该物品自己的上限。
             int remaining = entry.remaining();
             String remainText = Component.translatable("gui.module_shop.buyback_remaining", remaining).getString();
             drawLabelRight(g, cx + cw - 12, blockTop + lineH, Component.literal(remainText),
-                    remaining > 0 ? COLOR_MUTED : IOStyle.RED, numScale);
+                    remaining > 0 ? IOStyle.TEXT_2 : IOStyle.RED, numScale);
             CompoundTag extra = new CompoundTag();
             extra.putInt("index", i);
             // 需求 9：点击不立即出售，而是弹出数量输入，让玩家自己调节卖出的数量。
@@ -1869,18 +3147,19 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         int byY = refreshBtnY(cy, ch);
         // 管理员控件（奖励开关 + 设置）先占位，返回它们最左边的边界，供提示文字避让。
         int adminLeft = drawBuybackBonusAdmin(g, cx, cy, cw, ch, byX);
-        // 收购全清奖励进度：全部卖完可额外获得 X 星币（每天一次）；超宽自动截断，不会压到右侧控件。
-        if (ClientShopData.buybackBonusEnabled && ClientShopData.buybackBonus > 0L) {
+        // 收购全清奖励进度：全部卖完可额外获得 X 奖励（每天一次）；超宽自动截断，不会压到右侧控件。
+        if (ClientShopData.buybackBonusEnabled && ClientShopData.buybackBonusSpec.isValid()) {
+            String bonusText = PriceDisplay.formatPlain(ClientShopData.buybackBonusSpec);
             Component bonusLine = ClientShopData.buybackBonusDone
-                    ? Component.translatable("gui.module_shop.buyback_bonus_done",
-                            ClientShopData.money(ClientShopData.buybackBonus))
+                    ? Component.translatable("gui.module_shop.buyback_bonus_done", bonusText)
                     : Component.translatable("gui.module_shop.buyback_bonus_progress",
-                            ClientShopData.money(ClientShopData.buybackBonus), ClientShopData.buybackLeft);
+                            bonusText, ClientShopData.buybackLeft);
             drawBarLabel(g, cx + 4, barLabelY, adminLeft - BAR_GAP, bonusLine,
-                    ClientShopData.buybackBonusDone ? COLOR_MUTED : COLOR_GOLD);
+                    ClientShopData.buybackBonusDone ? IOStyle.TEXT_2 : IOStyle.ORANGE);
         }
         // 付费刷新每日收购：与商店的刷新**完全分开**（各自的次数与价格）。
-        boolean canBuybackRefresh = ClientShopData.buybackRefreshCost >= 0L;
+        PriceSpec bbRefreshSpec = ClientShopData.resolveBuybackRefreshSpec();
+        boolean canBuybackRefresh = bbRefreshSpec != null;
         addRegion(byX, byY, REFRESH_W, REFRESH_H, "refresh_daily_buyback", null, null);
         drawButton(g, byX, byY, REFRESH_W, REFRESH_H,
                 Component.translatable("gui.module_shop.refresh_buyback"), canBuybackRefresh);
@@ -1888,7 +3167,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             int left = Math.max(0, ClientShopData.buybackRefreshMax - ClientShopData.buybackRefreshUsed);
             g.renderTooltip(this.font, canBuybackRefresh
                     ? Component.translatable("gui.module_shop.refresh_buyback_tooltip",
-                            ClientShopData.money(ClientShopData.buybackRefreshCost), left,
+                            PriceDisplay.formatPlain(bbRefreshSpec), left,
                             ClientShopData.buybackRefreshMax)
                     : Component.translatable("gui.module_shop.refresh_buyback_tooltip_none",
                             ClientShopData.buybackRefreshMax), mx, my);
@@ -1928,6 +3207,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     // =========================================================== 拍卖
 
     private void drawAuction(GuiGraphics g, int cx, int cy, int cw, int ch, int mx, int my) {
+        // 拍卖列表单独下发：打开拍卖页时拉取（有节流，版本未变不重复请求）
+        cn.autoforged.module_shop.client.AuctionClient.ensureList();
         List<ClientShopData.AuctionView> auctions = ClientShopData.auctions;
         int pageSize = 5;
         int pages = Math.max(1, (auctions.size() + pageSize - 1) / pageSize);
@@ -1942,12 +3223,12 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             Bricks.slot(g, cx + 8, y + 5);
             g.renderItem(view.stack, cx + 8, y + 5);
             g.renderItemDecorations(this.font, view.stack, cx + 8, y + 5);
-            g.drawString(this.font, view.stack.getHoverName(), cx + 32, y + 4, COLOR_TEXT, false);
+            g.drawString(this.font, net.minecraft.network.chat.Component.literal(cn.autoforged.module_shop.client.ui.ItemNames.display(view.stack)), cx + 32, y + 4, IOStyle.TEXT, false);
             String sellerText = Component.translatable("gui.module_shop.auction_seller", view.seller).getString();
             if (view.own) {
                 sellerText = sellerText + " " + Component.translatable("gui.module_shop.auction_mine").getString();
             }
-            g.drawString(this.font, sellerText, cx + 32, y + 15, view.own ? COLOR_GOLD : COLOR_MUTED, false);
+            g.drawString(this.font, sellerText, cx + 32, y + 15, view.own ? IOStyle.ORANGE : IOStyle.TEXT_2, false);
             // 最高出价者：玩家一眼看出自己是不是还在最高价（出价的钱是否还处于冻结中）。
             if (view.currentBid > 0L && view.topBidder != null && !view.topBidder.isEmpty()) {
                 String top = Component.translatable(view.topMe
@@ -1955,7 +3236,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                         : "gui.module_shop.auction_top_bidder", view.topBidder).getString();
                 int topX = cx + cw - 6 - this.font.width(top);
                 if (topX > cx + 32 + this.font.width(sellerText) + 4) {
-                    g.drawString(this.font, top, topX, y + 15, view.topMe ? COLOR_GOLD : COLOR_MUTED, false);
+                    g.drawString(this.font, top, topX, y + 15, view.topMe ? IOStyle.ORANGE : IOStyle.TEXT_2, false);
                 }
             }
             // 需求三：竞拍倒计时实时递减（快照剩余时间减去快照到达后的本地流逝时间）。
@@ -1967,24 +3248,24 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             // 需求三：价格展示居中，同时显示上一轮出价（划掉）与当前最高出价。
             if (view.currentBid > 0) {
                 String current = Component.translatable("gui.module_shop.auction_current_bid",
-                        ClientShopData.money(view.currentBid)).getString();
-                g.drawString(this.font, current, centerX - this.font.width(current) / 2, y + 4, COLOR_GOLD, false);
+                        PriceDisplay.formatPlain(view.specOf(view.currentBid))).getString();
+                g.drawString(this.font, current, centerX - this.font.width(current) / 2, y + 4, IOStyle.ORANGE, false);
                 if (view.lastBid > 0) {
                     String last = Component.translatable("gui.module_shop.auction_last_bid",
-                            ClientShopData.money(view.lastBid)).getString();
+                            PriceDisplay.formatPlain(view.specOf(view.lastBid))).getString();
                     int lastX = centerX - this.font.width(last) / 2;
                     g.drawString(this.font, last, lastX, y + 15, 0x8A8A9A, false);
                     g.fill(lastX, y + 19, lastX + this.font.width(last), y + 20, 0x8A8A9A);
                 }
             } else {
                 String start = Component.translatable("gui.module_shop.auction_start",
-                        ClientShopData.money(view.startPrice)).getString();
-                g.drawString(this.font, start, centerX - this.font.width(start) / 2, y + 4, COLOR_GOLD, false);
-                g.drawString(this.font, time, centerX - this.font.width(time) / 2, y + 15, COLOR_MUTED, false);
+                        PriceDisplay.formatPlain(view.specOf(view.startPrice))).getString();
+                g.drawString(this.font, start, centerX - this.font.width(start) / 2, y + 4, IOStyle.ORANGE, false);
+                g.drawString(this.font, time, centerX - this.font.width(time) / 2, y + 15, IOStyle.TEXT_2, false);
             }
             // 剩余时间固定右上角显示，避免与居中的价格文字重叠。
             if (view.currentBid > 0) {
-                g.drawString(this.font, time, cx + cw - 6 - this.font.width(time), y + 4, COLOR_MUTED, false);
+                g.drawString(this.font, time, cx + cw - 6 - this.font.width(time), y + 4, IOStyle.TEXT_2, false);
             }
             // 需求 3：悬停物品图标时显示名称/附魔/属性/NBT/标签等完整信息。
             if (mx >= cx + 8 && mx < cx + 24 && my >= y + 5 && my < y + 21) {
@@ -1999,7 +3280,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             }
         }
         if (auctions.isEmpty()) {
-            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.auction_empty"), cx + cw / 2, cy + 50, COLOR_MUTED);
+            IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.auction_empty"), cx + cw / 2, cy + 50, IOStyle.TEXT_2);
         }
         // 上架按钮
         CompoundTag add = new CompoundTag();
@@ -2013,7 +3294,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             addRegion(cx + 4, barY, 44, 16, "auction_prev", null, null);
             addRegion(cx + 52, barY, 44, 16, "auction_next", null, null);
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.page", auctionPage + 1, pages),
-                    cx + cw / 2, barMid(cy, ch, 9), COLOR_MUTED);
+                    cx + cw / 2, barMid(cy, ch, 9), IOStyle.TEXT_2);
         }
     }
 
@@ -2050,8 +3331,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 int blockTop = sy + Math.max(1, (cellH - (lineH * 2 - 2)) / 2);
                 int textLeft = sx + 26;
                 int textRight = sx + cellW - 26;
-                Component priceText = Component.literal(ClientShopData.money(entry.price));
-                drawLabel(g, textLeft, blockTop, priceText, COLOR_GOLD, numScale);
+                Component priceText = Component.literal(PriceDisplay.formatPlain(entry.resolvePriceSpec()));
+                drawLabel(g, textLeft, blockTop, priceText, IOStyle.ORANGE, numScale);
                 // 「下架时间」限时时，在价格右侧显示剩余时间（右对齐到 X 按钮左边，放不下就不画）。
                 Component remain = stallRemainText(entry);
                 if (remain != null) {
@@ -2068,7 +3349,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                     stockColor = IOStyle.RED;
                 } else {
                     stockText = Component.translatable("gui.module_shop.stall_stock", entry.stock).getString();
-                    stockColor = COLOR_MUTED;
+                    stockColor = IOStyle.TEXT_2;
                 }
                 int stockY = blockTop + lineH;
                 drawLabel(g, textLeft, stockY, Component.literal(stockText), stockColor, numScale);
@@ -2113,8 +3394,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                         ClientShopData.stallExpireAmount);
         Component line2 = Component.translatable("gui.module_shop.stall.expire_current", current);
         drawSmallLabel(g, cx + 8, cy + 26, title, IOStyle.TEXT);
-        drawBarLabel(g, cx + 8, cy + 42, cx + cw - 8, line1, COLOR_MUTED);
-        drawBarLabel(g, cx + 8, cy + 56, cx + cw - 8, line2, COLOR_GOLD);
+        drawBarLabel(g, cx + 8, cy + 42, cx + cw - 8, line1, IOStyle.TEXT_2);
+        drawBarLabel(g, cx + 8, cy + 56, cx + cw - 8, line2, IOStyle.ORANGE);
     }
 
     /** 打开「摊位下架时间」设置：永久 / 游戏时间 / 现实时间 + 时长。 */
@@ -2241,7 +3522,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     /** 悬赏内容的一行文字（金币 + 物品）。 */
     private Component demandRewardLine(cn.autoforged.module_shop.data.DemandEntry entry) {
-        String money = entry.rewardMoney > 0L ? ClientShopData.money(entry.rewardMoney) : null;
+        PriceSpec rewardSpec = entry.resolveRewardSpec();
+        String money = rewardSpec.isValid() ? PriceDisplay.formatPlain(rewardSpec) : null;
         String item = entry.rewardItem != null && !entry.rewardItem.isEmpty()
                 ? entry.rewardItem.getHoverName().getString() + " x" + entry.rewardItem.getCount() : null;
         if (money != null && item != null) {
@@ -2259,12 +3541,12 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         int rowW = cw - 8;
         if (!ClientShopData.demandEnabled) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.demand.disabled"),
-                    cx + cw / 2, cy + 50, COLOR_MUTED);
+                    cx + cw / 2, cy + 50, IOStyle.TEXT_2);
         } else if (list.isEmpty()) {
             IOStyle.centerAt(g, this.font,
                     Component.translatable(this.demandOnlyMine ? "gui.module_shop.demand.empty_mine"
                             : "gui.module_shop.demand.empty"),
-                    cx + cw / 2, cy + 50, COLOR_MUTED);
+                    cx + cw / 2, cy + 50, IOStyle.TEXT_2);
         }
         var self = this.minecraft == null || this.minecraft.player == null ? null : this.minecraft.player.getUUID();
         int bottom = cy + ch - 20;   // 底栏留给「发起求购 / 只看我的」
@@ -2285,20 +3567,20 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             ItemStack want = entry.wants.isEmpty() ? ItemStack.EMPTY : entry.wants.get(0).display();
             g.renderItem(want, cx + 6, y + 2);
             g.renderItemDecorations(this.font, want, cx + 6, y + 2);
-            drawSmallLabel(g, cx + 26, y + 3, entry.summary(), COLOR_TEXT);
+            drawSmallLabel(g, cx + 26, y + 3, entry.summary(), IOStyle.TEXT);
             // 悬赏
             drawSmallLabel(g, cx + 26, y + 12, Component.translatable("gui.module_shop.demand.reward",
-                    demandRewardLine(entry)), COLOR_GOLD);
+                    demandRewardLine(entry)), IOStyle.ORANGE);
             // 发布者 + 剩余时间（右侧对齐）
             String who = entry.requesterName == null || entry.requesterName.isBlank() ? "?" : entry.requesterName;
             Component remain = demandRemainText(entry);
             Component right = remain == null ? Component.literal(who)
                     : Component.literal(who + "  " + remain.getString());
             int rightX = cx + 4 + rowW - 12 - (int) (this.font.width(right) * 0.8F);
-            drawSmallLabel(g, rightX, y + 7, right, COLOR_MUTED);
+            drawSmallLabel(g, rightX, y + 7, right, IOStyle.TEXT_2);
             // 展开/收起指示（▾ 展开中，▸ 收起）
             drawSmallLabel(g, cx + 4 + rowW - 10, y + 6,
-                    Component.literal(expanded ? "▾" : "▸"), COLOR_MUTED);
+                    Component.literal(expanded ? "▾" : "▸"), IOStyle.TEXT_2);
             CompoundTag extra = new CompoundTag();
             extra.putString("id", entry.id);
             addRegion(cx + 4, y, rowW - 2, headH, "demand_toggle", null, extra);
@@ -2319,7 +3601,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 Component.translatable(this.demandOnlyMine ? "gui.module_shop.demand.filter_all"
                         : "gui.module_shop.demand.filter_mine"));
         drawBarLabel(g, cx + 168, buttonY + 4, cx + cw - 6,
-                Component.translatable("gui.module_shop.demand.hint"), COLOR_MUTED);
+                Component.translatable("gui.module_shop.demand.hint"), IOStyle.TEXT_2);
     }
 
     /** 展开区域高度：每行物品 16px（两列），底部留一行按钮。 */
@@ -2360,7 +3642,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             // 名称 ×N（截断到列宽的一半，右边留给 需要/拥有）
             Component name = IOStyle.ellipsize(this.font, plainNameComponent(line.stack),
                     Math.max(24, colW - 18 - 56));
-            drawSmallLabel(g, cellX + 18, cellY + 3, name, COLOR_TEXT);
+            drawSmallLabel(g, cellX + 18, cellY + 3, name, IOStyle.TEXT);
             Component counts = Component.translatable("gui.module_shop.demand.need_have",
                     line.count, have);
             Component mark = Component.literal(" " + (enough ? "√" : "×"));
@@ -2435,10 +3717,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                                 Component.translatable("gui.module_shop.choice.expire_mode."
                                         + ClientShopData.demandExpireMode),
                                 ClientShopData.demandExpireAmount));
-        drawBarLabel(g, cx + 6, cy + 20, cx + cw - 6, summary, COLOR_GOLD);
+        drawBarLabel(g, cx + 6, cy + 20, cx + cw - 6, summary, IOStyle.ORANGE);
         if (list.isEmpty()) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.demand.empty"),
-                    cx + cw / 2, cy + 50, COLOR_MUTED);
+                    cx + cw / 2, cy + 50, IOStyle.TEXT_2);
             return;
         }
         int rowW = cw - 8;
@@ -2451,13 +3733,13 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             IOStyle.ring(g, cx + 4, ry, rowW, 18, 0, IOStyle.BORDER_DIM);
             ItemStack want = entry.wants.isEmpty() ? ItemStack.EMPTY : entry.wants.get(0).display();
             g.renderItem(want, cx + 6, ry + 1);
-            drawSmallLabel(g, cx + 26, ry + 4, entry.summary(), COLOR_TEXT);
+            drawSmallLabel(g, cx + 26, ry + 4, entry.summary(), IOStyle.TEXT);
             Component reward = Component.translatable("gui.module_shop.demand.reward",
                     demandRewardLine(entry));
-            drawSmallLabel(g, cx + 130, ry + 4, reward, COLOR_GOLD);
+            drawSmallLabel(g, cx + 130, ry + 4, reward, IOStyle.ORANGE);
             String who = entry.requesterName == null || entry.requesterName.isBlank() ? "?" : entry.requesterName;
             int whoX = cx + 4 + rowW - 8 - this.font.width(who);
-            drawSmallLabel(g, whoX, ry + 4, Component.literal(who), COLOR_MUTED);
+            drawSmallLabel(g, whoX, ry + 4, Component.literal(who), IOStyle.TEXT_2);
             CompoundTag extra = new CompoundTag();
             extra.putString("id", entry.id);
             addRegion(cx + 4, ry, rowW - 2, 18, "demand_admin_cancel", null, extra);
@@ -2761,49 +4043,25 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     }
 
     /** 第七轮：按邮件业务类型取配色（列表状态点与标题色）。 */
+    // 邮件展示规则已提取到 MailFormat（新旧邮箱界面共用）；这里保留同名方法供旧代码调用。
     private static int kindColor(cn.autoforged.module_shop.data.MailEntry entry) {
-        String kind = entry.kind == null ? "" : entry.kind;
-        return switch (kind) {
-            case "auction" -> 0xFFB388FF;
-            case "stall" -> IOStyle.BLUE;
-            case "trade" -> 0xFF4DD0E1;
-            case "redeem" -> IOStyle.ORANGE;
-            case "activity" -> IOStyle.GREEN;
-            case "refund" -> IOStyle.TEXT_2;
-            default -> IOStyle.ORANGE;
-        };
+        return MailFormat.kindColor(entry);
     }
 
     /** 邮箱排序：星标优先，其次按时间倒序（最新在上）。 */
     private static List<cn.autoforged.module_shop.data.MailEntry> sortedMails() {
-        List<cn.autoforged.module_shop.data.MailEntry> list =
-                new ArrayList<>(ClientShopData.mail);
-        list.sort((a, b) -> {
-            if (a.starred != b.starred) {
-                return a.starred ? -1 : 1;
-            }
-            return Long.compare(b.sentAt, a.sentAt);
-        });
-        return list;
+        return MailFormat.sorted();
     }
 
     /** 当前选中的邮件（没有则返回 null）。 */
     private static cn.autoforged.module_shop.data.MailEntry selectedMail(
             List<cn.autoforged.module_shop.data.MailEntry> mails) {
-        for (var entry : mails) {
-            if (entry.mailId.equals(ClientShopData.mailSelected)) {
-                return entry;
-            }
-        }
-        return mails.isEmpty() ? null : mails.get(0);
+        return MailFormat.selected(mails);
     }
 
     /** 邮件标题：优先模板标题（自动转颜色代码），否则按来源生成说明。 */
     private static String mailTitle(cn.autoforged.module_shop.data.MailEntry entry) {
-        if (entry.title != null && !entry.title.isEmpty()) {
-            return entry.title;
-        }
-        return mailDescription(entry);
+        return MailFormat.title(entry);
     }
 
     /** 把 & 颜色代码转成 §（客户端渲染用）。 */
@@ -2813,12 +4071,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     /** 邮件时间文本。 */
     private static String mailTime(cn.autoforged.module_shop.data.MailEntry entry) {
-        if (entry.sentAt <= 0L) {
-            return "-";
-        }
-        return java.time.Instant.ofEpochMilli(entry.sentAt)
-                .atZone(java.time.ZoneId.systemDefault())
-                .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"));
+        return MailFormat.time(entry);
     }
 
     /** 按宽度自动换行绘制正文（支持 \n 与 § 颜色代码），最多画 5 行。 */
@@ -2854,35 +4107,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     /** 需求：根据邮件来源生成说明文字（物品退还 / 星币到账 / 管理员发放）。 */
     private static String mailDescription(cn.autoforged.module_shop.data.MailEntry entry) {
-        // 第八轮：一封邮件可带多件物品，说明文字用第一件代表（多件时加「等 N 件」）。
-        java.util.List<net.minecraft.world.item.ItemStack> items = entry.itemStacks();
-        String item = items.isEmpty() ? "-" : items.get(0).getHoverName().getString();
-        String itemWithCount = items.isEmpty() ? "-"
-                : items.get(0).getHoverName().getString() + "×" + items.get(0).getCount()
-                        + (items.size() > 1 ? " 等 " + items.size() + " 件" : "");
-        String sender = entry.sender == null || entry.sender.isEmpty() ? "-" : entry.sender;
-        // 管理员发放的邮件单独说明：物品类显示物品名，金额类显示星币数。
-        if ("admin_grant".equals(entry.source)) {
-            return entry.type == cn.autoforged.module_shop.data.MailType.MONEY
-                    ? Component.translatable("gui.module_shop.mail.desc.admin_grant_money", sender,
-                            ClientShopData.money(entry.currencyAmount)).getString()
-                    : Component.translatable("gui.module_shop.mail.desc.admin_grant_item", sender, itemWithCount)
-                            .getString();
-        }
-        String key = switch (entry.source == null ? "" : entry.source) {
-            case "stall_unsold" -> "gui.module_shop.mail.desc.stall_unsold";
-            case "stall_bought" -> "gui.module_shop.mail.desc.stall_bought";
-            case "auction_refund" -> "gui.module_shop.mail.desc.auction_refund";
-            case "auction_unsold" -> "gui.module_shop.mail.desc.auction_unsold";
-            case "auction_won" -> "gui.module_shop.mail.desc.auction_won";
-            case "stall_sold" -> "gui.module_shop.mail.desc.stall_sold";
-            case "auction_sold" -> "gui.module_shop.mail.desc.auction_sold";
-            default -> "gui.module_shop.mail.desc.default";
-        };
-        if (entry.type == cn.autoforged.module_shop.data.MailType.MONEY) {
-            return Component.translatable(key, sender, item, ClientShopData.money(entry.currencyAmount)).getString();
-        }
-        return Component.translatable(key, item).getString();
+        return MailFormat.description(entry);
     }
 
     // =========================================================== 管理员配置（仅 /shop admin 打开）
@@ -3012,9 +4237,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                         if (act.note != null && !act.note.isEmpty()) {
                             addSignInWrapped(lines, act.note, net.minecraft.ChatFormatting.GRAY);
                         }
-                        if (act.money > 0L) {
+                        PriceSpec actSpec = act.resolveMoneySpec();
+                        if (actSpec.isValid()) {
                             lines.add(Component.translatable("gui.module_shop.signin.activity_money",
-                                    ClientShopData.money(act.money)).withStyle(net.minecraft.ChatFormatting.GOLD));
+                                    PriceDisplay.formatPlain(actSpec)).withStyle(net.minecraft.ChatFormatting.GOLD));
                         }
                         String itemNames = signInItemNames(act.itemText);
                         if (!itemNames.isEmpty()) {
@@ -3026,7 +4252,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                     this.signInTipLines = lines;
                 } else if (allowMakeup && canMakeup) {
                     this.signInTip = Component.translatable("gui.module_shop.signin.makeup_tip",
-                            ClientShopData.money(ClientShopData.signInMakeupCost), date.toString());
+                            PriceDisplay.formatPlain(ClientShopData.signInMakeupSpec), date.toString());
                 } else if (isToday) {
                     this.signInTip = Component.translatable(signed
                             ? "gui.module_shop.signin.done" : "gui.module_shop.signin.do");
@@ -3074,13 +4300,13 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         }
         if (IOStyle.inside(cx + 4, btnY, btnW, 14, mx, my)) {
             this.signInTip = Component.translatable("gui.module_shop.signin.gain_tip",
-                    ClientShopData.money(ClientShopData.signInBase + signInTierBonus()));
+                    signInDailyRewardSummary());
         }
         int statusX = cx + 4 + btnW + 8;
         drawBarLabel(g, statusX, barTextY(cy, ch), cx + cw - 6,
                 Component.translatable(done ? "gui.module_shop.signin.status_done"
                         : "gui.module_shop.signin.status", ClientShopData.signInStreak,
-                        ClientShopData.money(ClientShopData.signInBase + signInTierBonus())), COLOR_MUTED);
+                        signInDailyRewardSummary()), IOStyle.TEXT_2);
 
         // 悬浮提示统一留到最后画：画在格子里会被后画的格子盖住。
         if (this.signInTipLines != null && !this.signInTipLines.isEmpty()) {
@@ -3140,9 +4366,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 lastRight = lx + lw;
             }
             if (IOStyle.inside(dx - 6, dotY - 2, 12, 9, mx, my)) {
-                long money = i < ClientShopData.signInMileMoney.length ? ClientShopData.signInMileMoney[i] : 0L;
+                PriceSpec mileSpec = ClientShopData.signInMileSpec(i);
+                PriceSpec tierSpec = signInTierSpecAtDay(days[i]);
                 this.signInTip = Component.translatable("gui.module_shop.signin.mile_tip", days[i],
-                        ClientShopData.money(money), ClientShopData.money(signInTierBonusAt(days[i])));
+                        PriceDisplay.formatPlain(mileSpec), PriceDisplay.formatPlain(tierSpec));
             }
         }
         // 右端「第 N 轮」：每满一轮，里程档位重新可领。
@@ -3251,6 +4478,40 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         return bonus;
     }
 
+    private static PriceSpec signInTierSpecAtDay(int day) {
+        if (!ClientShopData.signInCumulative) {
+            return PriceSpec.ZERO;
+        }
+        PriceSpec best = PriceSpec.ZERO;
+        for (int i = 0; i < ClientShopData.signInTierDays.length; i++) {
+            if (day >= ClientShopData.signInTierDays[i]) {
+                PriceSpec candidate = ClientShopData.signInTierSpec(i);
+                if (candidate.isValid()) {
+                    best = candidate;
+                }
+            }
+        }
+        return best;
+    }
+
+    private static String signInDailyRewardSummary() {
+        PriceSpec base = ClientShopData.signInBaseSpec;
+        PriceSpec bonus = signInTierSpecAtDay(ClientShopData.signInStreak);
+        if (base.mode == PriceSpec.CurrencyMode.STAR_ONLY && bonus.mode == PriceSpec.CurrencyMode.STAR_ONLY) {
+            return ClientShopData.money(base.starPrice + bonus.starPrice);
+        }
+        if (base.isZero() && bonus.isZero()) {
+            return ClientShopData.money(0L);
+        }
+        if (bonus.isZero()) {
+            return PriceDisplay.formatPlain(base);
+        }
+        if (base.isZero()) {
+            return PriceDisplay.formatPlain(bonus);
+        }
+        return PriceDisplay.formatPlain(base) + " + " + PriceDisplay.formatPlain(bonus);
+    }
+
     /** 交易 / 转账：在线玩家选择（同一个渲染，{@code transfer} 只影响文案和点击后的行为）。 */
     private void drawPlayerPicker(GuiGraphics g, int cx, int cy, int cw, int ch, int mx, int my, boolean transfer) {
         // 搜索框底：真正的输入框是 EditBox（文字由它在 super.render 里画，会自动盖在这层底上）。
@@ -3290,7 +4551,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         }
         if (players.isEmpty()) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.trade.no_online"),
-                    cx + cw / 2, top + 44, COLOR_MUTED);
+                    cx + cw / 2, top + 44, IOStyle.TEXT_2);
         }
         // 底栏：交易页有「交易请求」入口（带红点）；有分页时右侧放翻页 + 页码。
         int barY = barMid(cy, ch, 14);
@@ -3313,7 +4574,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                     IOStyle.inside(nextX, barY, 42, 14, mx, my), false, false);
             Component pageLabel = Component.translatable("gui.module_shop.page", this.tradePage + 1, pages);
             drawSmallLabel(g, prevX - 8 - Math.round(this.font.width(pageLabel) * 0.8F), barTextY(cy, ch),
-                    pageLabel, COLOR_MUTED);
+                    pageLabel, IOStyle.TEXT_2);
         }
     }
 
@@ -3404,7 +4665,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                             Component.translatable("gui.module_shop.admin_current",
                                     tabLabelWithOriginal(adminMode)),
                             currentRight - currentX),
-                    COLOR_GOLD);
+                    IOStyle.ORANGE);
         }
         // 下拉面板的位置：紧贴按钮下方。**被它盖住的那几行商品不画**——物品图标属于另一批渲染，
         // 会穿透面板浮在上面（编辑布局那边踩过同一个坑）。
@@ -3454,20 +4715,26 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             Bricks.slot(g, cx + 16, y);
             g.renderItem(offer.stack, cx + 16, y);
             g.renderItemDecorations(this.font, offer.stack, cx + 16, y);
-            g.drawString(this.font, offer.stack.getHoverName(), cx + 40, y + 1, COLOR_TEXT, false);
+            g.drawString(this.font, net.minecraft.network.chat.Component.literal(cn.autoforged.module_shop.client.ui.ItemNames.display(offer.stack)), cx + 40, y + 1, IOStyle.TEXT, false);
             if (!ship) {
                 // 出货箱的"条目"是兑换规则，没有品质可言，这一列留空。
                 g.drawString(this.font, Component.translatable(offer.rarity.translationKey()), cx + 130, y + 1,
                         offer.rarity.color(), true);
             }
-            g.drawString(this.font, ClientShopData.money(offer.price), cx + 176, y + 1, COLOR_GOLD, false);
+            g.drawString(this.font, PriceDisplay.formatPlain(offer.resolvePriceSpec()), cx + 176, y + 1,
+                    IOStyle.ORANGE, false);
             // 需求 6/7：显示管理员配置的数量（未配置时展示实际生效的默认上限）。
             // 购物城的数量字段是**库存**（-1 = 无限）、出货箱的是**每日份数**（0 = 不限），语义不同所以分开显示。
             Component amountText;
             if (mall) {
+                boolean perm = index < ClientShopData.adminMallPermanent.size()
+                        && Boolean.TRUE.equals(ClientShopData.adminMallPermanent.get(index));
                 amountText = offer.amount < 0
                         ? Component.translatable("gui.module_shop.mall.stock_unlimited")
                         : Component.translatable("gui.module_shop.admin_stock", offer.amount);
+                if (perm) {
+                    amountText = Component.literal(amountText.getString() + " [永限]");
+                }
             } else if (ship) {
                 // 规则条目没有"每日不限"这种占位文字：设置了才显示「每日 N」，没设置就留空。
                 amountText = offer.amount <= 0 ? Component.empty()
@@ -3477,7 +4744,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                         : offer.amountOr(Config.INSTANCE.buybackCapacity.get());
                 amountText = Component.translatable("gui.module_shop.admin_amount", effectiveAmount);
             }
-            g.drawString(this.font, amountText, cx + 244, y + 1, COLOR_MUTED, true);
+            g.drawString(this.font, amountText, cx + 244, y + 1, IOStyle.TEXT_2, true);
             CompoundTag extra = new CompoundTag();
             extra.putString("mode", adminMode);
             extra.putInt("index", index);
@@ -3496,7 +4763,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             } else if (demands) {
                 drawDemandAdminList(g, cx, cy, cw, ch, mx, my);
             } else {
-                IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.admin_empty"), cx + cw / 2, cy + 60, COLOR_MUTED);
+                IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.admin_empty"), cx + cw / 2, cy + 60, IOStyle.TEXT_2);
             }
         }
         // 「选择模块编辑」下拉：最后画，盖在商品行之上；点一项即切到该模块的编辑界面。
@@ -3574,14 +4841,14 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 drawSmallLabelButton(g, dExpireX, rowA, btnW, 14,
                         Component.translatable("gui.module_shop.demand.expire"),
                         IOStyle.inside(dExpireX, rowA, btnW, 14, mx, my),
-                        !"permanent".equals(ClientShopData.demandExpireMode), false);
+                        !"permanent".equals(ClientShopData.demandExpireMode) && ClientShopData.demandExpireAmount > 0, false);
             } else if (stalls) {
                 int expireX = cx + 4;
                 addRegion(expireX, rowA, btnW, 14, "stall_expire", null, null);
                 drawSmallLabelButton(g, expireX, rowA, btnW, 14,
                         Component.translatable("gui.module_shop.stall.expire"),
                         IOStyle.inside(expireX, rowA, btnW, 14, mx, my),
-                        !"permanent".equals(ClientShopData.stallExpireMode), false);
+                        !"permanent".equals(ClientShopData.stallExpireMode) && ClientShopData.stallExpireAmount > 0, false);
             } else if (mall) {
                 addRegion(genX, rowA, btnW, 14, "mall_import", null, null);
                 drawSmallLabelButton(g, genX, rowA, btnW, 14,
@@ -3604,9 +4871,15 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                         Component.translatable("gui.module_shop.shipping.daily_limits"),
                         IOStyle.inside(genX, rowA, btnW, 14, mx, my), false, false);
             } else {
-                addRegion(genX, rowA, btnW, 14, "admin_gen_set", null, null);
+                CompoundTag modeExtra = new CompoundTag();
+                modeExtra.putString("mode", adminMode);
+                addRegion(genX, rowA, btnW, 14, "admin_gen_set", null, modeExtra);
                 drawSmallLabelButton(g, genX, rowA, btnW, 14,
                         Component.translatable("gui.module_shop.admin_gen"), false);
+                int rerollX = genX + btnW + btnGap;
+                addRegion(rerollX, rowA, btnW, 14, "admin_reroll_daily", null, modeExtra);
+                drawSmallLabelButton(g, rerollX, rowA, btnW, 14,
+                        Component.translatableWithFallback("gui.module_shop.admin_reroll", "全服重抽"), false);
             }
         }
         // 底栏第二行：翻页 → 页码 → 当前奖励金额 → 操作提示，一律**从左往右依次排**（按实际文字宽度推进），
@@ -3620,12 +4893,12 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 drawSignInCalendar(g, cx, cy + 20, cw, this.signInEdit, false, mx, my);
             }
             Component line1 = Component.translatable("gui.module_shop.signin.admin_line1",
-                    ClientShopData.money(ClientShopData.signInBase),
-                    ClientShopData.money(ClientShopData.signInMakeupCost),
+                    PriceDisplay.formatPlain(ClientShopData.signInBaseSpec),
+                    PriceDisplay.formatPlain(ClientShopData.signInMakeupSpec),
                     ClientShopData.signInMakeupDays);
             drawBarLabel(g, cx + 4, rowB + 3, cx + cw - 6,
                     this.signInEdit ? Component.translatable("gui.module_shop.signin.edit_mode") : line1,
-                    this.signInEdit ? IOStyle.ORANGE : COLOR_GOLD);
+                    this.signInEdit ? IOStyle.ORANGE : IOStyle.ORANGE);
             return;
         }
         int labelY = rowB + 3;
@@ -3641,17 +4914,17 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             drawSmallLabelButton(g, cx + 50, rowB, 42, 14, Component.translatable("gui.module_shop.page_next"), false);
             Component pageLabel = Component.translatable("gui.module_shop.page", adminPage + 1, pages);
             cursorX = cx + 98;
-            drawSmallLabel(g, cursorX, labelY, pageLabel, COLOR_MUTED);
+            drawSmallLabel(g, cursorX, labelY, pageLabel, IOStyle.TEXT_2);
             cursorX += (int) (this.font.width(pageLabel) * 0.8F) + 12;
         }
         // 第八项：管理员界面直接显示当前收购全清奖励金额。
         Component bonusValue = Component.translatable("gui.module_shop.buyback_bonus_value",
-                ClientShopData.money(ClientShopData.buybackBonus));
-        drawSmallLabel(g, cursorX, labelY, bonusValue, COLOR_GOLD);
+                PriceDisplay.formatPlain(ClientShopData.buybackBonusSpec));
+        drawSmallLabel(g, cursorX, labelY, bonusValue, IOStyle.ORANGE);
         cursorX += (int) (this.font.width(bonusValue) * 0.8F) + 12;
         // 操作提示接在后面，超宽自动截断，永远不会压到左边的页码 / 金额。
         drawBarLabel(g, cursorX, labelY, cx + cw - 6,
-                Component.translatable("gui.module_shop.admin_hint"), COLOR_MUTED);
+                Component.translatable("gui.module_shop.admin_hint"), IOStyle.TEXT_2);
     }
 
     /**
@@ -3844,7 +5117,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         int viewH = Math.max(20, ch - BAR_H - 10);
         if (list.isEmpty()) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.exchange.empty"),
-                    cx + cw / 2, cy + 40, COLOR_MUTED);
+                    cx + cw / 2, cy + 40, IOStyle.TEXT_2);
         } else {
             int first = Mth.clamp(ClientShopData.lastExchangeScrollRow, 0, Math.max(0, list.size() - 1));
             ClientShopData.lastExchangeScrollRow = first;
@@ -3885,7 +5158,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             hintX = cx + 4 + 78 + BAR_GAP;
         }
         drawBarLabel(g, hintX, barTextY(cy, ch), cx + cw - 6,
-                Component.translatable("gui.module_shop.exchange.hint"), COLOR_MUTED);
+                Component.translatable("gui.module_shop.exchange.hint"), IOStyle.TEXT_2);
     }
 
     /** 单行兑换货币条。 */
@@ -3904,24 +5177,31 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         g.renderItem(entry.stack, cx + 8, y + 3);
         g.renderItemDecorations(this.font, entry.stack, cx + 8, y + 3);
         // 名称过长时截断，避免压到右侧汇率。
-        String name = this.font.plainSubstrByWidth(entry.stack.getHoverName().getString(), open ? 120 : 96);
-        g.drawString(this.font, name, cx + 30, y + 7, COLOR_TEXT, false);
+        String name = this.font.plainSubstrByWidth(cn.autoforged.module_shop.client.ui.ItemNames.display(entry.stack), open ? 120 : 96);
+        g.drawString(this.font, name, cx + 30, y + 7, IOStyle.TEXT, false);
         // “该货币 = 多少星币”
         String rate = Component.translatable("gui.module_shop.exchange.rate",
                 ClientShopData.money(entry.value)).getString();
         if (open) {
-            drawSmallLabel(g, cx + 30 + this.font.width(name) + 8, y + 8, Component.literal(rate), COLOR_GOLD);
+            drawSmallLabel(g, cx + 30 + this.font.width(name) + 8, y + 8, Component.literal(rate), IOStyle.ORANGE);
         } else {
-            g.drawString(this.font, rate, cx + cw - 24 - this.font.width(rate), y + 7, COLOR_GOLD, false);
-            g.drawString(this.font, "v", cx + cw - 16, y + 7, COLOR_MUTED, false);
+            g.drawString(this.font, rate, cx + cw - 24 - this.font.width(rate), y + 7, IOStyle.ORANGE, false);
+            g.drawString(this.font, "v", cx + cw - 16, y + 7, IOStyle.TEXT_2, false);
         }
         if (open) {
-            // 展开行：左边显示持有量与可取出上限，右边是操作按钮。
+            // 展开行：左边显示持有量、可取出上限与每日剩余限额，右边是操作按钮。
+            String ownedExtra = entry.dailyDepositLimit > 0
+                    ? " (" + Math.max(0, entry.dailyDepositLimit - entry.depositUsedToday) + "/" + entry.dailyDepositLimit + ")"
+                    : "";
             drawSmallLabel(g, cx + 8, y + 32,
-                    Component.translatable("gui.module_shop.exchange.owned", entry.owned), COLOR_MUTED);
+                    Component.literal(Component.translatable("gui.module_shop.exchange.owned", entry.owned).getString() + ownedExtra),
+                    IOStyle.TEXT_2);
             long affordable = entry.value > 0L ? ClientShopData.balance / entry.value : 0L;
-            drawSmallLabel(g, cx + 60, y + 32,
-                    Component.translatable("gui.module_shop.exchange.can_withdraw", affordable), COLOR_MUTED);
+            if (entry.dailyWithdrawLimit > 0) {
+                affordable = Math.min(affordable, Math.max(0, entry.dailyWithdrawLimit - entry.withdrawUsedToday));
+            }
+            drawSmallLabel(g, cx + 74, y + 32,
+                    Component.translatable("gui.module_shop.exchange.can_withdraw", affordable), IOStyle.TEXT_2);
 
             // 按钮改小一号（0.7 倍字号 + 38×12），右侧四个按钮一共 164px，
             // 左边「背包 / 可取」那两行小字因此绝不会被压到。
@@ -3970,28 +5250,20 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     // =========================================================== 购物城（新增模块）
 
     /** 一件商品的注册名（收藏 key）。 */
-    private static String mallItemId(ClientShopData.MallView view) {
+    public static String mallItemId(ClientShopData.MallView view) {
         var id = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(view.stack.getItem());
         return id == null ? "" : id.toString();
     }
 
-    /** 模组的显示名（拿不到就退回命名空间）。 */
-    private static String mallModName(String namespace) {
-        if (namespace == null || namespace.isEmpty()) {
-            return "";
-        }
-        try {
-            return net.minecraftforge.fml.ModList.get().getModContainerById(namespace)
-                    .map(c -> c.getModInfo().getDisplayName())
-                    .orElse(namespace);
-        } catch (Throwable ignored) {
-            return namespace;
-        }
+    /** 模组的显示名（自动翻译 / 热门模组中文名包，拿不到就退回命名空间）。 */
+    public static String mallModName(String namespace) {
+        return cn.autoforged.module_shop.client.ModNames.displayName(namespace);
     }
 
-    /** 货架上出现过的模组（按显示名排序，缓存；货架变化时重建）。 */
-    private static List<String> mallCategories() {
-        if (mallModCacheSize == ClientShopData.mall.size()) {
+    /** 货架上出现过的模组（按显示名排序，缓存；货架或语言包变化时重建）。 */
+    public static List<String> mallCategories() {
+        String token = cn.autoforged.module_shop.client.ModNames.cacheToken();
+        if (mallModCacheSize == ClientShopData.mall.size() && token.equals(mallModCacheToken)) {
             return mallModCache;
         }
         java.util.TreeSet<String> set = new java.util.TreeSet<>();
@@ -3999,22 +5271,32 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             set.add(view.namespace());
         }
         List<String> list = new ArrayList<>(set);
-        list.sort(Comparator.comparing(ns -> mallModName(ns).toLowerCase()));
+        list.sort(cn.autoforged.module_shop.client.ModNames.namespaceComparator());
         mallModCache = list;
         mallModCacheSize = ClientShopData.mall.size();
+        mallModCacheToken = token;
         return list;
     }
 
     /** 当前搜索 / 分类 / 收藏过滤 + 排序后的商品列表（带缓存：货架上万件时不必每帧重排）。 */
-    private static List<ClientShopData.MallView> mallFiltered() {
+    public static List<ClientShopData.MallView> mallFiltered() {
+        return mallFiltered(ClientShopData.mallCategory);
+    }
+
+    /** 按指定分类过滤并排序后的购物城商品列表（不修改 {@link ClientShopData#mallCategory}）。 */
+    public static List<ClientShopData.MallView> mallFiltered(String categoryOverride) {
+        String category = categoryOverride == null ? "" : categoryOverride;
         String key = ClientShopData.mallVersion + "|" + ClientShopData.mall.size() + "|" + ClientShopData.mallSearch + "|"
-                + ClientShopData.mallCategory + "|" + ClientShopData.mallFavOnly + "|"
-                + ClientShopData.mallSort + "|" + MallFavorites.size();
-        if (key.equals(mallFilterKey)) {
+                + category + "|" + ClientShopData.mallFavOnly + "|"
+                + ClientShopData.mallSort + "|" + MallFavorites.size() + "|"
+                + cn.autoforged.module_shop.client.ModNames.cacheToken();
+        if (category.isEmpty() && key.equals(mallAllCatKey)) {
+            return mallAllCatCache;
+        }
+        if (!category.isEmpty() && key.equals(mallFilterKey)) {
             return mallFilterCache;
         }
-        String query = ClientShopData.mallSearch == null ? "" : ClientShopData.mallSearch.trim().toLowerCase();
-        String category = ClientShopData.mallCategory == null ? "" : ClientShopData.mallCategory;
+        String query = ClientShopData.mallSearch == null ? "" : ClientShopData.mallSearch.trim();
         List<ClientShopData.MallView> result = new ArrayList<>();
         for (ClientShopData.MallView view : ClientShopData.mall) {
             if (view.stack.isEmpty()) {
@@ -4026,12 +5308,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             if (ClientShopData.mallFavOnly && !MallFavorites.contains(mallItemId(view))) {
                 continue;
             }
-            if (!query.isEmpty()) {
-                String name = view.stack.getHoverName().getString().toLowerCase();
-                if (!name.contains(query) && !view.namespace().toLowerCase().contains(query)
-                        && !mallModName(view.namespace()).toLowerCase().contains(query)) {
-                    continue;
-                }
+            if (!query.isEmpty()
+                    && !cn.autoforged.module_shop.client.screen.shop.PageKit.matchesItemQuery(view.stack, query)) {
+                continue;
             }
             result.add(view);
         }
@@ -4044,26 +5323,37 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                     b.unlimited() ? Integer.MAX_VALUE : b.stock, a.unlimited() ? Integer.MAX_VALUE : a.stock));
             default -> result.sort(Comparator.comparingInt(v -> v.sort));
         }
-        mallFilterKey = key;
-        mallFilterCache = result;
+        if (category.isEmpty()) {
+            mallAllCatKey = key;
+            mallAllCatCache = result;
+        } else {
+            mallFilterKey = key;
+            mallFilterCache = result;
+        }
         return result;
     }
 
-    /** 库存文字：无限 / 售罄 / 剩余。 */
-    private Component mallStockText(ClientShopData.MallView view) {
+    /** 库存文字：无限 / 永久限购 / 售罄 / 剩余。 */
+    public static Component mallStockText(ClientShopData.MallView view) {
         if (view.unlimited()) {
             return Component.translatable("gui.module_shop.mall.stock_unlimited");
         }
         if (view.soldOut()) {
+            if (view.permanentLimit) {
+                return Component.translatableWithFallback("gui.module_shop.mall.permanent_sold_out", "已永久买满");
+            }
             // 个人库存下「售罄」其实是「你自己这份买完了」，别让玩家以为被别人抢光。
             return Component.translatable(ClientShopData.mallStockPersonal
                     ? "gui.module_shop.mall.personal_sold_out" : "gui.module_shop.mall.sold_out");
+        }
+        if (view.permanentLimit) {
+            return Component.translatableWithFallback("gui.module_shop.mall.permanent_stock", "永久限购 %s", view.stock);
         }
         return Component.translatable("gui.module_shop.mall.stock", view.stock);
     }
 
     /** 排序项的名称（0 默认 / 1 价格升 …）。 */
-    private static Component mallSortName(int sort) {
+    public static Component mallSortName(int sort) {
         return Component.translatable(switch (sort) {
             case 1 -> "gui.module_shop.mall.sort_price_asc";
             case 2 -> "gui.module_shop.mall.sort_price_desc";
@@ -4182,7 +5472,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 }
                 if (list.isEmpty()) {
                     IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.mall.empty"),
-                            cx + cw / 2, gridTop + gridH / 2, COLOR_MUTED);
+                            cx + cw / 2, gridTop + gridH / 2, IOStyle.TEXT_2);
                 }
                 // 底栏：页码 + 翻页 + 管理员按钮
                 int pageLabelY = barTextY(cy, ch);
@@ -4219,7 +5509,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                                             + ("game".equals(ClientShopData.mallRestockMode) ? "game" : "real")))
                             .append(Component.literal("  ·  ")).append(status);
                 }
-                drawBarLabel(g, cx + 4, pageLabelY, right, status, COLOR_MUTED);
+                drawBarLabel(g, cx + 4, pageLabelY, right, status, IOStyle.TEXT_2);
             }
         }
 
@@ -4301,9 +5591,10 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         g.renderItem(view.stack, x + w / 2 - 8, y + 4);
         g.renderItemDecorations(this.font, view.stack, x + w / 2 - 8, y + 4);
         mallCenter(g, x + w / 2, y + 23,
-                IOStyle.ellipsize(this.font, view.stack.getHoverName(), (int) ((w - 4) / MALL_TEXT)),
+                IOStyle.ellipsize(this.font, net.minecraft.network.chat.Component.literal(cn.autoforged.module_shop.client.ui.ItemNames.display(view.stack)), (int) ((w - 4) / MALL_TEXT)),
                 view.soldOut() ? IOStyle.TEXT_3 : IOStyle.TEXT);
-        mallCenter(g, x + w / 2, y + 33, Component.literal(ClientShopData.money(view.price)), IOStyle.ORANGE);
+        mallCenter(g, x + w / 2, y + 33, Component.literal(PriceDisplay.formatCompact(view.resolvePriceSpec())),
+                IOStyle.ORANGE);
         mallCenter(g, x + w / 2, y + 43, mallStockText(view),
                 view.soldOut() ? IOStyle.RED : (view.unlimited() ? IOStyle.TEXT_2 : IOStyle.GREEN));
         // 收藏星标：先注册它的命中区，保证点在星上时优先于「购买」。
@@ -4335,7 +5626,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         int per = Math.max(1, h / rowH);
         if (list.isEmpty()) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.mall.recent_empty"),
-                    cx + cw / 2, top + h / 2, COLOR_MUTED);
+                    cx + cw / 2, top + h / 2, IOStyle.TEXT_2);
             return;
         }
         int maxScroll = Math.max(0, list.size() - per);
@@ -4348,11 +5639,11 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             Bricks.slot(g, cx + 3, y + 3);
             g.renderItem(record.stack, cx + 3, y + 3);
             g.renderItemDecorations(this.font, record.stack, cx + 3, y + 3);
-            Component name = IOStyle.ellipsize(this.font, record.stack.getHoverName(), 120)
+            Component name = IOStyle.ellipsize(this.font, net.minecraft.network.chat.Component.literal(cn.autoforged.module_shop.client.ui.ItemNames.display(record.stack)), 120)
                     .copy().append(" ×" + record.count);
             drawSmallLabel(g, cx + 24, y + 3, name, IOStyle.TEXT);
             drawSmallLabelRight(g, cx + cw - 6, y + 3,
-                    Component.literal(ClientShopData.money(record.total)), IOStyle.ORANGE);
+                    Component.literal(PriceDisplay.formatPlain(record.resolveTotalSpec())), IOStyle.ORANGE);
             drawSmallLabel(g, cx + 24, y + 13, Component.literal(record.playerName), IOStyle.TEXT_2);
             drawSmallLabelRight(g, cx + cw - 6, y + 13,
                     Component.literal(mallTimeText(record.time)), IOStyle.TEXT_3);
@@ -4375,7 +5666,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         }
         // 底栏：记录条数提示
         drawBarLabel(g, cx + 4, barTextY(cy, ch), cx + cw - 6,
-                Component.translatable("gui.module_shop.mall.recent_status", list.size()), COLOR_MUTED);
+                Component.translatable("gui.module_shop.mall.recent_status", list.size()), IOStyle.TEXT_2);
     }
 
     /** 0.8 倍字号右对齐小字。 */
@@ -4412,7 +5703,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     }
 
     /** 最近购买的时间：MM-dd HH:mm。 */
-    private static String mallTimeText(long millis) {
+    public static String mallTimeText(long millis) {
         return java.time.Instant.ofEpochMilli(millis)
                 .atZone(java.time.ZoneId.systemDefault())
                 .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"));
@@ -4420,16 +5711,24 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     // =========================================================== 出货箱（新增模块）
 
-    /** 客户端估算：距离下一次结算还有多少**游戏内**时间（用客户端自己的世界时间，不用服务端下发）。 */
+    /** 客户端估算：距离下一次结算还有多少时间（正常按游戏内时间，永昼兜底按运行刻真实倒计时）。 */
     private static String shippingNextText() {
         var level = Minecraft.getInstance().level;
         if (level == null) {
             return "";
         }
-        long dayTime = level.getDayTime();
-        long timeOfDay = dayTime % 24000L;
         long start = ClientShopData.shipSettleTick;
-        long remain = timeOfDay <= start ? start - timeOfDay : 24000L - timeOfDay + start;
+        if (ClientShopData.shipUseGameTime) {
+            long remain = cn.autoforged.module_shop.shop.ShippingSettleClock.remainingTicks(level.getGameTime(), start);
+            long totalSec = Math.max(0L, remain) / 20L;
+            if (totalSec < 1L) {
+                return Component.translatable("gui.module_shop.shipping.settling").getString();
+            }
+            long m = totalSec / 60L;
+            long s = totalSec % 60L;
+            return m > 0L ? (m + "分" + (s > 0L ? s + "秒后" : "后")) : (s + "秒后");
+        }
+        long remain = cn.autoforged.module_shop.shop.ShippingSettleClock.remainingTicks(level.getDayTime(), start);
         long minutes = Math.max(0L, remain) * 60L / 1000L;   // 1000 刻 = 1 游戏小时
         if (remain <= 0L || minutes < 1L) {
             return Component.translatable("gui.module_shop.shipping.settling").getString();
@@ -4448,19 +5747,19 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         int barTop = barTop(cy, ch);
         if (!ClientShopData.shipEnabled) {
             IOStyle.centerAt(g, this.font, Component.translatable("gui.module_shop.shipping.disabled"),
-                    cx + cw / 2, cy + 60, COLOR_MUTED);
+                    cx + cw / 2, cy + 60, IOStyle.TEXT_2);
             return;
         }
         // ---------- 卡片一：本次结算 ----------
         int cardY = cy + 2;
         IOStyle.card(g, cx + 2, cardY, cw - 4, 58, 0);
         drawSmallLabel(g, cx + 10, cardY + 6, Component.translatable("gui.module_shop.shipping.level",
-                ClientShopData.shipLevel, ClientShopData.shipMaxLevel, ClientShopData.shipSlots), COLOR_GOLD);
+                ClientShopData.shipLevel, ClientShopData.shipMaxLevel, ClientShopData.shipSlots), IOStyle.ORANGE);
         drawSmallLabel(g, cx + 10, cardY + 20, Component.translatable("gui.module_shop.shipping.items",
-                ClientShopData.shipItems), COLOR_MUTED);
+                ClientShopData.shipItems), IOStyle.TEXT_2);
         // 本次结算金额（大一点、金色，一眼能看到）
         Component value = Component.translatable("gui.module_shop.shipping.pending",
-                ClientShopData.money(ClientShopData.shipValue));
+                PriceDisplay.formatLedgerSummary(ClientShopData.shipValue, ClientShopData.shipPhysValues));
         g.drawString(this.font, value, cx + 10, cardY + 34, IOStyle.ORANGE, false);
         Component today = ClientShopData.shipLimit > 0L
                 ? Component.translatable("gui.module_shop.shipping.today",
@@ -4468,17 +5767,19 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                         ClientShopData.money(ClientShopData.shipLimit))
                 : Component.translatable("gui.module_shop.shipping.today_unlimited",
                         ClientShopData.money(ClientShopData.shipSoldToday));
-        drawSmallLabelRight(g, cx + cw - 10, cardY + 36, today, COLOR_MUTED);
+        drawSmallLabelRight(g, cx + cw - 10, cardY + 36, today, IOStyle.TEXT_2);
         // ---------- 卡片二：结算时间（规则条数/正常与否不再占行，只有出错时才红字提醒）----------
         int card2Y = cardY + 62;
         IOStyle.card(g, cx + 2, card2Y, cw - 4, 50, 0);
-        Component settleTime = Component.translatable("gui.module_shop.shipping.settle_time",
-                String.format("%02d:%02d", (ClientShopData.shipSettleTick / 1000 + 6) % 24,
-                        (int) ((ClientShopData.shipSettleTick % 1000) * 60 / 1000)));
-        drawSmallLabel(g, cx + 10, card2Y + 8, settleTime, COLOR_MUTED);
+        Component settleTime = ClientShopData.shipUseGameTime
+                ? Component.translatableWithFallback("gui.module_shop.shipping.settle_gametime", "永昼兜底 · 每20分钟")
+                : Component.translatable("gui.module_shop.shipping.settle_time",
+                        String.format("%02d:%02d", (ClientShopData.shipSettleTick / 1000 + 6) % 24,
+                                (int) ((ClientShopData.shipSettleTick % 1000) * 60 / 1000)));
+        drawSmallLabel(g, cx + 10, card2Y + 8, settleTime, IOStyle.TEXT_2);
         drawSmallLabel(g, cx + 10, card2Y + 22, Component.translatable(
-                "gui.module_shop.shipping.reset_line", ClientShopData.shipResetTimeText), COLOR_MUTED);
-        drawSmallLabelRight(g, cx + cw - 10, card2Y + 8, Component.literal(shippingNextText()), COLOR_GOLD);
+                "gui.module_shop.shipping.reset_line", ClientShopData.shipResetTimeText), IOStyle.TEXT_2);
+        drawSmallLabelRight(g, cx + cw - 10, card2Y + 8, Component.literal(shippingNextText()), IOStyle.ORANGE);
 
         // ---------- 按钮 ----------
         int btnY = card2Y + 56;
@@ -4487,12 +5788,13 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 Component.translatable("gui.module_shop.shipping.open"),
                 IOStyle.inside(cx + 2, btnY, btnW, 20, mx, my), true, false);
         addRegion(cx + 2, btnY, btnW, 20, "shipping_open", null, null);
-        boolean canUpgrade = ClientShopData.shipUpgradeCost >= 0L
+        PriceSpec upSpec = ClientShopData.resolveShipUpgradeSpec();
+        boolean canUpgrade = upSpec != null
                 && ClientShopData.shipLevel < ClientShopData.shipMaxLevel;
         int upX = cx + 2 + btnW + 6;
         Component upLabel = canUpgrade
                 ? Component.translatable("gui.module_shop.shipping.upgrade_cost",
-                        ClientShopData.money(ClientShopData.shipUpgradeCost))
+                        PriceDisplay.formatPlain(upSpec))
                 : Component.translatable("gui.module_shop.shipping.max");
         drawSmallLabelButton(g, upX, btnY, btnW, 20, upLabel,
                 IOStyle.inside(upX, btnY, btnW, 20, mx, my), false, canUpgrade);
@@ -4502,7 +5804,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         // ---------- 底栏提示（规则错误不再在这里刷字：管理页会把出问题的规则**标红**）----------
         // 货币名用当前显示名（管理员改过就用改过的），不再在文案里写死「星币」。
         drawBarLabel(g, cx + 4, barTextY(cy, ch), cx + cw - 6,
-                Component.translatable("gui.module_shop.shipping.hint", ClientShopData.currencyName()), COLOR_MUTED);
+                Component.translatable("gui.module_shop.shipping.hint", ClientShopData.currencyName()), IOStyle.TEXT_2);
     }
 
     // =========================================================== 交互
@@ -4511,10 +5813,14 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     /** 鼠标滚轮：右侧内容区各自吃自己的滚轮；左侧模块列表（超过 6 个时）任何模式下都能滚。 */
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
-        int dir = delta > 0 ? -1 : 1;
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
+        if (v2Active()) {
+            return this.shellV2.mouseScrolled(mouseX, mouseY, scrollY)
+                    || super.mouseScrolled(mouseX, mouseY, scrollY);
+        }
+        int dir = scrollY > 0 ? -1 : 1;
         // 交易 / 转账页：滚轮翻在线玩家列表。
-        if (delta != 0.0D && !this.layoutEdit
+        if (scrollY != 0.0D && !this.layoutEdit && activePage() == null
                 && ("trade".equals(currentTab) || "transfer".equals(currentTab))
                 && mouseX >= contentX() && mouseX < contentX() + contentW()
                 && mouseY >= contentY() && mouseY < contentY() + contentH()) {
@@ -4526,12 +5832,12 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             }
         }
         // ① 鼠标停在左侧菜单列上 → 翻左侧模块列表（一屏固定 6 个，多余的靠滚轮）。
-        if (delta != 0.0D && mouseX >= left() - 4 && mouseX < left() + SIDEBAR_W
+        if (scrollY != 0.0D && mouseX >= left() - 4 && mouseX < left() + SIDEBAR_W
                 && mouseY >= top() && mouseY <= top() + PANEL_H) {
             int maxScroll = sidebarMaxScroll();
             if (maxScroll > 0) {
                 // 触控板 / 高分辨率滚轮会发小数：累积到一格再动，滚起来才连续（普通鼠标每次正好一格）。
-                this.sidebarWheelAccum += delta;
+                this.sidebarWheelAccum += scrollY;
                 int steps = 0;
                 while (this.sidebarWheelAccum >= 1.0D) {
                     this.sidebarWheelAccum -= 1.0D;
@@ -4548,7 +5854,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             return true;
         }
         // 编辑模式：滚轮用来翻「下方模块管理列表」（模块多的时候），不翻内容区。
-        if (this.layoutEdit && ClientShopData.canAdmin && delta != 0.0D) {
+        if (this.layoutEdit && ClientShopData.canAdmin && scrollY != 0.0D) {
             // 鼠标停在模块管理面板上 → 翻模块管理。
             if (IOStyle.inside(this.managerRect[0], this.managerRect[1], this.managerRect[2], this.managerRect[3],
                     mouseX, mouseY)) {
@@ -4559,8 +5865,15 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             // 编辑模式下滚轮不再翻内容区的列表（内容本来就没绘制）。
             return true;
         }
+        // 已迁移的页面：内容区里的滚轮交给页面（平滑滚动）
+        ShopPage page = activePage();
+        if (page != null && scrollY != 0.0D
+                && IOStyle.inside(contentX(), contentY(), contentW(), contentH(), mouseX, mouseY)
+                && page.mouseScrolled(pageFrame(mouseX, mouseY), mouseX, mouseY, scrollY)) {
+            return true;
+        }
         // 购物城：分类下拉 / 最近购买列表 / 货架翻页，各自吃自己的滚轮。
-        if (!this.layoutEdit && "mall".equals(currentTab) && delta != 0.0D) {
+        if (!this.layoutEdit && "mall".equals(currentTab) && scrollY != 0.0D) {
             if (this.mallCatOpen && IOStyle.inside(this.mallCatRect[0], this.mallCatRect[1], this.mallCatRect[2],
                     this.mallCatRect[3], mouseX, mouseY)) {
                 this.mallCatScroll = Math.max(0, this.mallCatScroll + dir);
@@ -4581,7 +5894,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             }
             return true;
         }
-        if (delta != 0.0D) {
+        if (scrollY != 0.0D) {
             int contentX = left() + SIDEBAR_W + 4;
             int contentY = top() + TOP_BAR_H + 2;
             int contentW = PANEL_W - SIDEBAR_W - 10;
@@ -4591,9 +5904,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 return true;
             }
             if (!IOStyle.inside(contentX, contentY, contentW, contentH, mouseX, mouseY)) {
-                return super.mouseScrolled(mouseX, mouseY, delta);
+                return super.mouseScrolled(mouseX, mouseY, scrollY);
             }
-            int step = delta > 0.0D ? -1 : 1;
+            int step = scrollY > 0.0D ? -1 : 1;
             switch (currentTab) {
                 case "auction" -> {
                     int pages = Math.max(1, (ClientShopData.auctions.size() + 4) / 5);
@@ -4658,11 +5971,33 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 }
             }
         }
-        return super.mouseScrolled(mouseX, mouseY, delta);
+        return super.mouseScrolled(mouseX, mouseY, scrollY);
     }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (v2Active()) {
+            return this.shellV2.mouseClicked(mouseX, mouseY, button) || super.mouseClicked(mouseX, mouseY, button);
+        }
+        // 皮肤菜单展开时：这次点击只归它处理 —— 点皮肤就切换（菜单不收起），点别处只负责收起
+        if (this.skinMenuOpen) {
+            if (button == 0) {
+                for (Region region : this.regions) {
+                    if (region.action != null && region.action.startsWith("skin_pick:")
+                            && IOStyle.inside(region.x, region.y, region.w, region.h, mouseX, mouseY)) {
+                        Bricks.click();
+                        onAction(region.action, region.extra);
+                        return true;
+                    }
+                }
+                if (skinMenuContains(mouseX, mouseY)) {
+                    return true;
+                }
+            }
+            Bricks.click();
+            this.skinMenuOpen = false;
+            return true;
+        }
         // 管理页的「选择模块编辑」下拉展开时：这次点击只归它处理 —— 点列表项就切换模块，
         // 点别处只负责收起（不会顺手触发后面的商品行编辑 / 删除）。
         if (this.adminModuleOpen && button == 0) {
@@ -4697,6 +6032,25 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         if (this.layoutEdit && ClientShopData.canAdmin && button == 0 && handleLayoutClick(mouseX, mouseY)) {
             return true;
         }
+        if (button == 0 && overBarTrack(this.sidebarBarRect, mouseX, mouseY)) {
+            Bricks.click();
+            this.sidebarBarDragging = true;
+            applySidebarBarAt(mouseY);
+            return true;
+        }
+        // 已迁移的页面只处理落在内容区里的点击；侧栏 / 标题栏的点击绝不交给页面
+        // （防止页面里“只按 y 判断”的命中区误吞侧栏点击）
+        ShopPage page = activePage();
+        if (page != null) {
+            PageFrame frame = pageFrame(mouseX, mouseY);
+            if (frame.contains(mouseX, mouseY)) {
+                if (page.mouseClicked(frame, mouseX, mouseY, button)) {
+                    return true;
+                }
+            } else {
+                page.clickedOutside();
+            }
+        }
         for (Region region : this.regions) {
             if (mouseX < region.x || mouseX >= region.x + region.w || mouseY < region.y || mouseY >= region.y + region.h) {
                 continue;
@@ -4718,6 +6072,13 @@ public class ShopScreen extends Screen implements JeiHoverSource {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (v2Active() && keyCode == GLFW.GLFW_KEY_ESCAPE && this.shellV2.escape()) {
+            return true;
+        }
+        if (this.skinMenuOpen && keyCode == GLFW.GLFW_KEY_ESCAPE) {
+            this.skinMenuOpen = false;
+            return true;
+        }
         // 购物城搜索框聚焦时：把按键（含数字 1-9）全部交给输入框，不要触发切页快捷键。
         if (this.mallSearchBox != null && this.mallSearchBox.isVisible() && this.mallSearchBox.isFocused()) {
             return super.keyPressed(keyCode, scanCode, modifiers);
@@ -4726,20 +6087,59 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         if (this.tradeSearchBox != null && this.tradeSearchBox.isVisible() && this.tradeSearchBox.isFocused()) {
             return super.keyPressed(keyCode, scanCode, modifiers);
         }
+        // 已迁移页面的输入框（隐藏的 EditBox）聚焦时同理：按键先交给输入框（含 Esc 清空搜索）
+        if (this.getFocused() instanceof net.minecraft.client.gui.components.EditBox box && box.isFocused()) {
+            if (box.keyPressed(keyCode, scanCode, modifiers)) {
+                return true;
+            }
+            return super.keyPressed(keyCode, scanCode, modifiers);
+        }
+        // 当前页面（含附属页 AddonPageAdapter）自身若消费了按键（或有输入框聚焦），不要再触发 1~9 切页
+        ShopPage active = activePage();
+        if (active != null) {
+            if (active.keyPressed(keyCode, scanCode, modifiers)) {
+                return true;
+            }
+            if (active.isInputFocused()) {
+                return super.keyPressed(keyCode, scanCode, modifiers);
+            }
+        }
         if (keyCode >= GLFW.GLFW_KEY_1 && keyCode <= GLFW.GLFW_KEY_9) {
             List<String> tabs = visibleTabs();
             int index = keyCode - GLFW.GLFW_KEY_1;
             if (index < tabs.size()) {
-                String tab = tabs.get(index);
-                // 需求 3：点击“玩家摊位”改为进入上架物品（摊位管理）界面，逛摊位走单独的按钮。
-                currentTab = tab;
+                selectTab(tabs.get(index));
                 return true;
             }
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
-    private void onAction(String action, CompoundTag extra) {
+    @Override
+    public boolean keyReleased(int keyCode, int scanCode, int modifiers) {
+        ShopPage active = activePage();
+        if (active != null && active.keyReleased(keyCode, scanCode, modifiers)) {
+            return true;
+        }
+        return super.keyReleased(keyCode, scanCode, modifiers);
+    }
+
+    @Override
+    public boolean charTyped(char codePoint, int modifiers) {
+        // EditBox 已聚焦时优先走 Screen 默认分发（避免抢走搜索框输入）
+        if (this.getFocused() instanceof net.minecraft.client.gui.components.EditBox box && box.isFocused()) {
+            if (box.charTyped(codePoint, modifiers)) {
+                return true;
+            }
+        }
+        ShopPage active = activePage();
+        if (active != null && active.charTyped(codePoint, modifiers)) {
+            return true;
+        }
+        return super.charTyped(codePoint, modifiers);
+    }
+
+    void onAction(String action, CompoundTag extra) {
         try {
             onActionInner(action, extra);
         } catch (Throwable error) {
@@ -4752,8 +6152,34 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         }
     }
 
+    private static boolean requiresAdminAuth(String action) {
+        if (action == null || action.isEmpty()) {
+            return false;
+        }
+        return switch (action) {
+            case "admin_open", "sidebar_edit", "cfg_open", "open_brand_settings",
+                    "rename_shop_title", "rename_currency", "buyback_bonus_set", "exchange_edit",
+                    "mall_add", "mall_import", "mall_restock", "mall_refresh",
+                    "shipping_limits", "stall_expire", "demand_settings", "demand_expire", "demand_admin_cancel",
+                    "signin_activity_edit", "signin_activity_clear", "signin_edit_toggle" -> true;
+            default -> action.startsWith("admin_")
+                    && !"admin_prev".equals(action)
+                    && !"admin_next".equals(action)
+                    && !"admin_module_menu".equals(action);
+        };
+    }
+
     /** 真正的动作分发（外面包了 try/catch，见 {@link #onAction}）。 */
     private void onActionInner(String action, CompoundTag extra) {
+        if (action.startsWith("skin_pick:")) {
+            // 菜单保持展开，方便连续试几套皮肤；点菜单外面收起
+            UITheme.setSkin(action.substring("skin_pick:".length()));
+            return;
+        }
+        if (requiresAdminAuth(action) && !ClientShopData.canEditAdmin()) {
+            ClientAdminAuth.guard(() -> onAction(action, extra));
+            return;
+        }
         switch (action) {
             case "set_tab" -> selectTab(extra.getString("tab"));
             case "auction_prev" -> auctionPage = Math.max(0, auctionPage - 1);
@@ -4765,6 +6191,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             // 日夜主题切换（原版太阳 / 月亮按钮）：写入客户端主题文件，所有界面立即跟随。
             // 打开每日签到界面（需求 7）。
             case "open_signin" -> Nav.open(new SignInScreen());
+            // 配置管理（纯客户端界面：导出/导入/预览都在客户端侧读文件）
+            case "cfg_open" -> Nav.open(new cn.autoforged.module_shop.client.screen.ConfigManagerScreen());
             // 签到/交易/转账 现在是左侧模块，页内按钮打开原界面;)
             case "open_signin_screen" -> Nav.open(new SignInScreen());
             case "open_trade_screen" -> Nav.open(new TradeSelectScreen(false));
@@ -4781,16 +6209,20 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             case "signin_makeup" -> {
                 long makeupDay = extra == null ? 0L : extra.getLong("day");
                 if (makeupDay > 0L) {
-                    // 补签要花钱，先二次确认再说（和原来独立界面里的流程一致）。
+                    PriceSpec costSpec = ClientShopData.signInMakeupSpec;
+                    String ch = (extra != null && extra.contains("pay_channel"))
+                            ? extra.getString("pay_channel")
+                            : PriceDisplay.resolveBuyChannel(costSpec, 1);
                     Nav.open(new ShopConfirmScreen(
                             Component.translatable("gui.module_shop.signin.makeup_title"),
                             Component.translatable("gui.module_shop.signin.makeup_tip",
-                                    ClientShopData.money(ClientShopData.signInMakeupCost),
+                                    PriceDisplay.formatPlain(costSpec),
                                     java.time.LocalDate.ofEpochDay(makeupDay).toString()),
                             ok -> {
                                 if (ok) {
                                     CompoundTag tag = new CompoundTag();
                                     tag.putLong("day", makeupDay);
+                                    tag.putString("pay_channel", ch);
                                     send("sign_makeup", tag);
                                 }
                             }));
@@ -4837,8 +6269,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             case "trade_requests_open" -> send("trade_requests_open", null);
             // 商店设置 → 签到：就地切换「编辑日程」态，点下面日历上的日期即可新建 / 修改。
             case "admin_signin_schedule" -> this.signInEdit = !this.signInEdit;
-            // 需求 8：修改当前模块的刷新参数。
-            case "admin_gen_set" -> openGenSet();
+            // 需求 8：修改当前模块的刷新参数 / 一键全服重抽。
+            case "admin_gen_set" -> openGenSet(extra);
+            case "admin_reroll_daily" -> confirmAdminRerollDaily(extra);
             // 侧栏布局：进入编辑模式（工具条里的"完成"退出，"重置布局"恢复默认）。
             case "sidebar_edit" -> {
                 this.layoutEdit = !this.layoutEdit;
@@ -4846,8 +6279,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 // 点「完成」= 把草稿一次性发布给所有玩家。
                 send(this.layoutEdit ? "admin_layout_begin" : "admin_layout_commit", null);
             }
-            // 左上角主标题改名（唯一的改名入口）
+            // 左上角主标题改名 / 品牌与图标设置
             case "rename_shop_title" -> openShopTitleRename();
+            case "open_brand_settings" -> Nav.open(new BrandSettingsScreen(this));
             // 编辑布局下右键余额 → 改货币名（全服生效）
             case "rename_currency" -> openCurrencyRename();
             // 第七轮：邮箱选中 / 星标
@@ -4858,7 +6292,9 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             case "admin_buyback_bonus_toggle" -> send("admin_buyback_bonus_toggle", null);
             case "buyback_bonus_set" -> {
                 CompoundTag bonusReq = new CompoundTag();
-                bonusReq.putString("default_amount", Long.toString(Math.max(0L, ClientShopData.buybackBonus)));
+                bonusReq.put("priceSpec", ClientShopData.buybackBonusSpec.toTag());
+                bonusReq.putBoolean("allow_zero", true);
+                bonusReq.putString("default_amount", ClientShopData.buybackBonusSpec.toRuleText());
                 openInput("admin_buyback_bonus_set", "gui.module_shop.input.buyback_bonus", bonusReq, "amount");
             }
             // 右下角小按钮：只有管理员能看到，服务端仍然会对 admin_* 操作再次校验权限。
@@ -4878,13 +6314,19 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             // （例如「取款数量（星币 → 银币）」）；数据不全时退回服务端打开（由服务端给出提示）。
             case "exchange_deposit_gui" -> openExchangeInput(extra, true);
             case "exchange_withdraw_gui" -> openExchangeInput(extra, false);
-            // 管理员改汇率：带出当前汇率，方便微调。
+            // 管理员改汇率与每日限额：带出当前值，方便微调。
             case "exchange_edit" -> {
                 int idx = extra == null ? -1 : extra.getInt("index");
                 if (idx >= 0 && idx < ClientShopData.exchange.size()) {
+                    ClientShopData.ExchangeView ev = ClientShopData.exchange.get(idx);
                     CompoundTag req = extra.copy();
-                    req.putString("default_value", Long.toString(ClientShopData.exchange.get(idx).value));
-                    openInput("admin_exchange_edit", "gui.module_shop.input.exchange_value", req, "value");
+                    req.putString("default_value", Long.toString(ev.value));
+                    req.putString("default_daily_deposit_limit", Integer.toString(Math.max(0, ev.dailyDepositLimit)));
+                    req.putString("default_daily_withdraw_limit", Integer.toString(Math.max(0, ev.dailyWithdrawLimit)));
+                    req.putBoolean("allow_zero_daily_deposit_limit", true);
+                    req.putBoolean("allow_zero_daily_withdraw_limit", true);
+                    openInput("admin_exchange_edit", "gui.module_shop.input.exchange_value", req,
+                            "value", "daily_deposit_limit", "daily_withdraw_limit");
                 }
             }
             // 管理页顶部「选择模块编辑」：点按钮展开 / 收起，点列表里的一项切到该模块的编辑界面。
@@ -4942,13 +6384,19 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 if (view.soldOut()) {
                     return;
                 }
+                PriceSpec spec = view.resolvePriceSpec();
+                String ch = (extra != null && extra.contains("pay_channel"))
+                        ? extra.getString("pay_channel")
+                        : PriceDisplay.resolveBuyChannel(spec, 1);
                 CompoundTag req = new CompoundTag();
                 req.putInt("index", shelfIndex);
                 req.putString("default_quantity", "1");
                 req.putLong("unit_price", view.price);
                 req.putLong("balance", ClientShopData.balance);
+                req.put("priceSpec", spec.toTag());
+                req.putString("pay_channel", ch);
                 req.putString("info", Component.translatable("gui.module_shop.mall.buy_info",
-                        view.stack.getHoverName(), ClientShopData.money(view.price), mallStockText(view))
+                        view.stack.getHoverName(), PriceDisplay.formatPlain(spec), mallStockText(view))
                         .getString());
                 openInput("buy_mall", "gui.module_shop.input.buy_quantity", req, "quantity");
             }
@@ -4957,6 +6405,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             case "mall_restock" -> openMallRestock();
             case "mall_refresh" -> openMallRefresh();
             case "shipping_limits" -> openShippingLimits();
+            case "admin_system_costs" -> Nav.open(new SystemCostsAdminScreen(
+                    extra == null ? adminMode : extra.getString("mode")));
             // 商店设置 → 摊位：自动下架时间（永久 / 游戏时间 / 现实时间）
             case "stall_expire" -> openStallExpire();
             // ---- 玩家求购（悬赏）----
@@ -4975,7 +6425,15 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             case "demand_admin_cancel" -> openDemandAdminCancel(extra == null ? "" : extra.getString("id"));
             // ---- 出货箱（新增模块）----
             case "shipping_open" -> send("shipping_open", null);
-            case "shipping_upgrade" -> send("shipping_upgrade", null);            case "mall_add" -> {
+            case "shipping_upgrade" -> {
+                CompoundTag tag = extra == null ? new CompoundTag() : extra.copy();
+                if (!tag.contains("pay_channel")) {
+                    tag.putString("pay_channel",
+                            PriceDisplay.resolveBuyChannel(ClientShopData.resolveShipUpgradeSpec(), 1));
+                }
+                send("shipping_upgrade", tag);
+            }
+            case "mall_add" -> {
                 // 先把"当前编辑模块"切成购物城，服务端才知道新物品该进哪个列表。
                 adminMode = "mall";
                 sendAdminType();
@@ -5002,27 +6460,33 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 // 需求 11：通知服务端持久化翻开状态并播放对应稀有度音效。
                 send("flip_shop", extra);
             }
-            // 付费刷新每日商店：先二次确认（花星币的操作不让人手滑），确认后服务端再校验次数与余额。
-            case "refresh_daily_shop" -> confirmRefresh();
+            // 付费刷新每日商店：先二次确认（花星币/实体币的操作不让人手滑），确认后服务端再校验次数与余额。
+            case "refresh_daily_shop" -> confirmRefresh(extra);
             // 账单：点顶部余额进入。
             case "open_bill" -> {
                 Nav.open(new BillScreen());
                 send("bill_request", null);
             }
             // 付费刷新每日收购：与商店分开的次数 / 价格，同样先二次确认。
-            case "refresh_daily_buyback" -> confirmBuybackRefresh();
+            case "refresh_daily_buyback" -> confirmBuybackRefresh(extra);
             // 需求 8：每日商店购买前弹出数量输入（可多件），底部左侧确认/右侧取消。
             case "buy_shop" -> {
                 int idx = extra == null ? -1 : extra.getInt("index");
                 if (idx >= 0 && idx < ClientShopData.dailyShop.size()) {
                     var entry = ClientShopData.dailyShop.get(idx);
+                    PriceSpec spec = entry.resolvePriceSpec();
+                    String ch = (extra != null && extra.contains("pay_channel"))
+                            ? extra.getString("pay_channel")
+                            : PriceDisplay.resolveBuyChannel(spec, 1);
                     CompoundTag req = new CompoundTag();
                     req.putInt("index", idx);
                     req.putString("default_quantity", "1");
                     req.putLong("unit_price", entry.price);
                     req.putLong("balance", ClientShopData.balance);
+                    req.put("priceSpec", spec.toTag());
+                    req.putString("pay_channel", ch);
                     req.putString("info", Component.translatable("gui.module_shop.buy_shop_info",
-                            entry.stack.getHoverName(), ClientShopData.money(entry.price), entry.remaining()).getString());
+                            entry.stack.getHoverName(), PriceDisplay.formatPlain(spec), entry.remaining()).getString());
                     req.putBoolean("confirm_right", false);
                     openInput("buy_shop", "gui.module_shop.input.buy_quantity", req, "quantity");
                 }
@@ -5032,8 +6496,15 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 CompoundTag req = extra == null ? new CompoundTag() : extra.copy();
                 int idx = req.getInt("index");
                 if (idx >= 0 && idx < ClientShopData.dailyBuyback.size()) {
-                    req.putString("info", Component.translatable("gui.module_shop.buyback_max",
-                            ClientShopData.dailyBuyback.get(idx).remaining()).getString());
+                    var entry = ClientShopData.dailyBuyback.get(idx);
+                    PriceSpec spec = entry.resolvePriceSpec();
+                    String ch = req.contains("pay_channel") ? req.getString("pay_channel")
+                            : PriceDisplay.resolveBuyChannel(spec, 1);
+                    req.put("priceSpec", spec.toTag());
+                    req.putString("pay_channel", ch);
+                    req.putString("info", ClientHomeCurrencyState.tr("gui.module_shop.buyback_sell_info",
+                            "单价 %s · 今日剩余上限 %s 件",
+                            PriceDisplay.formatPlain(spec), entry.remaining()));
                 }
                 openInput("sell_buyback", "gui.module_shop.input.sell_quantity", req, "quantity");
             }
@@ -5041,7 +6512,8 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             case "bid_gui" -> {
                 ClientShopData.AuctionView view = findAuction(extra == null ? 0L : extra.getLong("id"));
                 if (view != null) {
-                    Nav.open(new AuctionBidScreen(view));
+                    // Skija 可用时打开新详情页（出价 / 一口价 / 竞价记录），否则仍用旧出价界面
+                    cn.autoforged.module_shop.client.screen.auction.AuctionUi.openDetail(view.id);
                 }
             }
             // 需求：删除邮件；未领取/未查看时必须先二次确认，防止误删资产。
@@ -5064,7 +6536,17 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             }
             case "trade_select" -> Nav.open(new TradeSelectScreen(false));
             case "trade_gui" -> openInput("trade_request", "gui.module_shop.input.trade_target", null, "target");
-            case "stall_edit_gui" -> openInput("stall_apply_price", "gui.module_shop.input.stall_price", extra, "price");
+            case "stall_edit_gui" -> {
+                CompoundTag req = extra == null ? new CompoundTag() : extra.copy();
+                PriceSpec cur = findOwnStallSpec(req);
+                if (cur != null) {
+                    req.put("priceSpec", cur.toTag());
+                    req.putString("default_price", cur.toRuleText());
+                }
+                openInput("stall_apply_price", "gui.module_shop.input.stall_price", req, "price");
+            }
+            // 我的商店 → 补货：输入补货数量（默认 = 背包里同样物品的数量），服务端只收完全相同的物品
+            case "stall_restock_gui" -> openInput("stall_restock", "gui.module_shop.input.stall_restock", extra, "quantity");
             // 需求 6/7：管理界面可编辑价值(price)、品质(rarity)、数量(quantity)，并带出当前值。
             case "admin_edit_gui" -> openAdminEdit(extra);
             // 右键删除条目（每日商店 / 收购 / 购物城 / 出货箱规则都走这里）。
@@ -5077,6 +6559,7 @@ public class ShopScreen extends Screen implements JeiHoverSource {
             // 交易记录：复用输入弹窗收集玩家名，服务端把流水回传到聊天栏。
             case "admin_history_gui" -> openInput("admin_history", "gui.module_shop.input.history", null, "target");
             // 需求 10-5：左下角齿轮打开提醒音效设置。
+            case "toggle_theme" -> this.skinMenuOpen = !this.skinMenuOpen;
             case "notif_settings" -> {
                 Bricks.click();
                 Nav.open(new NotificationSettingsScreen());
@@ -5160,40 +6643,64 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         }
     }
 
+    private static PriceSpec findOwnStallSpec(CompoundTag req) {
+        long id = req.getLong("id");
+        if (id > 0L) {
+            for (var s : ClientShopData.stall) {
+                if (s.order == id) {
+                    return s.resolvePriceSpec();
+                }
+            }
+        }
+        int idx = req.getInt("index");
+        if (idx >= 0 && idx < ClientShopData.stall.size()) {
+            return ClientShopData.stall.get(idx).resolvePriceSpec();
+        }
+        return null;
+    }
+
     /** 管理员：签到详细设置（每日奖励 / 补签花费与范围 / 累计档位 / 里程奖励）。 */
     private void openSignInSettings() {
-        net.minecraft.nbt.CompoundTag tag = new net.minecraft.nbt.CompoundTag();
+        CompoundTag tag = new CompoundTag();
         tag.putString("kind", "input");
         tag.putString("action", "admin_signin_set");
         tag.putString("title", "gui.module_shop.signin.settings");
-        net.minecraft.nbt.ListTag fields = new net.minecraft.nbt.ListTag();
+        ListTag fields = new ListTag();
         for (String f : new String[]{"base", "makeupCost", "makeupDays", "tiers", "miles"}) {
-            fields.add(net.minecraft.nbt.StringTag.valueOf(f));
+            fields.add(StringTag.valueOf(f));
         }
         tag.put("fields", fields);
-        tag.putString("default_base", Long.toString(ClientShopData.signInBase));
-        tag.putString("default_makeupCost", Long.toString(ClientShopData.signInMakeupCost));
+        tag.put("baseSpec", ClientShopData.signInBaseSpec.toTag());
+        tag.put("makeupSpec", ClientShopData.signInMakeupSpec.toTag());
+        tag.putString("default_base", ClientShopData.signInBaseSpec.toRuleText());
+        tag.putString("default_makeupCost", ClientShopData.signInMakeupSpec.toRuleText());
         tag.putString("default_makeupDays", Integer.toString(ClientShopData.signInMakeupDays));
-        tag.putString("default_tiers", signInPairs(ClientShopData.signInTierDays, ClientShopData.signInTierBonus));
-        tag.putString("default_miles", signInPairs(ClientShopData.signInMileDays, ClientShopData.signInMileMoney));
+        tag.putString("default_tiers", signInSpecPairs(ClientShopData.signInTierDays,
+                ClientShopData.signInTierBonusSpecs, ClientShopData.signInTierBonus));
+        tag.putString("default_miles", signInSpecPairs(ClientShopData.signInMileDays,
+                ClientShopData.signInMileSpecs, ClientShopData.signInMileMoney));
         Nav.open(new ShopInputScreen(tag));
     }
 
-    /** 把「天数:奖励」拼成 {@code 3:5,5:7,7:10}（与签到界面的格式一致）。 */
-    private static String signInPairs(int[] days, long[] values) {
+    /** 把「天数:奖励」拼成 {@code 3:5,5:7,7:10} 或实体币规则格式（与签到界面的格式一致）。 */
+    private static String signInSpecPairs(int[] days, List<PriceSpec> specs, long[] values) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < days.length && i < values.length; i++) {
             if (i > 0) {
                 sb.append(',');
             }
-            sb.append(days[i]).append(':').append(values[i]);
+            String val = (specs != null && i < specs.size() && specs.get(i) != null)
+                    ? specs.get(i).toRuleText()
+                    : Long.toString(values[i]);
+            sb.append(days[i]).append(':').append(val);
         }
         return sb.toString();
     }
 
     /** 管理员：修改当前编辑模块（每日商店 / 每日收购）的权重、保底与条目上限。 */
-    private void openGenSet() {
-        boolean shop = !"buyback".equals(adminMode);
+    private void openGenSet(@javax.annotation.Nullable CompoundTag extra) {
+        String m = (extra != null && extra.contains("mode")) ? extra.getString("mode") : adminMode;
+        boolean shop = !"buyback".equals(m);
         int[] weights = shop ? ClientShopData.shopWeights : ClientShopData.buybackWeights;
         int[] guarantee = shop ? ClientShopData.shopGuarantee : ClientShopData.buybackGuarantee;
         int slots = shop ? ClientShopData.shopSlotCount : ClientShopData.buybackSlotCount;
@@ -5206,6 +6713,26 @@ public class ShopScreen extends Screen implements JeiHoverSource {
                 ? "gui.module_shop.admin_shop" : "gui.module_shop.admin_buyback").getString());
         openInput("admin_shop_gen_set", "gui.module_shop.input.admin_gen", req,
                 "weights", "guarantee", "slots");
+    }
+
+    /** 管理员：按当前候选池立即为全服玩家（含离线）重抽今日商店 / 收购清单（先二次确认防止误触）。 */
+    private void confirmAdminRerollDaily(@javax.annotation.Nullable CompoundTag extra) {
+        String m = (extra != null && extra.contains("mode")) ? extra.getString("mode") : adminMode;
+        boolean shop = !"buyback".equals(m);
+        String targetMode = shop ? "shop" : "buyback";
+        String modLabel = Component.translatable(shop
+                ? "gui.module_shop.admin_shop" : "gui.module_shop.admin_buyback").getString();
+        Nav.open(new ShopConfirmScreen(
+                Component.translatableWithFallback("gui.module_shop.admin_reroll_confirm_title", "确认全服重抽"),
+                Component.translatableWithFallback("gui.module_shop.admin_reroll_confirm_body",
+                        "确认立即按当前商品池为全服所有玩家（含离线玩家）重新抽取今日的「%s」清单吗？", modLabel),
+                confirmed -> {
+                    if (confirmed) {
+                        CompoundTag tag = new CompoundTag();
+                        tag.putString("mode", targetMode);
+                        send("admin_reroll_daily_go", tag);
+                    }
+                }));
     }
 
     private static String joinInts(int[] values) {
@@ -5294,13 +6821,28 @@ public class ShopScreen extends Screen implements JeiHoverSource {
         CompoundTag req = extra.copy();
         if (index >= 0 && index < pool.size()) {
             ConfiguredOffer offer = pool.get(index);
-            req.putString("default_price", Long.toString(offer.price));
+            PriceSpec spec = offer.resolvePriceSpec();
+            req.put("priceSpec", spec.toTag());
+            req.putString("default_price", spec.toRuleText());
             req.putString("default_rarity", offer.rarity.id());
             req.putString("default_quantity", Integer.toString(offer.amount));
+            req.putString("default_daily_max", offer.amount > 0 ? Integer.toString(offer.amount) : "");
         }
         // 出货箱的规则没有"品质"，只需要价格与每日份数两个字段。
         if ("shipping".equals(mode)) {
-            openInput("admin_apply_price", "gui.module_shop.input.shipping_rule", req, "price");
+            openInput("admin_apply_price", "gui.module_shop.input.shipping_rule", req, "price", "daily_max");
+            return;
+        }
+        if ("mall".equals(mode)) {
+            boolean perm = index >= 0 && index < ClientShopData.adminMallPermanent.size()
+                    && Boolean.TRUE.equals(ClientShopData.adminMallPermanent.get(index));
+            ListTag permChoices = new ListTag();
+            permChoices.add(StringTag.valueOf("0"));
+            permChoices.add(StringTag.valueOf("1"));
+            req.put("choices_permanent_limit", permChoices);
+            req.putString("default_permanent_limit", perm ? "1" : "0");
+            openInput("admin_apply_price", "gui.module_shop.input.admin_offer", req,
+                    "price", "rarity", "quantity", "permanent_limit");
             return;
         }
         openInput("admin_apply_price", "gui.module_shop.input.admin_offer", req, "price", "rarity", "quantity");
@@ -5327,39 +6869,51 @@ public class ShopScreen extends Screen implements JeiHoverSource {
      * 付费刷新每日商店前的二次确认：显示本次花费与今日剩余次数，确认后才真正扣费刷新。
      * 取消（或按 ESC）原样回到商店界面，什么都不扣。
      */
-    private void confirmRefresh() {
-        if (ClientShopData.refreshCost < 0L) {
+    private void confirmRefresh(CompoundTag extra) {
+        PriceSpec costSpec = ClientShopData.resolveRefreshSpec();
+        if (costSpec == null) {
             // 今日次数已用完：按钮本来是灰的，这里直接放行让服务端提示一次即可。
-            send("refresh_daily_shop", null);
+            send("refresh_daily_shop", extra);
             return;
         }
+        String ch = (extra != null && extra.contains("pay_channel"))
+                ? extra.getString("pay_channel")
+                : PriceDisplay.resolveBuyChannel(costSpec, 1);
         int left = Math.max(0, ClientShopData.refreshMax - ClientShopData.refreshUsed);
         Nav.open(new ShopConfirmScreen(
                 Component.translatable("gui.module_shop.refresh_confirm_title"),
                 Component.translatable("gui.module_shop.refresh_confirm_body",
-                        ClientShopData.money(ClientShopData.refreshCost), left, ClientShopData.refreshMax),
+                        PriceDisplay.formatPlain(costSpec), left, ClientShopData.refreshMax),
                 ok -> {
                     if (ok) {
-                        send("refresh_daily_shop", null);
+                        CompoundTag tag = extra == null ? new CompoundTag() : extra.copy();
+                        tag.putString("pay_channel", ch);
+                        send("refresh_daily_shop", tag);
                     }
                 }));
     }
 
     /** 付费刷新每日收购前的二次确认（与商店分开的次数与价格）。 */
-    private void confirmBuybackRefresh() {
-        if (ClientShopData.buybackRefreshCost < 0L) {
-            send("refresh_daily_buyback", null);
+    private void confirmBuybackRefresh(CompoundTag extra) {
+        PriceSpec costSpec = ClientShopData.resolveBuybackRefreshSpec();
+        if (costSpec == null) {
+            send("refresh_daily_buyback", extra);
             return;
         }
+        String ch = (extra != null && extra.contains("pay_channel"))
+                ? extra.getString("pay_channel")
+                : PriceDisplay.resolveBuyChannel(costSpec, 1);
         int left = Math.max(0, ClientShopData.buybackRefreshMax - ClientShopData.buybackRefreshUsed);
         Nav.open(new ShopConfirmScreen(
                 Component.translatable("gui.module_shop.refresh_buyback_confirm_title"),
                 Component.translatable("gui.module_shop.refresh_buyback_confirm_body",
-                        ClientShopData.money(ClientShopData.buybackRefreshCost), left,
+                        PriceDisplay.formatPlain(costSpec), left,
                         ClientShopData.buybackRefreshMax),
                 ok -> {
                     if (ok) {
-                        send("refresh_daily_buyback", null);
+                        CompoundTag tag = extra == null ? new CompoundTag() : extra.copy();
+                        tag.putString("pay_channel", ch);
+                        send("refresh_daily_buyback", tag);
                     }
                 }));
     }
@@ -5513,12 +7067,81 @@ public class ShopScreen extends Screen implements JeiHoverSource {
     private record Region(int x, int y, int w, int h, String action, String rightAction, CompoundTag extra) {
     }
 
+    private void drawHomeFallback(GuiGraphics g, int x, int y, int w, int h, int mx, int my) {
+        g.drawString(this.font, Component.translatable("tab.module_shop.home"), x + 8, y + 6, IOStyle.TEXT, false);
+        int leftW = Math.min(132, Math.max(100, w * 40 / 100));
+        int cardY = y + 20;
+        int cardH = Math.max(96, h - 28);
+        IOStyle.card(g, x + 8, cardY, leftW, cardH, 4);
+        String name = ClientShopData.playerName == null || ClientShopData.playerName.isEmpty()
+                ? Minecraft.getInstance().getUser().getName() : ClientShopData.playerName;
+        g.drawString(this.font, name, x + 14, cardY + 8, IOStyle.TEXT, false);
+        String role = ClientHomeCurrencyState.lpAvailable && !ClientHomeCurrencyState.lpGroup.isBlank()
+                ? ClientHomeCurrencyState.lpGroup
+                : Component.translatable(ClientShopData.canAdmin
+                        ? "gui.module_shop.home.role_admin" : "gui.module_shop.home.role_default").getString();
+        g.drawString(this.font, IOStyle.ellipsize(this.font, Component.literal(role), leftW - 12),
+                x + 14, cardY + 20, IOStyle.BLUE, false);
+        String playTime = ClientHomeCurrencyState.formatPlayTime(ClientHomeCurrencyState.currentPlayTimeTicks());
+        g.drawString(this.font, IOStyle.ellipsize(this.font, Component.literal(playTime), leftW - 12),
+                x + 14, cardY + 32, IOStyle.TEXT_2, false);
+        g.drawString(this.font, IOStyle.ellipsize(this.font,
+                        Component.literal(ClientShopData.money(ClientShopData.balance)), leftW - 12),
+                x + 14, cardY + 48, IOStyle.ORANGE, false);
+        if (ClientShopData.signInEnabled) {
+            int btnY = cardY + cardH - 22;
+            int btnW = leftW - 12;
+            boolean done = ClientShopData.signInDone;
+            Component signLabel = done
+                    ? Component.translatable("gui.module_shop.home.signin_done", ClientShopData.signInStreak)
+                    : Component.translatable("gui.module_shop.home.signin_do");
+            drawSmallLabelButton(g, x + 14, btnY, btnW, 14, signLabel,
+                    !done && IOStyle.inside(x + 14, btnY, btnW, 14, mx, my), !done, false);
+            if (!done) {
+                addRegion(x + 14, btnY, btnW, 14, "sign_in", null, null);
+            }
+        }
+        int rx = x + 14 + leftW;
+        int rw = Math.max(80, x + w - 8 - rx);
+        IOStyle.card(g, rx, cardY, rw, cardH, 4);
+        g.drawString(this.font, Component.translatable("gui.module_shop.home.ann_title"),
+                rx + 8, cardY + 8, IOStyle.TEXT, false);
+        if (ClientHomeCurrencyState.announcements.isEmpty()) {
+            g.drawString(this.font, IOStyle.ellipsize(this.font,
+                            Component.translatable("gui.module_shop.home.ann_empty"), rw - 16),
+                    rx + 8, cardY + 26, IOStyle.TEXT_3, false);
+        } else {
+            ClientHomeCurrencyState.AnnouncementView ann = ClientHomeCurrencyState.announcements.get(0);
+            g.drawString(this.font, IOStyle.ellipsize(this.font,
+                            Component.literal(ann.title == null ? "" : ann.title), rw - 16),
+                    rx + 8, cardY + 22, IOStyle.ORANGE, false);
+            int ly = cardY + 36;
+            for (var line : this.font.split(Component.literal(ann.content == null ? "" : ann.content),
+                    Math.max(40, rw - 16))) {
+                if (ly + 10 > cardY + cardH - 8) {
+                    break;
+                }
+                g.drawString(this.font, line, rx + 8, ly, IOStyle.TEXT_2, false);
+                ly += 10;
+            }
+        }
+    }
+
+    @Override
+    public void removed() {
+        // 界面被关闭 / 被服务端重建替换：取消页面里按下中的按钮、拖拽中的滚动条
+        this.pages.values().forEach(ShopPage::cancelInput);
+        super.removed();
+    }
+
     @Override
     public void onClose() {
         if (this.layoutEdit) {
-            // 编辑布局时直接关界面 = 视同完成，避免改动只在草稿里、谁都没同步到。
+            // 编辑布局时直接关界面 = 若已解锁则提交改动，避免卡住 ESC 退出。
             this.layoutEdit = false;
-            send("admin_layout_commit", null);
+            if (ClientShopData.canEditAdmin()) {
+                send("admin_layout_commit", null);
+            }
         }
         // ESC 返回上一级界面（Nav 返回栈），没有上一级时才真正关闭。
         Nav.back();

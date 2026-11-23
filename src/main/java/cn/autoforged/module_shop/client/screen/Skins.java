@@ -11,7 +11,7 @@ import net.minecraft.client.resources.DefaultPlayerSkin;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * 在纯 Screen 中绘制玩家头像的公共工具（摊位 / 名片显示对应玩家头像）。
+ * 在纯 Screen 中绘制玩家头像的公共工具（需求 1：摊位/名片显示对应玩家头像）。
  *
  * <p>1.20.1 里皮肤仍然是一个 {@link ResourceLocation} 纹理（没有 1.20.2 之后才引入的
  * {@code PlayerSkin} 记录类型），所以这里直接拿纹理路径交给 {@link PlayerFaceRenderer}。

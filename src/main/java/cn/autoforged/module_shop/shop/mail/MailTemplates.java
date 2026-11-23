@@ -5,7 +5,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.item.ItemStack;
 
@@ -52,6 +52,15 @@ public final class MailTemplates {
                 0, true),
         AUCTION_UNLISTED(Kind.REFUND, "拍卖会系统", "&7【拍卖会】物品已下架",
                 "亲爱的 {player}，您上架的 {item} 已下架，物品已退回至附件，请查收。",
+                0, true),
+        AUCTION_CANCELLED(Kind.REFUND, "拍卖会系统", "&7【拍卖会】拍卖已撤销",
+                "亲爱的 {player}，您撤销了 {item} 的拍卖（编号 {id}），物品已退回至附件，请查收。上架手续费不予退还。",
+                0, true),
+        AUCTION_ADMIN_CANCELLED(Kind.REFUND, "拍卖会系统", "&c【拍卖会】拍卖被管理员撤销",
+                "亲爱的 {player}，您上架的 {item}（编号 {id}）已被管理员撤销，物品已退回至附件，请查收。如有出价，出价已全额退还给出价者。",
+                0, true),
+        AUCTION_BUYOUT_WON(Kind.AUCTION, "拍卖会系统", "&e【拍卖会】一口价购买成功",
+                "亲爱的 {player}，您以一口价 {price} 星币购得 {item}。物品已附在附件中，请查收。",
                 0, true),
         STALL_SOLD(Kind.STALL, "摊位系统", "&a【摊位】商品售出通知",
                 "亲爱的 {player}，您在摊位出售的 {item} x{amount} 已被玩家 {buyer} 购买，获得 {price} 星币。收入已附在附件中，请查收。",
@@ -203,7 +212,7 @@ public final class MailTemplates {
     /**
      * 待发送的邮件草稿：标题 / 正文 / 发件人 / 类型 / 到期时间 / 附件（物品 + 星币）。
      * <p>
-     * {@link #toTag(RegistryAccess)} 产出的标签与 {@code MailEntry.save} 的字段**同形**，
+     * {@link #toTag(HolderLookup.Provider)} 产出的标签与 {@code MailEntry.save} 的字段**同形**，
      * 并额外带 {@code title / content / kind / expireAt / starred}，
      * 因此接入时只需在 {@code MailEntry} 补这几个字段即可，旧存档与旧调用点都不受影响。
      */
@@ -360,7 +369,7 @@ public final class MailTemplates {
          * 转成邮件标签：与 {@code MailEntry.save} 同形 + 新增 title/content/kind/expireAt/starred。
          * 金额类附件写在 {@code currencyAmount}，物品类附件写在第一个物品槽（其余追加在 {@code extraItems}）。
          */
-        public CompoundTag toTag(RegistryAccess registries) {
+        public CompoundTag toTag(HolderLookup.Provider registries) {
             ItemStack first = items.isEmpty() ? ItemStack.EMPTY : items.get(0);
             CompoundTag tag = ShopNbt.saveStack(first, registries);
             tag.putString("source", source);

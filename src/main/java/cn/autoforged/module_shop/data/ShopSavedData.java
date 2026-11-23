@@ -5,9 +5,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
-
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
@@ -16,6 +15,8 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.storage.DimensionDataStorage;
+
+import javax.annotation.Nullable;
 
 /** 全局的世界级商店数据。所有跨维度的持久化都集中在这里。 */
 public final class ShopSavedData extends SavedData {
@@ -31,6 +32,21 @@ public final class ShopSavedData extends SavedData {
     /** 最近购买记录上限：只用于展示，超出后丢最旧的，避免存档无限膨胀。 */
     public static final int MALL_RECENT_MAX = 200;
     public final List<AuctionEntry> auctions = new ArrayList<>();
+    /** 已结束的拍卖记录（成交 / 流拍 / 撤销 / 损坏），最新在最后；条数上限见 Config.auctionHistoryLimit。 */
+    public final List<AuctionEntry> auctionHistory = new ArrayList<>();
+    /** 拍卖资金 / 结算异常日志（审计、结算异常时追加），供管理员查看。最多 {@link #AUCTION_ANOMALY_MAX} 条。 */
+    public final List<String> auctionAnomalies = new ArrayList<>();
+    public static final int AUCTION_ANOMALY_MAX = 300;
+    /**
+     * 读档时整条解析失败的拍卖（原始 NBT 原样保留并写回），避免一条坏数据让整个存档读不出来，
+     * 也避免把它悄悄丢掉。管理员可以用 /shop auction audit 看到数量。
+     */
+    public final List<CompoundTag> auctionCorrupt = new ArrayList<>();
+    /** 拍卖列表版本号（不存档）：任何拍卖变化 +1，客户端据此判断要不要重新拉列表。 */
+    public transient long auctionVersion = 1L;
+    /** 活动日离线补发本服缓存（不存档，天然随存档/世界实例隔离，避免单人切档串台）。 */
+    public transient long lastOfflineGrantDay = Long.MIN_VALUE;
+    public transient int lastOfflineGrantSig;
     /** 玩家求购（悬赏）单：悬赏在发布时就已托管，撤销 / 到期原样退回。 */
     public final List<DemandEntry> demands = new ArrayList<>();
     /** 管理员配置的可兑换货币（1 个物品 = N 星币，双向兑换）。 */
@@ -42,6 +58,12 @@ public final class ShopSavedData extends SavedData {
      */
     public final java.util.LinkedHashSet<String> apiRequests = new java.util.LinkedHashSet<>();
     /** 商店**自定义货币名称**（空 = 用 config 里的 currencyName）。管理员在编辑布局里右键余额修改。 */
+
+    /** 新世界模板初始化是否已执行过（true = 之后永不再自动初始化）。 */
+    public boolean templateInitDone;
+
+    /** 是否已经写过模组自带的默认商品（用于区分新世界与老存档）。 */
+    public boolean seedDefaultsApplied;
     public String shopCurrency = "";
 
     /** 幂等键保留上限（防无限增长）。 */
@@ -71,16 +93,24 @@ public final class ShopSavedData extends SavedData {
     public boolean signInCumulative = true;
     /** 每日基础签到奖励。 */
     public long signInBaseDaily = 10L;
+    public PriceSpec signInBaseSpec = PriceSpec.star(10L);
     /** 补签花费（0 = 免费）。 */
     public long signInMakeupCost = 100L;
+    public PriceSpec signInMakeupSpec = PriceSpec.star(100L);
     /** 允许补签的天数范围（今天之前 N 天内）。 */
     public int signInMakeupDays = 2;
     /** 累计签到档位天数与对应每日加成（默认 3 天 +5、5 天 +7、7 天 +10）。 */
     public final int[] signInTierDays = {3, 5, 7};
     public final long[] signInTierBonus = {5L, 7L, 10L};
+    public final PriceSpec[] signInTierBonusSpecs = {
+            PriceSpec.star(5L), PriceSpec.star(7L), PriceSpec.star(10L)
+    };
     /** 连续签到里程奖励天数与金额（默认 3 天 100、5 天 300、7 天 800）。 */
     public final int[] signInMileDays = {3, 5, 7};
     public final long[] signInMileMoney = {100L, 300L, 800L};
+    public final PriceSpec[] signInMileSpecs = {
+            PriceSpec.star(100L), PriceSpec.star(300L), PriceSpec.star(800L)
+    };
 
     // ===== 刷新参数（需求 8）：每日商店与每日收购各自一套 =====
     /** 品质权重（传说/史诗/稀有/普通）。 */
@@ -127,6 +157,149 @@ public final class ShopSavedData extends SavedData {
     }
     /** 收购全清奖励金额覆盖值（-1 = 使用配置默认值 buybackAllBonus）。 */
     public long buybackBonusOverride = -1L;
+    /** 双独立账本：收购全清奖励覆盖规格（null = 回退使用 Config.buybackAllBonus）。 */
+    public PriceSpec buybackBonusSpec;
+    /** OP 界面可覆盖的系统定额费用（空列表 = 回退使用 Config 默认配置）。 */
+    public final List<PriceSpec> dailyRefreshSpecs = new ArrayList<>();
+    public final List<PriceSpec> buybackRefreshSpecs = new ArrayList<>();
+    public final List<PriceSpec> shippingUpgradeSpecs = new ArrayList<>();
+
+    public void setSignInBaseSpec(PriceSpec spec) {
+        this.signInBaseSpec = spec == null ? PriceSpec.ZERO : spec;
+        this.signInBaseDaily = this.signInBaseSpec.supportsStar() ? this.signInBaseSpec.starPrice : 0L;
+    }
+
+    public PriceSpec resolveSignInBaseSpec() {
+        if (signInBaseSpec == null) {
+            return PriceSpec.star(signInBaseDaily);
+        }
+        if (signInBaseSpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && signInBaseSpec.starPrice != signInBaseDaily) {
+            return PriceSpec.star(signInBaseDaily);
+        }
+        return signInBaseSpec;
+    }
+
+    public void setSignInMakeupSpec(PriceSpec spec) {
+        this.signInMakeupSpec = spec == null ? PriceSpec.ZERO : spec;
+        this.signInMakeupCost = this.signInMakeupSpec.supportsStar() ? this.signInMakeupSpec.starPrice : 0L;
+    }
+
+    public PriceSpec resolveSignInMakeupSpec() {
+        if (signInMakeupSpec == null) {
+            return PriceSpec.star(signInMakeupCost);
+        }
+        if (signInMakeupSpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && signInMakeupSpec.starPrice != signInMakeupCost) {
+            return PriceSpec.star(signInMakeupCost);
+        }
+        return signInMakeupSpec;
+    }
+
+    public void setSignInTierSpec(int idx, PriceSpec spec) {
+        if (idx < 0 || idx >= signInTierBonusSpecs.length) {
+            return;
+        }
+        PriceSpec clean = spec == null ? PriceSpec.ZERO : spec;
+        signInTierBonusSpecs[idx] = clean;
+        signInTierBonus[idx] = clean.supportsStar() ? clean.starPrice : 0L;
+    }
+
+    public PriceSpec resolveSignInTierSpec(int idx) {
+        if (idx < 0 || idx >= signInTierBonusSpecs.length) {
+            return PriceSpec.ZERO;
+        }
+        PriceSpec spec = signInTierBonusSpecs[idx];
+        long legacy = signInTierBonus[idx];
+        if (spec == null) {
+            return PriceSpec.star(Math.max(0L, legacy));
+        }
+        if (spec.mode == PriceSpec.CurrencyMode.STAR_ONLY && spec.starPrice != legacy) {
+            return PriceSpec.star(Math.max(0L, legacy));
+        }
+        return spec;
+    }
+
+    public void setSignInMileSpec(int idx, PriceSpec spec) {
+        if (idx < 0 || idx >= signInMileSpecs.length) {
+            return;
+        }
+        PriceSpec clean = spec == null ? PriceSpec.ZERO : spec;
+        signInMileSpecs[idx] = clean;
+        signInMileMoney[idx] = clean.supportsStar() ? clean.starPrice : 0L;
+    }
+
+    public PriceSpec resolveSignInMileSpec(int idx) {
+        if (idx < 0 || idx >= signInMileSpecs.length) {
+            return PriceSpec.ZERO;
+        }
+        PriceSpec spec = signInMileSpecs[idx];
+        long legacy = signInMileMoney[idx];
+        if (spec == null) {
+            return PriceSpec.star(Math.max(0L, legacy));
+        }
+        if (spec.mode == PriceSpec.CurrencyMode.STAR_ONLY && spec.starPrice != legacy) {
+            return PriceSpec.star(Math.max(0L, legacy));
+        }
+        return spec;
+    }
+
+    public void setBuybackBonusSpec(PriceSpec spec) {
+        this.buybackBonusSpec = spec;
+        if (spec == null) {
+            this.buybackBonusOverride = -1L;
+        } else if (spec.isZero()) {
+            this.buybackBonusOverride = 0L;
+            this.buybackBonusEnabled = false;
+        } else {
+            this.buybackBonusOverride = spec.supportsStar() ? spec.starPrice : 0L;
+            this.buybackBonusEnabled = true;
+        }
+    }
+
+    public PriceSpec resolveBuybackBonusSpec() {
+        if (buybackBonusSpec != null) {
+            return buybackBonusSpec;
+        }
+        if (buybackBonusOverride >= 0L) {
+            return PriceSpec.star(buybackBonusOverride);
+        }
+        return PriceSpec.star(cn.autoforged.module_shop.Config.buybackAllBonus());
+    }
+
+    public List<PriceSpec> resolveDailyRefreshSpecs() {
+        return dailyRefreshSpecs.isEmpty()
+                ? cn.autoforged.module_shop.Config.dailyRefreshSpecList()
+                : new ArrayList<>(dailyRefreshSpecs);
+    }
+
+    public List<PriceSpec> resolveBuybackRefreshSpecs() {
+        return buybackRefreshSpecs.isEmpty()
+                ? cn.autoforged.module_shop.Config.buybackRefreshSpecList()
+                : new ArrayList<>(buybackRefreshSpecs);
+    }
+
+    public List<PriceSpec> resolveShippingUpgradeSpecs() {
+        return shippingUpgradeSpecs.isEmpty()
+                ? cn.autoforged.module_shop.Config.shippingUpgradeSpecList()
+                : new ArrayList<>(shippingUpgradeSpecs);
+    }
+
+    public PriceSpec nextRefreshSpec(PlayerAccount account, boolean shop) {
+        List<PriceSpec> list = shop ? resolveDailyRefreshSpecs() : resolveBuybackRefreshSpecs();
+        int used = account == null ? 0 : (shop ? account.dailyShopRefreshUsed : account.dailyBuybackRefreshUsed);
+        if (used < 0 || used >= list.size()) {
+            return null;
+        }
+        return list.get(used);
+    }
+
+    public PriceSpec shippingUpgradeSpecFor(int level) {
+        List<PriceSpec> list = resolveShippingUpgradeSpecs();
+        int index = level - 1;
+        if (index < 0 || index >= list.size()) {
+            return null;
+        }
+        return list.get(index);
+    }
     public long listingCounter = 1L;
     public long nextAuctionId = 1L;
     /** 求购单号自增（用来生成短 id）。 */
@@ -192,14 +365,18 @@ public final class ShopSavedData extends SavedData {
 
     @Override
     public CompoundTag save(CompoundTag tag) {
-        // 1.20.1 的物品序列化走 NBT，不再需要 RegistryAccess（保留变量以便共用旧的 save 调用）。
-        RegistryAccess registries = null;
+        return save(tag, null);
+    }
+
+    public CompoundTag save(CompoundTag tag, @Nullable HolderLookup.Provider registries) {
         CompoundTag accountsTag = new CompoundTag();
         for (Map.Entry<UUID, PlayerAccount> entry : accounts.entrySet()) {
             accountsTag.put(entry.getKey().toString(), entry.getValue().save(registries));
         }
         tag.put("accounts", accountsTag);
 
+        tag.putBoolean("templateInitDone", templateInitDone);
+        tag.putBoolean("seedDefaultsApplied", seedDefaultsApplied);
         tag.put("shopPool", saveOffers(shopPool, registries));
         tag.put("buybackPool", saveOffers(buybackPool, registries));
         // 购物城：常驻货架 + 最近购买记录
@@ -214,6 +391,21 @@ public final class ShopSavedData extends SavedData {
         }
         tag.put("mallRecent", recentList);
         tag.put("auctions", saveAuctions(registries));
+        ListTag historyList = new ListTag();
+        for (AuctionEntry entry : auctionHistory) {
+            historyList.add(entry.save(registries));
+        }
+        tag.put("auctionHistory", historyList);
+        ListTag anomalyList = new ListTag();
+        for (String line : auctionAnomalies) {
+            anomalyList.add(StringTag.valueOf(line));
+        }
+        tag.put("auctionAnomalies", anomalyList);
+        ListTag corruptList = new ListTag();
+        for (CompoundTag raw : auctionCorrupt) {
+            corruptList.add(raw.copy());
+        }
+        tag.put("auctionCorrupt", corruptList);
         ListTag demandList = new ListTag();
         for (DemandEntry entry : demands) {
             demandList.add(entry.save(registries));
@@ -265,21 +457,43 @@ public final class ShopSavedData extends SavedData {
         tag.putBoolean("signInEnabled", signInEnabled);
         tag.putBoolean("signInAuto", signInAuto);
         tag.putBoolean("signInCumulative", signInCumulative);
-        tag.putLong("signInBaseDaily", signInBaseDaily);
-        tag.putLong("signInMakeupCost", signInMakeupCost);
+        resolveSignInBaseSpec().writeToParent(tag, "signInBaseSpec", "signInBaseDaily");
+        resolveSignInMakeupSpec().writeToParent(tag, "signInMakeupSpec", "signInMakeupCost");
         tag.putInt("signInMakeupDays", signInMakeupDays);
         tag.putIntArray("signInTierDays", signInTierDays);
         tag.putLongArray("signInTierBonus", signInTierBonus);
+        List<PriceSpec> tierSpecs = new ArrayList<>(signInTierBonusSpecs.length);
+        for (int i = 0; i < signInTierBonusSpecs.length; i++) {
+            tierSpecs.add(resolveSignInTierSpec(i));
+        }
+        writeSpecList(tag, "signInTierBonusSpecs", tierSpecs);
         tag.putIntArray("signInMileDays", signInMileDays);
         tag.putLongArray("signInMileMoney", signInMileMoney);
+        List<PriceSpec> mileSpecs = new ArrayList<>(signInMileSpecs.length);
+        for (int i = 0; i < signInMileSpecs.length; i++) {
+            mileSpecs.add(resolveSignInMileSpec(i));
+        }
+        writeSpecList(tag, "signInMileSpecs", mileSpecs);
         tag.putLong("buybackBonusOverride", buybackBonusOverride);
+        if (buybackBonusSpec != null) {
+            tag.put("buybackBonusSpec", buybackBonusSpec.toTag());
+        }
+        writeSpecList(tag, "dailyRefreshSpecs", dailyRefreshSpecs);
+        writeSpecList(tag, "buybackRefreshSpecs", buybackRefreshSpecs);
+        writeSpecList(tag, "shippingUpgradeSpecs", shippingUpgradeSpecs);
         tag.put("sidebarLayout", sidebarLayout.save());
         return tag;
     }
 
-    public static ShopSavedData load(CompoundTag tag, RegistryAccess registries) {
+    public static ShopSavedData load(CompoundTag tag) {
+        return load(tag, null);
+    }
+
+    public static ShopSavedData load(CompoundTag tag, @Nullable HolderLookup.Provider registries) {
         ShopSavedData data = new ShopSavedData();
 
+        data.templateInitDone = tag.getBoolean("templateInitDone");
+        data.seedDefaultsApplied = tag.getBoolean("seedDefaultsApplied");
         CompoundTag accountsTag = tag.getCompound("accounts");
         for (String key : accountsTag.getAllKeys()) {
             try {
@@ -299,7 +513,7 @@ public final class ShopSavedData extends SavedData {
         ListTag mallList = tag.getList("mallPool", Tag.TAG_COMPOUND);
         for (int i = 0; i < mallList.size(); i++) {
             MallItem item = MallItem.load(mallList.getCompound(i), registries);
-            if (item.stack != null && !item.stack.isEmpty() && item.price > 0L) {
+            if (item.stack != null && !item.stack.isEmpty() && item.resolvePriceSpec().isValid()) {
                 data.mallPool.add(item);
             }
         }
@@ -318,10 +532,37 @@ public final class ShopSavedData extends SavedData {
         for (int i = 0; i < apiRequestList.size(); i++) {
             data.apiRequests.add(apiRequestList.getString(i));
         }
+        long legacyDuration;
+        try {
+            legacyDuration = cn.autoforged.module_shop.Config.INSTANCE.auctionDurationSeconds.get() * 1000L;
+        } catch (RuntimeException notLoaded) {
+            legacyDuration = 7_200_000L;
+        }
         ListTag auctionList = tag.getList("auctions", Tag.TAG_COMPOUND);
         for (int i = 0; i < auctionList.size(); i++) {
-            data.auctions.add(AuctionEntry.load(auctionList.getCompound(i), registries));
+            loadAuctionSafely(data, auctionList.getCompound(i), registries, legacyDuration, false);
         }
+        ListTag historyList = tag.getList("auctionHistory", Tag.TAG_COMPOUND);
+        for (int i = 0; i < historyList.size(); i++) {
+            loadAuctionSafely(data, historyList.getCompound(i), registries, legacyDuration, true);
+        }
+        ListTag anomalyList = tag.getList("auctionAnomalies", Tag.TAG_STRING);
+        for (int i = 0; i < anomalyList.size(); i++) {
+            data.auctionAnomalies.add(anomalyList.getString(i));
+        }
+        ListTag corruptList = tag.getList("auctionCorrupt", Tag.TAG_COMPOUND);
+        for (int i = 0; i < corruptList.size(); i++) {
+            data.auctionCorrupt.add(corruptList.getCompound(i).copy());
+        }
+        // 防御：存档里记录的自增 id 落后于实际最大 id（手改存档 / 旧版本 bug）时往前推，避免 id 撞车。
+        long maxId = 0L;
+        for (AuctionEntry e : data.auctions) {
+            maxId = Math.max(maxId, e.id);
+        }
+        for (AuctionEntry e : data.auctionHistory) {
+            maxId = Math.max(maxId, e.id);
+        }
+        data.pendingAuctionMaxId = maxId;
         ListTag exchangeList = tag.getList("exchangePool", Tag.TAG_COMPOUND);
         for (int i = 0; i < exchangeList.size(); i++) {
             ExchangeEntry entry = ExchangeEntry.load(exchangeList.getCompound(i), registries);
@@ -331,8 +572,8 @@ public final class ShopSavedData extends SavedData {
         }
         // 老存档没有这两个标签时按「开启 + 用配置默认金额」处理。
         if (tag.contains("shopSlotCount")) {
-            data.shopSlotCount = Math.max(1, Math.min(12, tag.getInt("shopSlotCount")));
-            data.buybackSlotCount = Math.max(1, Math.min(12, tag.getInt("buybackSlotCount")));
+            data.shopSlotCount = Math.max(0, Math.min(64, tag.getInt("shopSlotCount")));
+            data.buybackSlotCount = Math.max(0, Math.min(64, tag.getInt("buybackSlotCount")));
             copyInts(tag.getIntArray("shopWeights"), data.shopWeights);
             copyInts(tag.getIntArray("shopGuarantee"), data.shopGuarantee);
             copyInts(tag.getIntArray("buybackWeights"), data.buybackWeights);
@@ -361,24 +602,54 @@ public final class ShopSavedData extends SavedData {
             data.signInEnabled = tag.getBoolean("signInEnabled");
             data.signInAuto = tag.getBoolean("signInAuto");
             data.signInCumulative = tag.getBoolean("signInCumulative");
-            data.signInBaseDaily = tag.getLong("signInBaseDaily");
-            data.signInMakeupCost = tag.getLong("signInMakeupCost");
+            data.setSignInBaseSpec(PriceSpec.readFromParent(tag, "signInBaseSpec", "signInBaseDaily"));
+            data.setSignInMakeupSpec(PriceSpec.readFromParent(tag, "signInMakeupSpec", "signInMakeupCost"));
             data.signInMakeupDays = tag.getInt("signInMakeupDays");
             int[] td = tag.getIntArray("signInTierDays");
             long[] tb = tag.getLongArray("signInTierBonus");
             if (td.length > 0) { System.arraycopy(td, 0, data.signInTierDays, 0, Math.min(td.length, data.signInTierDays.length)); }
-            if (tb.length > 0) { System.arraycopy(tb, 0, data.signInTierBonus, 0, Math.min(tb.length, data.signInTierBonus.length)); }
+            if (tb.length > 0) {
+                for (int i = 0; i < Math.min(tb.length, data.signInTierBonus.length); i++) {
+                    data.setSignInTierSpec(i, PriceSpec.star(Math.max(0L, tb[i])));
+                }
+            }
+            List<PriceSpec> loadedTierSpecs = new ArrayList<>();
+            readSpecList(tag, "signInTierBonusSpecs", loadedTierSpecs);
+            for (int i = 0; i < Math.min(loadedTierSpecs.size(), data.signInTierBonusSpecs.length); i++) {
+                data.setSignInTierSpec(i, loadedTierSpecs.get(i));
+            }
             int[] md = tag.getIntArray("signInMileDays");
             long[] mm = tag.getLongArray("signInMileMoney");
             if (md.length > 0) { System.arraycopy(md, 0, data.signInMileDays, 0, Math.min(md.length, data.signInMileDays.length)); }
-            if (mm.length > 0) { System.arraycopy(mm, 0, data.signInMileMoney, 0, Math.min(mm.length, data.signInMileMoney.length)); }
+            if (mm.length > 0) {
+                for (int i = 0; i < Math.min(mm.length, data.signInMileMoney.length); i++) {
+                    data.setSignInMileSpec(i, PriceSpec.star(Math.max(0L, mm[i])));
+                }
+            }
+            List<PriceSpec> loadedMileSpecs = new ArrayList<>();
+            readSpecList(tag, "signInMileSpecs", loadedMileSpecs);
+            for (int i = 0; i < Math.min(loadedMileSpecs.size(), data.signInMileSpecs.length); i++) {
+                data.setSignInMileSpec(i, loadedMileSpecs.get(i));
+            }
         }
         data.buybackBonusEnabled = !tag.contains("buybackBonusEnabled") || tag.getBoolean("buybackBonusEnabled");
         data.buybackBonusOverride = tag.contains("buybackBonusOverride") ? tag.getLong("buybackBonusOverride") : -1L;
+        if (tag.contains("buybackBonusSpec", Tag.TAG_COMPOUND)) {
+            data.buybackBonusSpec = PriceSpec.fromTag(tag.getCompound("buybackBonusSpec"),
+                    Math.max(0L, data.buybackBonusOverride));
+        } else if (data.buybackBonusOverride >= 0L) {
+            data.buybackBonusSpec = PriceSpec.star(data.buybackBonusOverride);
+        }
+        readSpecList(tag, "dailyRefreshSpecs", data.dailyRefreshSpecs);
+        readSpecList(tag, "buybackRefreshSpecs", data.buybackRefreshSpecs);
+        readSpecList(tag, "shippingUpgradeSpecs", data.shippingUpgradeSpecs);
         data.listingCounter = tag.getLong("listingCounter");        if (data.listingCounter <= 0) {
             data.listingCounter = 1L;
         }
         data.nextAuctionId = tag.getLong("nextAuctionId");
+        if (data.nextAuctionId <= data.pendingAuctionMaxId) {
+            data.nextAuctionId = data.pendingAuctionMaxId + 1L;
+        }
         if (data.nextAuctionId <= 0) {
             data.nextAuctionId = 1L;
         }
@@ -391,12 +662,18 @@ public final class ShopSavedData extends SavedData {
         SidebarLayout layout = SidebarLayout.load(tag.getCompound("sidebarLayout"));
         data.sidebarLayout.clear();
         data.sidebarLayout.setOrder(layout.order());
+        data.sidebarLayout.setHidden(layout.hidden());
+        for (Map.Entry<String, String> entry : layout.names().entrySet()) {
+            data.sidebarLayout.setName(entry.getKey(), entry.getValue());
+        }
+        data.sidebarLayout.setShopTitle(layout.shopTitle());
+        data.sidebarLayout.setBrandIconId(layout.brandIconId());
 
         data.seedDefaultsIfEmpty();
         return data;
     }
 
-    private ListTag saveOffers(List<ConfiguredOffer> offers, RegistryAccess registries) {
+    private ListTag saveOffers(List<ConfiguredOffer> offers, HolderLookup.Provider registries) {
         ListTag list = new ListTag();
         for (ConfiguredOffer offer : offers) {
             list.add(offer.save(registries));
@@ -404,7 +681,38 @@ public final class ShopSavedData extends SavedData {
         return list;
     }
 
-    private ListTag saveAuctions(RegistryAccess registries) {
+    /** 读档时的拍卖最大 id（只在 load 里用来修正 nextAuctionId）。 */
+    private transient long pendingAuctionMaxId;
+
+    /** 一条拍卖解析失败时只隔离这一条：原始数据进 auctionCorrupt，存档其余部分照常读取。 */
+    private static void loadAuctionSafely(ShopSavedData data, CompoundTag raw, HolderLookup.Provider registries,
+            long legacyDuration, boolean history) {
+        try {
+            AuctionEntry entry = AuctionEntry.load(raw, registries, legacyDuration);
+            if (history || !entry.active()) {
+                data.auctionHistory.add(entry);
+            } else {
+                data.auctions.add(entry);
+            }
+        } catch (RuntimeException error) {
+            org.slf4j.LoggerFactory.getLogger("module_shop").error("拍卖数据损坏，已隔离保存（id={}）",
+                    raw.getLong("id"), error);
+            data.auctionCorrupt.add(raw.copy());
+        }
+    }
+
+    /** 追加一条拍卖异常日志（带时间戳，超出上限丢最旧）。 */
+    public void auctionAnomaly(String message) {
+        String line = java.time.LocalDateTime.now().withNano(0) + " " + message;
+        auctionAnomalies.add(line);
+        while (auctionAnomalies.size() > AUCTION_ANOMALY_MAX) {
+            auctionAnomalies.remove(0);
+        }
+        org.slf4j.LoggerFactory.getLogger("module_shop/auction").warn(message);
+        setDirty();
+    }
+
+    private ListTag saveAuctions(HolderLookup.Provider registries) {
         ListTag list = new ListTag();
         for (AuctionEntry entry : auctions) {
             list.add(entry.save(registries));
@@ -420,21 +728,97 @@ public final class ShopSavedData extends SavedData {
         System.arraycopy(from, 0, to, 0, Math.min(from.length, to.length));
     }
 
+    private static void writeSpecList(CompoundTag tag, String key, List<PriceSpec> specs) {
+        if (specs == null || specs.isEmpty()) {
+            return;
+        }
+        ListTag list = new ListTag();
+        for (PriceSpec spec : specs) {
+            list.add((spec == null ? PriceSpec.ZERO : spec).toTag());
+        }
+        tag.put(key, list);
+    }
+
+    private static void readSpecList(CompoundTag tag, String key, List<PriceSpec> out) {
+        out.clear();
+        if (!tag.contains(key, Tag.TAG_LIST)) {
+            return;
+        }
+        ListTag list = tag.getList(key, Tag.TAG_COMPOUND);
+        for (int i = 0; i < list.size(); i++) {
+            out.add(PriceSpec.fromTag(list.getCompound(i), 0L));
+        }
+    }
+
     private static ShopSavedData create() {
         ShopSavedData data = new ShopSavedData();
         data.seedDefaultsIfEmpty();
         return data;
     }
 
-
-
     public static ShopSavedData get(MinecraftServer server) {
         DimensionDataStorage storage = server.overworld().getDataStorage();
-        // 1.20.1 的 API：computeIfAbsent(loadFunction, createSupplier, name)
-        return storage.computeIfAbsent(tag -> load(tag, null), ShopSavedData::create, FILE_ID);
+        return storage.computeIfAbsent(tag -> load(tag, server.registryAccess()), ShopSavedData::create, FILE_ID);
     }
 
     // ============================ 默认商品池 ============================
+
+    /**
+     * 池子是否仍是模组自带的默认商品（用于判断"这是新世界还是已配置过的世界"）。
+     *
+     * <p>比对的是物品 id 集合；只要玩家增删过任何一件商品就不算默认，自动初始化就不会覆盖它。
+     */
+    public boolean isSeedDefaultPools() {
+        // 直接和"刚从默认种子生成的一份数据"逐项比对：以后默认池改了这里也不用改。
+        ShopSavedData fresh = new ShopSavedData();
+        fresh.seedDefaultsIfEmpty();
+        if (shopSlotCount != fresh.shopSlotCount || buybackSlotCount != fresh.buybackSlotCount) {
+            return false;
+        }
+        if (!java.util.Arrays.equals(shopWeights, fresh.shopWeights)
+                || !java.util.Arrays.equals(buybackWeights, fresh.buybackWeights)) {
+            return false;
+        }
+        if (!java.util.Arrays.equals(shopGuarantee, fresh.shopGuarantee)
+                || !java.util.Arrays.equals(buybackGuarantee, fresh.buybackGuarantee)) {
+            return false;
+        }
+        if (!mallPool.isEmpty() || !exchangePool.isEmpty()) {
+            return false;
+        }
+        return sameIds(shopPool, fresh.shopPool) && sameIds(buybackPool, fresh.buybackPool);
+    }
+
+    /** 两个商品池的物品 id 多重集合是否完全一致。 */
+    private static boolean sameIds(java.util.List<ConfiguredOffer> a, java.util.List<ConfiguredOffer> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        java.util.Map<String, Integer> counts = new java.util.HashMap<>();
+        for (ConfiguredOffer offer : a) {
+            try {
+                String id = net.minecraft.core.registries.BuiltInRegistries.ITEM
+                        .getKey(offer.stack.getItem()).toString();
+                counts.merge(id, 1, Integer::sum);
+            } catch (RuntimeException error) {
+                return false;
+            }
+        }
+        for (ConfiguredOffer offer : b) {
+            try {
+                String id = net.minecraft.core.registries.BuiltInRegistries.ITEM
+                        .getKey(offer.stack.getItem()).toString();
+                Integer left = counts.get(id);
+                if (left == null || left <= 0) {
+                    return false;
+                }
+                counts.put(id, left - 1);
+            } catch (RuntimeException error) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     private void seedDefaultsIfEmpty() {
         if (shopPool.isEmpty() && buybackPool.isEmpty()) {

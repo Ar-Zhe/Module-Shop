@@ -1,6 +1,8 @@
 package cn.autoforged.module_shop.client.screen;
 
 import cn.autoforged.module_shop.client.ClientShopData;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
+import cn.autoforged.module_shop.data.PriceSpec;
 import cn.autoforged.module_shop.network.payload.ServerboundShopActionPayload;
 import java.util.ArrayList;
 import java.util.List;
@@ -25,7 +27,7 @@ import net.minecraft.network.chat.Component;
  * </ul>
  * 数据由服务端 {@code admin_redeem_list} 下发（{@code kind=redeem_list}）。
  */
-public class RedeemListScreen extends Screen {
+public class RedeemListScreen extends SkiaDialog {
     private static final int PANEL_W = 420;
     private static final int PANEL_H = 250;
     private static final int ROW_H = 22;
@@ -72,7 +74,7 @@ public class RedeemListScreen extends Screen {
 
     @Override
     protected void init() {
-        super.init();
+        skiaInit();
         open = this;
         send("admin_redeem_list", null);
     }
@@ -124,6 +126,9 @@ public class RedeemListScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        if (skiaRender(g, mouseX, mouseY, partialTick)) {
+            return;
+        }
         this.regions.clear();
         this.pointerX = mouseX;
         this.pointerY = mouseY;
@@ -193,7 +198,8 @@ public class RedeemListScreen extends Screen {
         int used = c.getInt("used");
         int total = c.getInt("total");
         String usedText = used + "/" + (total <= 0 ? "∞" : Integer.toString(total));
-        String reward = ClientShopData.money(c.getLong("money")) + " " + c.getString("items");
+        String moneyText = PriceDisplay.formatPlain(PriceSpec.readFromParent(c, "moneySpec", "money"));
+        String reward = moneyText + " " + c.getString("items");
         IOStyle.text(g, this.font, Component.literal(code), x + 14, ry + 6, IOStyle.ORANGE);
         small(g, x + 118, ry + 7, Component.literal(IOStyle.ellipsize(this.font,
                 Component.literal(expire + "   " + scope + "   " + usedText + "   " + reward), 320).getString()),
@@ -279,6 +285,204 @@ public class RedeemListScreen extends Screen {
         addRegion(bx, by, bw, 18, "claimed_close", null, null);
     }
 
+    // ------------------------------------------------------------------ Skija
+
+    private final cn.autoforged.module_shop.client.ui.widget.ScrollController skScroll =
+            new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+    private final cn.autoforged.module_shop.client.ui.widget.ScrollController skClaimScroll =
+            new cn.autoforged.module_shop.client.ui.widget.ScrollController();
+    private cn.autoforged.module_shop.client.ui.widget.SkiaTextField skSearch;
+    private String skQuery = "";
+
+    @Override
+    protected void initSkia() {
+        this.skSearch = field(48, Component.translatable("gui.module_shop.search.placeholder").getString())
+                .clearable(true);
+        this.skSearch.editBox().setValue(this.skQuery);
+        this.skSearch.onChange(v -> {
+            this.skQuery = v == null ? "" : v;
+            this.skScroll.scrollTo(0, false);
+        });
+    }
+
+    @Override
+    protected void paint(io.github.humbleui.skija.Canvas c) {
+        float w = 420.0F;
+        float h = 262.0F;
+        float x = Math.round((this.width - w) / 2.0F);
+        float y = Math.round((this.height - h) / 2.0F);
+        float innerX = x + PAD;
+        float innerW = w - PAD * 2;
+        boolean modal = this.claimedOpen;
+        panel(c, x, y, w, h, this.title.getString());
+        float chx = x + w - PAD - 8;
+        float chv = hover("close", chx - 6, y + 6, 14, 14);
+        cn.autoforged.module_shop.client.ui.render.Draw.cross(c, chx + 1, y + 13, 3.5F, 1.3F,
+                cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.TEXT_2, IOStyle.RED, chv));
+        if (!modal) {
+            hit(chx - 6, y + 6, 14, 14, this::onClose, null);
+        }
+        if (this.copiedTicks > 0) {
+            small(c, Component.translatable("gui.module_shop.redeem.list.copied", this.copiedText).getString(),
+                    innerX, y + 13, 140, IOStyle.GREEN);
+        } else {
+            small(c, Component.translatable("gui.module_shop.redeem.list.hint").getString(), innerX, y + 13, 140,
+                    IOStyle.TEXT_3);
+        }
+        if (this.skSearch != null) {
+            this.skSearch.visible(!modal);
+            if (!modal) {
+                this.skSearch.bounds(innerX, y + HEADER_H + 5, innerW, 16);
+            }
+        }
+        List<CompoundTag> filteredCodes = new ArrayList<>();
+        for (CompoundTag tag : CODES) {
+            if (this.skQuery.isBlank() || cn.autoforged.module_shop.client.screen.shop.PageKit.matchesQuery(
+                    this.skQuery,
+                    tag.getString("code"),
+                    tag.getString("items"),
+                    PriceDisplay.formatPlain(PriceSpec.readFromParent(tag, "moneySpec", "money")),
+                    tag.getString("title"))) {
+                filteredCodes.add(tag);
+            }
+        }
+        float listY = y + HEADER_H + 25;
+        float listH = h - HEADER_H - 25 - PAD;
+        if (filteredCodes.isEmpty()) {
+            String emptyMsg = CODES.isEmpty()
+                    ? Component.translatable("gui.module_shop.redeem.list.empty").getString()
+                    : Component.translatable("gui.module_shop.search.empty").getString();
+            center(c, emptyMsg, innerX, listY + listH / 2, innerW, IOStyle.TEXT_2);
+        } else {
+            float total = 0;
+            float[] heights = new float[filteredCodes.size()];
+            for (int i = 0; i < filteredCodes.size(); i++) {
+                String code = filteredCodes.get(i).getString("code");
+                float t = anim("exp:" + code, code.equals(this.expanded), 70.0F);
+                heights[i] = ROW_H + (EXPANDED_H - ROW_H) * t;
+                total += heights[i] + 3;
+            }
+            float oy = beginList(c, this.skScroll, innerX, listY, innerW, listH, total);
+            float ry = oy;
+            for (int i = 0; i < filteredCodes.size(); i++) {
+                float rh = heights[i];
+                if (ry + rh >= listY && ry <= listY + listH) {
+                    skRow(c, innerX, ry, innerW - 10, rh, filteredCodes.get(i), modal);
+                }
+                ry += rh + 3;
+            }
+            endList(c);
+        }
+        if (modal) {
+            skClaimed(c, x, y, w, h);
+        }
+    }
+
+    private void skRow(io.github.humbleui.skija.Canvas c, float x, float ry, float w, float h, CompoundTag tag,
+                       boolean modal) {
+        String code = tag.getString("code");
+        boolean isOpen = code.equals(this.expanded);
+        float hv = modal ? 0 : hover("row:" + code, x, ry, w, ROW_H);
+        int fill = isOpen ? IOStyle.BLUE_TINT
+                : cn.autoforged.module_shop.client.ui.render.Draw.lerp(IOStyle.CARD, IOStyle.ROW_HOVER, hv);
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x, ry, w, h, 3, fill);
+        cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, x, ry, w, h, 3, 1,
+                isOpen ? IOStyle.BLUE : IOStyle.BORDER_DIM);
+        long expireAt = tag.getLong("expireAt");
+        String expire = expireAt <= 0L ? Component.translatable("gui.module_shop.redeem.list.none").getString()
+                : new java.text.SimpleDateFormat("MM-dd HH:mm").format(new java.util.Date(expireAt));
+        String scope = Component.translatable("gui.module_shop.redeem.scope_players", tag.getInt("players"))
+                .getString();
+        int used = tag.getInt("used");
+        int total = tag.getInt("total");
+        String usedText = used + "/" + (total <= 0 ? "∞" : Integer.toString(total));
+        String moneyText = PriceDisplay.formatPlain(PriceSpec.readFromParent(tag, "moneySpec", "money"));
+        String reward = moneyText + " " + tag.getString("items");
+        float cy = ry + ROW_H / 2.0F;
+        cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, code,
+                cn.autoforged.module_shop.client.ui.AtomUi.BOLD, cn.autoforged.module_shop.client.ui.render.Text.BODY,
+                IOStyle.ORANGE, x + 8, cy, 100.5F, cn.autoforged.module_shop.client.ui.render.Text.Align.LEFT);
+        small(c, expire + "   " + scope + "   " + usedText + "   " + reward, x + 112, cy, w - 112 - 22 + 0.5F,
+                IOStyle.TEXT_2);
+        float ax = x + w - 11;
+        float d = isOpen ? -1.5F : 1.5F;
+        int ac = isOpen ? IOStyle.BLUE : IOStyle.TEXT_2;
+        cn.autoforged.module_shop.client.ui.render.Draw.line(c, ax - 3, cy - d, ax, cy + d, 1.2F, ac);
+        cn.autoforged.module_shop.client.ui.render.Draw.line(c, ax, cy + d, ax + 3, cy - d, 1.2F, ac);
+        if (!modal) {
+            hit(x, ry, w, ROW_H, () -> this.expanded = code.equals(this.expanded) ? "" : code, null);
+        }
+        if (h > ROW_H + 8) {
+            float t = (h - ROW_H) / (EXPANDED_H - ROW_H);
+            int saved = cn.autoforged.module_shop.client.ui.render.Draw.beginOpacity(c, t);
+            float bh = 16;
+            float by = ry + h - bh - 4;
+            float bw = 56;
+            float bx = x + w - 8 - bw;
+            cn.autoforged.module_shop.client.ui.widget.Button.Kind n =
+                    cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL;
+            boolean en = !modal && isOpen;
+            button(c, "copy:" + code, Component.translatable("gui.module_shop.redeem.list.copy").getString(), bx, by,
+                    bw, bh, n, en, () -> copy(code));
+            bx -= bw + 4;
+            button(c, "edit:" + code, Component.translatable("gui.module_shop.redeem.list.edit").getString(), bx, by,
+                    bw, bh, n, en, () -> handleAction("edit:" + code));
+            bx -= bw + 4;
+            button(c, "view:" + code, Component.translatable("gui.module_shop.redeem.list.view").getString(), bx, by,
+                    bw, bh, n, en, () -> handleAction("claimed:" + code));
+            bx -= bw + 4;
+            button(c, "del:" + code, Component.translatable("gui.module_shop.redeem.list.delete").getString(), bx, by,
+                    bw, bh, cn.autoforged.module_shop.client.ui.widget.Button.Kind.DANGER, en,
+                    () -> handleAction("delete:" + code));
+            c.restoreToCount(saved);
+        }
+    }
+
+    private void skClaimed(io.github.humbleui.skija.Canvas c, float x, float y, float w, float h) {
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, x, y, w, h, 0, 0x99000000);
+        hit(x, y, w, h, () -> this.claimedOpen = false, null);
+        float pw = 250;
+        float ph = 190;
+        float px = x + (w - pw) / 2;
+        float py = y + (h - ph) / 2;
+        cn.autoforged.module_shop.client.ui.render.Draw.fill(c, px, py, pw, ph, 6, IOStyle.SHEET);
+        cn.autoforged.module_shop.client.ui.render.Draw.stroke(c, px, py, pw, ph, 6, 1, IOStyle.BLUE);
+        hit(px, py, pw, ph, () -> { }, null);
+        center(c, Component.translatable("gui.module_shop.redeem.list.claimed_title", this.claimedCode).getString(),
+                px, py + 13, pw, IOStyle.TEXT);
+        float listY = py + 26;
+        float listH = ph - 26 - 32;
+        if (!this.claimedCode.equals(ClientShopData.redeemClaimedCode)) {
+            center(c, Component.translatable("gui.module_shop.redeem.list.loading").getString(), px,
+                    listY + listH / 2, pw, IOStyle.TEXT_2);
+        } else if (ClientShopData.redeemClaimedNames.isEmpty()) {
+            center(c, Component.translatable("gui.module_shop.redeem.list.claimed_none").getString(), px,
+                    listY + listH / 2, pw, IOStyle.TEXT_2);
+        } else {
+            int n = ClientShopData.redeemClaimedNames.size();
+            float rowH = 16;
+            float oy = beginList(c, this.skClaimScroll, px + 10, listY, pw - 20, listH, n * rowH);
+            for (int i = 0; i < n; i++) {
+                float ly = oy + i * rowH;
+                if (ly + rowH < listY || ly > listY + listH) {
+                    continue;
+                }
+                cn.autoforged.module_shop.client.ui.render.Draw.fill(c, px + 10, ly, pw - 28, rowH - 2, 2,
+                        IOStyle.CARD);
+                text(c, ClientShopData.redeemClaimedNames.get(i), px + 16, ly + 7, pw - 90, IOStyle.TEXT);
+                cn.autoforged.module_shop.client.ui.render.Text.drawLine(c, Component.translatable(
+                                "gui.module_shop.redeem.list.claimed_line", ClientShopData.redeemClaimedCounts.get(i))
+                                .getString(), cn.autoforged.module_shop.client.ui.AtomUi.REGULAR,
+                        cn.autoforged.module_shop.client.ui.render.Text.SMALL, IOStyle.ORANGE, px + 10, ly + 7,
+                        pw - 36, cn.autoforged.module_shop.client.ui.render.Text.Align.RIGHT);
+            }
+            endList(c);
+        }
+        button(c, "claimed_close", Component.translatable("gui.module_shop.cancel").getString(), px + (pw - 80) / 2,
+                py + ph - 26, 80, 18, cn.autoforged.module_shop.client.ui.widget.Button.Kind.NORMAL, true,
+                () -> this.claimedOpen = false);
+    }
+
     /** 0.8 倍小字号。 */
     private void small(GuiGraphics g, int x, int y, Component text, int color) {
         g.pose().pushPose();
@@ -293,18 +497,24 @@ public class RedeemListScreen extends Screen {
     }
 
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
-        if (delta != 0.0D) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
+        if (skia()) {
+            return super.mouseScrolled(mouseX, mouseY, scrollY);
+        }
+        if (scrollY != 0.0D) {
             int perScreen = Math.max(1, (PANEL_H - 32) / ROW_H);
             int maxScroll = Math.max(0, CODES.size() - perScreen);
-            this.scrollRow = Math.max(0, Math.min(maxScroll, this.scrollRow + (delta > 0 ? -1 : 1)));
+            this.scrollRow = Math.max(0, Math.min(maxScroll, this.scrollRow + (scrollY > 0 ? -1 : 1)));
             return true;
         }
-        return super.mouseScrolled(mouseX, mouseY, delta);
+        return super.mouseScrolled(mouseX, mouseY, scrollY);
     }
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (skia() && this.skSearch != null && this.skSearch.editBox().isFocused()) {
+            return super.keyPressed(keyCode, scanCode, modifiers);
+        }
         if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_C
                 && (modifiers & org.lwjgl.glfw.GLFW.GLFW_MOD_CONTROL) != 0) {
             copy(this.expanded.isEmpty() && !CODES.isEmpty() ? CODES.get(0).getString("code") : this.expanded);
@@ -315,6 +525,9 @@ public class RedeemListScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (skia()) {
+            return skiaClicked(mouseX, mouseY, button);
+        }
         for (Region region : this.regions) {
             if (!IOStyle.inside(region.x, region.y, region.w, region.h, mouseX, mouseY)) {
                 continue;

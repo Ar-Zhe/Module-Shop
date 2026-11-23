@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
-import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -45,7 +45,83 @@ public final class PlayerAccount {
     /** 出货箱（新增模块）：每个玩家一份独立空间。 */
     public final ShippingBin shipping = new ShippingBin();
 
-    public CompoundTag save(RegistryAccess registries) {
+    /** 货币兑换（物品↔星币）每日限额统计（现实日期口径，跨日自动清零）。 */
+    public long exchangeQuotaDay = Long.MIN_VALUE;
+    public final Map<String, Integer> exchangeDepositUsed = new java.util.LinkedHashMap<>();
+    public final Map<String, Integer> exchangeWithdrawUsed = new java.util.LinkedHashMap<>();
+
+    /** 实体货币阶梯兑换（凑整/拆零）每日已兑换基准面值总计。 */
+    public long physConvertQuotaDay = Long.MIN_VALUE;
+    public long physConvertUsedToday = 0L;
+
+    public void ensureExchangeDay(long day) {
+        if (this.exchangeQuotaDay != day) {
+            this.exchangeQuotaDay = day;
+            this.exchangeDepositUsed.clear();
+            this.exchangeWithdrawUsed.clear();
+        }
+    }
+
+    public int depositUsedFor(String key, long day) {
+        ensureExchangeDay(day);
+        if (key == null || key.isEmpty()) {
+            return 0;
+        }
+        return Math.max(0, this.exchangeDepositUsed.getOrDefault(key, 0));
+    }
+
+    public int withdrawUsedFor(String key, long day) {
+        ensureExchangeDay(day);
+        if (key == null || key.isEmpty()) {
+            return 0;
+        }
+        return Math.max(0, this.exchangeWithdrawUsed.getOrDefault(key, 0));
+    }
+
+    public void recordDepositUsed(String key, long day, int count) {
+        ensureExchangeDay(day);
+        if (key == null || key.isEmpty() || count <= 0) {
+            return;
+        }
+        this.exchangeDepositUsed.merge(key, count, (a, b) -> {
+            long sum = (long) a + b;
+            return sum >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) sum;
+        });
+    }
+
+    public void recordWithdrawUsed(String key, long day, int count) {
+        ensureExchangeDay(day);
+        if (key == null || key.isEmpty() || count <= 0) {
+            return;
+        }
+        this.exchangeWithdrawUsed.merge(key, count, (a, b) -> {
+            long sum = (long) a + b;
+            return sum >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) sum;
+        });
+    }
+
+    public void ensurePhysConvertDay(long day) {
+        if (this.physConvertQuotaDay != day) {
+            this.physConvertQuotaDay = day;
+            this.physConvertUsedToday = 0L;
+        }
+    }
+
+    public long physConvertUsedForDay(long day) {
+        ensurePhysConvertDay(day);
+        return Math.max(0L, this.physConvertUsedToday);
+    }
+
+    public void recordPhysConvertUsed(long day, long value) {
+        ensurePhysConvertDay(day);
+        if (value <= 0L) {
+            return;
+        }
+        long sum = this.physConvertUsedToday + value;
+        this.physConvertUsedToday = sum < 0L ? Long.MAX_VALUE : sum;
+    }
+
+    public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = new CompoundTag();
         tag.putLong("balance", balance);
         tag.putLong("lastTransferTick", lastTransferTick);
@@ -101,10 +177,41 @@ public final class PlayerAccount {
         tag.put("notifications", notificationsTag);
         tag.putLong("lastNotificationReminderMs", lastNotificationReminderMs);
         tag.put("shipping", shipping.save(registries));
+        if (exchangeQuotaDay != Long.MIN_VALUE) {
+            tag.putLong("exchangeQuotaDay", exchangeQuotaDay);
+        }
+        if (!exchangeDepositUsed.isEmpty()) {
+            CompoundTag depTag = new CompoundTag();
+            for (Map.Entry<String, Integer> e : exchangeDepositUsed.entrySet()) {
+                if (e.getKey() != null && e.getValue() != null && e.getValue() > 0) {
+                    depTag.putInt(e.getKey(), e.getValue());
+                }
+            }
+            if (!depTag.isEmpty()) {
+                tag.put("exchangeDepositUsed", depTag);
+            }
+        }
+        if (!exchangeWithdrawUsed.isEmpty()) {
+            CompoundTag wdTag = new CompoundTag();
+            for (Map.Entry<String, Integer> e : exchangeWithdrawUsed.entrySet()) {
+                if (e.getKey() != null && e.getValue() != null && e.getValue() > 0) {
+                    wdTag.putInt(e.getKey(), e.getValue());
+                }
+            }
+            if (!wdTag.isEmpty()) {
+                tag.put("exchangeWithdrawUsed", wdTag);
+            }
+        }
+        if (physConvertQuotaDay != Long.MIN_VALUE) {
+            tag.putLong("physConvertQuotaDay", physConvertQuotaDay);
+        }
+        if (physConvertUsedToday > 0L) {
+            tag.putLong("physConvertUsedToday", physConvertUsedToday);
+        }
         return tag;
     }
 
-    public static PlayerAccount load(CompoundTag tag, RegistryAccess registries) {
+    public static PlayerAccount load(CompoundTag tag, HolderLookup.Provider registries) {
         PlayerAccount account = new PlayerAccount();
         account.balance = tag.getLong("balance");
         account.lastTransferTick = tag.getLong("lastTransferTick");
@@ -156,9 +263,33 @@ public final class PlayerAccount {
             account.shipping.ruleUsed.putAll(loaded.ruleUsed);
             account.shipping.lastSettleGameDay = loaded.lastSettleGameDay;
             account.shipping.lastPayout = loaded.lastPayout;
+            account.shipping.lastPhysPayout.clear();
+            account.shipping.lastPhysPayout.putAll(loaded.lastPhysPayout);
+            account.shipping.lastPayoutSummary = loaded.lastPayoutSummary;
             account.shipping.lastCount = loaded.lastCount;
             account.shipping.pendingNotice = loaded.pendingNotice;
         }
+        account.exchangeQuotaDay = tag.contains("exchangeQuotaDay") ? tag.getLong("exchangeQuotaDay") : Long.MIN_VALUE;
+        if (tag.contains("exchangeDepositUsed", Tag.TAG_COMPOUND)) {
+            CompoundTag depTag = tag.getCompound("exchangeDepositUsed");
+            for (String key : depTag.getAllKeys()) {
+                int v = depTag.getInt(key);
+                if (v > 0) {
+                    account.exchangeDepositUsed.put(key, v);
+                }
+            }
+        }
+        if (tag.contains("exchangeWithdrawUsed", Tag.TAG_COMPOUND)) {
+            CompoundTag wdTag = tag.getCompound("exchangeWithdrawUsed");
+            for (String key : wdTag.getAllKeys()) {
+                int v = wdTag.getInt(key);
+                if (v > 0) {
+                    account.exchangeWithdrawUsed.put(key, v);
+                }
+            }
+        }
+        account.physConvertQuotaDay = tag.contains("physConvertQuotaDay") ? tag.getLong("physConvertQuotaDay") : Long.MIN_VALUE;
+        account.physConvertUsedToday = Math.max(0L, tag.getLong("physConvertUsedToday"));
         return account;
     }
 }

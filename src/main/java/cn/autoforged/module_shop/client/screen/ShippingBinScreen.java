@@ -2,6 +2,13 @@ package cn.autoforged.module_shop.client.screen;
 
 import cn.autoforged.module_shop.client.ClientShopData;
 import cn.autoforged.module_shop.client.ShippingFavorites;
+import cn.autoforged.module_shop.client.screen.shop.PageKit;
+import cn.autoforged.module_shop.client.ui.AtomUi;
+import cn.autoforged.module_shop.client.ui.render.Draw;
+import cn.autoforged.module_shop.client.ui.render.SkiaFrame;
+import cn.autoforged.module_shop.client.ui.render.Text;
+import cn.autoforged.module_shop.client.ui.v2.PriceDisplay;
+import cn.autoforged.module_shop.data.PriceSpec;
 import cn.autoforged.module_shop.menu.ShippingBinMenu;
 import cn.autoforged.module_shop.shop.ShippingRules;
 import java.util.ArrayList;
@@ -33,7 +40,21 @@ import net.minecraft.world.item.ItemStack;
  *     一眼就知道该往箱子里放什么。</li>
  * </ul>
  */
-public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> implements JeiHoverSource {
+public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu>
+        implements JeiHoverSource, SkiaContainerBackground.Painter {
+
+    @Override
+    public boolean usesSkiaBackground() {
+        return this.skia;
+    }
+
+    @Override
+    public void paintSkiaBackground(GuiGraphics g, int mouseX, int mouseY) {
+        this.lastMouseX = mouseX;
+        this.lastMouseY = mouseY;
+        skBg(g, this.leftPos, this.topPos);
+    }
+
     /** 面板宽度：左边 178（出货箱 + 背包）+ 间距 + 右边 160（可卖清单）。 */
     private static final int PANEL_W = 342;
     /** 右侧清单区域。 */
@@ -55,7 +76,51 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
     private static final int DD_CAT_ROWS = 9;
 
     /** 一行「可卖物品」。 */
-    private record Entry(ItemStack stack, long price, int dailyMax, String id, String namespace) {
+    public record Entry(ItemStack stack, PriceSpec priceSpec, long price, int dailyMax, int ruleLine,
+                        String id, String namespace) {
+        public Entry(ItemStack stack, PriceSpec priceSpec, long price, int dailyMax, String id, String namespace) {
+            this(stack, priceSpec, price, dailyMax, 0, id, namespace);
+        }
+
+        public Entry(ItemStack stack, long price, int dailyMax, String id, String namespace) {
+            this(stack, PriceSpec.star(price), price, dailyMax, 0, id, namespace);
+        }
+    }
+
+    public static PriceSpec specOfRule(ShippingRules.Rule rule) {
+        if (rule == null) {
+            return PriceSpec.ZERO;
+        }
+        String raw = rule.raw() == null ? "" : rule.raw().trim();
+        int eq = raw.indexOf('=');
+        if (eq >= 0 && eq + 1 < raw.length()) {
+            String right = raw.substring(eq + 1).trim();
+            int xIdx = indexOfDailyLimitX(right);
+            String pricePart = (xIdx >= 0 ? right.substring(0, xIdx) : right).trim();
+            PriceSpec parsed = PriceSpec.parseRuleText(pricePart);
+            if (parsed != null && (parsed.isValid() || !parsed.isZero())) {
+                return parsed.supportsStar() && rule.price() > 0L
+                        ? parsed.withStarPrice(rule.price())
+                        : parsed;
+            }
+        }
+        return PriceSpec.star(Math.max(0L, rule.price()));
+    }
+
+    private static int indexOfDailyLimitX(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if ((c == 'x' || c == 'X') && i > 0) {
+                int j = i - 1;
+                while (j > 0 && Character.isWhitespace(text.charAt(j))) {
+                    j--;
+                }
+                if (Character.isDigit(text.charAt(j))) {
+                    return i;
+                }
+            }
+        }
+        return -1;
     }
 
     /** 规则原文 → 展开后的可卖物品（缓存，规则没变就不重建）。 */
@@ -70,9 +135,12 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
      *（列表用 scissor 裁过，在里面画会被切掉大半）。
      */
     private ItemStack pendingTooltipStack = ItemStack.EMPTY;
+    private Entry pendingTooltipEntry;
     /** 鼠标下的物品（给 JEI 快捷键用：R 看怎么合成、U 看能用来做什么）。 */
     private ItemStack jeiHover = ItemStack.EMPTY;
     private int listScroll;
+    private boolean draggingListBar;
+    private float listDragOffsetY;
     private boolean onlyOwned;
     private boolean onlyMarked;
     private String category = "";
@@ -80,6 +148,10 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
     private boolean sortOpen;
     private boolean catOpen;
     private int catScroll;
+    private boolean draggingCatBar;
+    private float catDragOffsetY;
+    private int lastMouseX;
+    private int lastMouseY;
     private final int[] catRect = new int[4];
     private final List<int[]> rowRects = new ArrayList<>();
     private final List<int[]> starRects = new ArrayList<>();
@@ -116,7 +188,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
     }
 
     /** 把规则展开成"具体能卖哪些物品"（标签 / 整模组会展开成物品；单条规则最多 400 件，总计 2000 件）。 */
-    private static List<Entry> allEntries() {
+    public static List<Entry> allEntries() {
         String text = ClientShopData.shipRulesText == null ? "" : ClientShopData.shipRulesText;
         if (!entryCache.isEmpty() && text.equals(entryKey)) {
             return entryCache;
@@ -138,7 +210,9 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
                 if (id.isEmpty() || !seen.add(id)) {
                     continue;
                 }
-                result.add(new Entry(stack, rule.price(), rule.dailyMax(), id, namespaceOf(stack)));
+                PriceSpec spec = specOfRule(rule);
+                long star = spec.supportsStar() ? spec.starPrice : rule.price();
+                result.add(new Entry(stack, spec, star, rule.dailyMax(), rule.line(), id, namespaceOf(stack)));
                 added++;
             }
         }
@@ -153,17 +227,12 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
             set.add(entry.namespace());
         }
         List<String> list = new ArrayList<>(set);
-        list.sort(Comparator.comparing(ns -> modName(ns).toLowerCase()));
+        list.sort(cn.autoforged.module_shop.client.ModNames.namespaceComparator());
         return list;
     }
 
-    private static String modName(String namespace) {
-        try {
-            return net.minecraftforge.fml.ModList.get().getModContainerById(namespace)
-                    .map(c -> c.getModInfo().getDisplayName()).orElse(namespace);
-        } catch (Throwable ignored) {
-            return namespace;
-        }
+    public static String modName(String namespace) {
+        return cn.autoforged.module_shop.client.ModNames.displayName(namespace);
     }
 
     /** 背包里有多少个该物品（只看已有 / 悬停提示用）。 */
@@ -189,7 +258,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
 
     private void rebuildVisible() {
         this.visible.clear();
-        String query = this.searchBox == null ? "" : this.searchBox.getValue().trim().toLowerCase();
+        String query = this.searchBox == null ? "" : this.searchBox.getValue().trim();
         for (Entry entry : allEntries()) {
             if (!this.category.isEmpty() && !this.category.equals(entry.namespace())) {
                 continue;
@@ -200,18 +269,16 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
             if (this.onlyOwned && ownedCount(entry.stack()) <= 0) {
                 continue;
             }
-            if (!query.isEmpty()) {
-                String name = entry.stack().getHoverName().getString().toLowerCase();
-                if (!name.contains(query) && !entry.namespace().contains(query)
-                        && !modName(entry.namespace()).toLowerCase().contains(query)) {
-                    continue;
-                }
+            if (!query.isEmpty() && !PageKit.matchesItemQuery(entry.stack(), query)) {
+                continue;
             }
             this.visible.add(entry);
         }
         switch (this.sort) {
-            case 1 -> this.visible.sort(Comparator.comparingLong(Entry::price));
-            case 2 -> this.visible.sort((a, b) -> Long.compare(b.price(), a.price()));
+            case 1 -> this.visible.sort(Comparator.comparingInt((Entry e) -> e.priceSpec().supportsPhys() ? 1 : 0)
+                    .thenComparingLong(Entry::price));
+            case 2 -> this.visible.sort(Comparator.comparingInt((Entry e) -> e.priceSpec().supportsPhys() ? 1 : 0)
+                    .thenComparing(Comparator.comparingLong(Entry::price).reversed()));
             case 3 -> this.visible.sort(Comparator.comparing(e -> e.stack().getHoverName().getString()));
             default -> {
             }
@@ -223,11 +290,12 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
     @Override
     protected void init() {
         super.init();
+        this.skia = cn.autoforged.module_shop.client.ui.AtomUi.available();
         this.titleLabelX = 8;
         this.titleLabelY = 8;
         ShippingFavorites.ensureLoaded();
         this.searchBox = new EditBox(this.font, this.leftPos + LIST_X + 5, this.topPos + SEARCH_Y + 4,
-                LIST_W - 10, CTRL_H, Component.translatable("gui.module_shop.shipping.search_hint"));
+                LIST_W - 22, CTRL_H, Component.translatable("gui.module_shop.search.placeholder"));
         this.searchBox.setBordered(false);
         this.searchBox.setMaxLength(32);
         // hint 由界面自己画（原版 hint 只在失焦时出现，会和自绘的叠在一起）——所以这里清空。
@@ -260,6 +328,9 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
     protected void renderBg(GuiGraphics g, float partialTick, int mouseX, int mouseY) {
         int x = this.leftPos;
         int y = this.topPos;
+        if (this.skia) {
+            return;   // Skija 底板在 SkiaContainerBackground 里画（避免被其它模组的暗色背景盖住）
+        }
         Bricks.panel(g, x, y, this.imageWidth, this.imageHeight);
         int rows = Math.max(1, (getMenu().binSlots() + 8) / 9);
         g.fill(x + 6, y + ShippingBinMenu.BIN_Y - 4, x + ShippingBinMenu.BIN_X + 162,
@@ -276,9 +347,15 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        this.lastMouseX = mouseX;
+        this.lastMouseY = mouseY;
         super.render(g, mouseX, mouseY, partialTick);
         int x = this.leftPos;
         int y = this.topPos;
+        if (this.skia) {
+            skOverlay(g, x, y, mouseX, mouseY);
+            return;
+        }
         this.jeiHover = ItemStack.EMPTY;
         this.rowRects.clear();
         this.starRects.clear();
@@ -287,8 +364,9 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         rebuildVisible();
         // ---- 顶部两行信息（本次结算 / 今日已结算），宽度限制在右侧清单之前 ----
         long value = liveValue();
+        String payoutText = liveValueSummary();
         drawSmall(g, x + 8, y + 18, Component.translatable("gui.module_shop.shipping.next_payout",
-                ClientShopData.money(value), liveItems()), value > 0L ? IOStyle.ORANGE : IOStyle.TEXT_2, 152);
+                payoutText, liveItems()), (value > 0L || hasLivePhysValue()) ? IOStyle.ORANGE : IOStyle.TEXT_2, 152);
         drawSmall(g, x + 8, y + 26, ClientShopData.shipLimit > 0L
                         ? Component.translatable("gui.module_shop.shipping.today_line",
                                 ClientShopData.money(ClientShopData.shipSoldToday),
@@ -304,12 +382,14 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         // 自绘框反而会盖掉物品本身的信息（而且分隔符在小字里会显示成方块）。
         if (!this.pendingTooltipStack.isEmpty()) {
             List<Component> tooltip = new ArrayList<>(getTooltipFromItem(this.minecraft, this.pendingTooltipStack));
+            appendDailyCapTooltip(tooltip);
             // 最后补一行「左键：一键放入」：点一整行直接搬进箱子这个操作，不提示没人会发现。
             tooltip.add(Component.translatable("gui.module_shop.shipping.tip_click")
                     .withStyle(net.minecraft.ChatFormatting.DARK_GRAY));
             g.renderTooltip(this.font, tooltip, java.util.Optional.empty(), this.pendingTooltipStack,
                     mouseX, mouseY);
             this.pendingTooltipStack = ItemStack.EMPTY;
+            this.pendingTooltipEntry = null;
         }
         // 槽位悬停提示：必须画在最后（原版 AbstractContainerScreen 先画，会被自绘面板盖住）。
         if (this.hoveredSlot != null && this.hoveredSlot.hasItem()) {
@@ -319,6 +399,9 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
 
     @Override
     protected void renderLabels(GuiGraphics g, int mouseX, int mouseY) {
+        if (this.skia) {
+            return;
+        }
         IOStyle.text(g, this.font, Component.translatable("gui.module_shop.shipping.title",
                 ClientShopData.shipLevel, ClientShopData.shipSlots), 8, 6, IOStyle.TEXT);
         IOStyle.text(g, this.font, Component.translatable("gui.module_shop.shipping.bag"),
@@ -355,6 +438,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         int sx = x + LIST_X;
         int halfW = (LIST_W - 4) / 2;
         this.pendingTooltipStack = ItemStack.EMPTY;
+        this.pendingTooltipEntry = null;
         // 搜索框
         IOStyle.rounded(g, sx, y + SEARCH_Y, LIST_W, CTRL_H, 0, IOStyle.FIELD_BG);
         boolean searchFocused = this.searchBox != null && this.searchBox.isFocused();
@@ -363,8 +447,13 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         // 提示文字自己画：原版只在"未聚焦"时画 hint，这里保证玩家一眼看到该框能打字。
         if (this.searchBox != null && this.searchBox.getValue().isEmpty() && !searchFocused) {
             drawSmall(g, sx + 5, y + SEARCH_Y + 4,
-                    Component.translatable("gui.module_shop.shipping.search_hint"), IOStyle.TEXT_3,
-                    LIST_W - 10);
+                    Component.translatable("gui.module_shop.search.placeholder"), IOStyle.TEXT_3,
+                    LIST_W - 22);
+        }
+        if (this.searchBox != null && !this.searchBox.getValue().isEmpty()) {
+            boolean clrHover = IOStyle.inside(sx + LIST_W - 15, y + SEARCH_Y, 15, CTRL_H, mouseX, mouseY);
+            g.drawString(this.font, "×", sx + LIST_W - 10, y + SEARCH_Y + 3,
+                    clrHover ? IOStyle.RED : IOStyle.TEXT_3, false);
         }
         // 分类 / 排序
         String catName = this.category.isEmpty()
@@ -403,12 +492,14 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         // （以前点开「排序」时，面板被清单里的胡萝卜 / 马铃薯图标盖住，看着像没弹出来）。
         // 与其和深度缓冲较劲，不如把被遮住的那几个图标直接不画（购物城 / 管理页的下拉也是同样处理）。
         int[] overlay = openDropdownRect();
+        int rowW = maxScroll > 0 ? LIST_W - 8 : LIST_W - 4;
+        int rightReserve = maxScroll > 0 ? 10 : 6;
         g.enableScissor(sx, top, sx + LIST_W, bottom);
         for (int i = this.listScroll; i < this.visible.size() && i - this.listScroll < per; i++) {
             Entry entry = this.visible.get(i);
             int ry = top + (i - this.listScroll) * LIST_ROW_H;
-            boolean hover = IOStyle.inside(sx, ry, LIST_W, LIST_ROW_H - 1, mouseX, mouseY);
-            IOStyle.rounded(g, sx, ry, LIST_W, LIST_ROW_H - 1, 0, hover ? IOStyle.ROW_HOVER : IOStyle.SIDEBAR);
+            boolean hover = overlay == null && IOStyle.inside(sx, ry, rowW, LIST_ROW_H - 1, mouseX, mouseY);
+            IOStyle.rounded(g, sx, ry, rowW, LIST_ROW_H - 1, 0, hover ? IOStyle.ROW_HOVER : IOStyle.SIDEBAR);
             boolean marked = ShippingFavorites.contains(entry.id());
             g.drawString(this.font, marked ? "★" : "☆", sx + 2, ry + 4,
                     marked ? IOStyle.ORANGE : IOStyle.TEXT_3, false);
@@ -419,35 +510,52 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
                 g.renderItem(entry.stack(), sx + 14, ry);
                 g.renderItemDecorations(this.font, entry.stack(), sx + 14, ry);
             }
-            int priceW = (int) (this.font.width(ClientShopData.money(entry.price())) * 0.8F);
-            int nameMax = (int) ((LIST_W - 24 - priceW - 6) / 0.8F);
+            int used = ClientShopData.shipRuleUsedCount(entry.ruleLine());
+            String capText = entry.dailyMax() > 0 ? (used + "/" + entry.dailyMax()) : "∞";
+            int capColor = entry.dailyMax() > 0
+                    ? (used >= entry.dailyMax() ? IOStyle.RED : (used > 0 ? IOStyle.ORANGE : IOStyle.TEXT_2))
+                    : IOStyle.TEXT_3;
+            String priceText = PriceDisplay.formatPlain(entry.priceSpec());
+            int priceW = (int) (this.font.width(priceText) * 0.8F);
+            int capW = (int) (this.font.width(capText) * 0.75F);
+            int nameAreaW = Math.max(12, LIST_W - 36 - priceW - capW - rightReserve);
+            int nameMax = (int) (nameAreaW / 0.8F);
             String name = entry.stack().getHoverName().getString();
             drawSmall(g, sx + 32, ry + 4, Component.literal(this.font.width(name) > nameMax
                     ? this.font.plainSubstrByWidth(name, Math.max(1, nameMax - 6)) + "…" : name),
-                    IOStyle.TEXT, LIST_W - 34 - priceW);
+                    IOStyle.TEXT, nameAreaW);
             g.pose().pushPose();
-            g.pose().translate(sx + LIST_W - 4 - priceW, ry + 4, 0.0F);
+            g.pose().translate(sx + LIST_W - rightReserve - 2 - priceW - capW, ry + 4.5F, 0.0F);
+            g.pose().scale(0.75F, 0.75F, 1.0F);
+            g.drawString(this.font, capText, 0, 0, capColor, false);
+            g.pose().popPose();
+            g.pose().pushPose();
+            g.pose().translate(sx + LIST_W - rightReserve - priceW, ry + 4, 0.0F);
             g.pose().scale(0.8F, 0.8F, 1.0F);
-            g.drawString(this.font, ClientShopData.money(entry.price()), 0, 0, IOStyle.ORANGE, false);
+            g.drawString(this.font, priceText, 0, 0, IOStyle.ORANGE, false);
             g.pose().popPose();
             int index = i;
             this.starRects.add(new int[]{sx + 1, ry + 2, 11, LIST_ROW_H - 4, index});
-            this.rowRects.add(new int[]{sx + 14, ry, LIST_W - 18, LIST_ROW_H - 1, index});
+            this.rowRects.add(new int[]{sx + 14, ry, rowW - 14, LIST_ROW_H - 1, index});
             if (hover) {
                 // 只记录「悬停的是哪件物品」：悬浮框由 render() 在裁剪区之外用原版渲染画，
                 // 列表被 scissor 裁过，在这里直接画会被截掉大半。
                 this.pendingTooltipStack = entry.stack();
+                this.pendingTooltipEntry = entry;
                 this.jeiHover = entry.stack();
             }
         }
         g.disableScissor();
         if (maxScroll > 0) {
             int viewH = per * LIST_ROW_H;
-            int trackX = sx + LIST_W - 3;
-            g.fill(trackX, top, trackX + 1, top + viewH, IOStyle.HAIR);
-            int thumbH = Math.max(12, viewH * per / Math.max(1, this.visible.size()));
+            int trackX = sx + LIST_W - 4;
+            boolean barHot = this.draggingListBar
+                    || (overlay == null && IOStyle.inside(sx + LIST_W - 10, top, 12, viewH, mouseX, mouseY));
+            g.fill(trackX, top, trackX + 2, top + viewH, IOStyle.HAIR);
+            int thumbH = Math.min(viewH, Math.max(18, viewH * per / Math.max(1, this.visible.size())));
             int thumbY = top + (viewH - thumbH) * this.listScroll / Math.max(1, maxScroll);
-            g.fill(trackX, thumbY, trackX + 1, thumbY + thumbH, IOStyle.BLUE);
+            g.fill(trackX, thumbY, trackX + 2, thumbY + thumbH,
+                    this.draggingListBar ? IOStyle.BLUE : (barHot ? IOStyle.TEXT_2 : IOStyle.BLUE));
         }
         // 底部数量提示（在面板内的清单底板里，不会被边框切掉）
         drawSmall(g, sx, countY, Component.translatable(
@@ -478,7 +586,10 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
             this.catRect[1] = panelY;
             this.catRect[2] = pw;
             this.catRect[3] = ph;
-            this.catScroll = Mth.clamp(this.catScroll, 0, Math.max(0, total - rows));
+            int catMax = Math.max(0, total - rows);
+            this.catScroll = Mth.clamp(this.catScroll, 0, catMax);
+            boolean hasCatBar = catMax > 0;
+            int rowInnerW = hasCatBar ? pw - 10 : pw - 4;
             IOStyle.card(g, sx, panelY, pw, ph, 0);
             for (int i = this.catScroll; i < Math.min(total, this.catScroll + rows); i++) {
                 String ns = i == 0 ? "" : cats.get(i - 1);
@@ -486,16 +597,28 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
                         : modName(ns);
                 int ry = panelY + 2 + (i - this.catScroll) * DD_ROW_H;
                 boolean current = ns.equals(this.category);
-                boolean hover = IOStyle.inside(sx + 2, ry, pw - 4, DD_ROW_H, mouseX, mouseY);
-                IOStyle.rounded(g, sx + 2, ry, pw - 4, DD_ROW_H, 0,
+                boolean hover = IOStyle.inside(sx + 2, ry, rowInnerW, DD_ROW_H, mouseX, mouseY);
+                IOStyle.rounded(g, sx + 2, ry, rowInnerW, DD_ROW_H, 0,
                         current ? IOStyle.BLUE_TINT : (hover ? IOStyle.ROW_HOVER : IOStyle.SIDEBAR));
-                IOStyle.ring(g, sx + 2, ry, pw - 4, DD_ROW_H, 0,
+                IOStyle.ring(g, sx + 2, ry, rowInnerW, DD_ROW_H, 0,
                         current ? IOStyle.BORDER_HOVER : IOStyle.BORDER_DIM);
-                int nameMax = (int) ((pw - 16) / 0.8F);
+                int nameMax = (int) ((rowInnerW - 12) / 0.8F);
                 drawSmall(g, sx + 8, ry + 3, Component.literal(this.font.width(name) > nameMax
                         ? this.font.plainSubstrByWidth(name, Math.max(1, nameMax - 6)) + "…" : name),
-                        current ? IOStyle.BLUE : IOStyle.TEXT, pw - 16);
-                this.catRects.add(new int[]{sx + 2, ry, pw - 4, DD_ROW_H, i});
+                        current ? IOStyle.BLUE : IOStyle.TEXT, rowInnerW - 12);
+                this.catRects.add(new int[]{sx + 2, ry, rowInnerW, DD_ROW_H, i});
+            }
+            if (hasCatBar) {
+                int trackX = sx + pw - 5;
+                int trackY = panelY + 3;
+                int viewH = rows * DD_ROW_H - 2;
+                boolean barHot = this.draggingCatBar
+                        || IOStyle.inside(sx + pw - 10, panelY, 12, ph, mouseX, mouseY);
+                g.fill(trackX, trackY, trackX + 2, trackY + viewH, IOStyle.HAIR);
+                int thumbH = Math.min(viewH, Math.max(18, viewH * rows / Math.max(1, total)));
+                int thumbY = trackY + (viewH - thumbH) * this.catScroll / Math.max(1, catMax);
+                g.fill(trackX, thumbY, trackX + 2, thumbY + thumbH,
+                        this.draggingCatBar ? IOStyle.BLUE : (barHot ? IOStyle.TEXT_2 : IOStyle.TEXT_3));
             }
         }
         if (this.sortOpen) {
@@ -538,7 +661,354 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
     }
 
+    // =========================================================== Skija 绘制
+    // 只换绘制：控件位置与旧版一致，并填充同样的命中矩形（rowRects / starRects / sortRects / catRects），
+    // 因此点击、滚轮、一键放入等交互逻辑完全复用旧代码。
+
+    private boolean skia;
+    private final cn.autoforged.module_shop.client.ui.render.ItemOverlay listItems =
+            new cn.autoforged.module_shop.client.ui.render.ItemOverlay();
+    private final cn.autoforged.module_shop.client.ui.widget.Motion.Clock clock =
+            new cn.autoforged.module_shop.client.ui.widget.Motion.Clock();
+    private final Map<String, Float> skAnim = new java.util.HashMap<>();
+    private float skDt;
+
+    private float skHover(String key, boolean on) {
+        float v = cn.autoforged.module_shop.client.ui.widget.Motion.approach(skAnim.getOrDefault(key, 0.0F),
+                on ? 1.0F : 0.0F, this.skDt, cn.autoforged.module_shop.client.ui.widget.Motion.HOVER_MS);
+        skAnim.put(key, v);
+        return v;
+    }
+
+    private void skBg(GuiGraphics g, int x, int y) {
+        this.skDt = this.clock.tick();
+        int rows = Math.max(1, (getMenu().binSlots() + 8) / 9);
+        SkiaFrame.draw(g, c -> {
+            SkiaDialog.bare(c, x, y, this.imageWidth, this.imageHeight);
+            Text.drawLine(c, Component.translatable("gui.module_shop.shipping.title", ClientShopData.shipLevel,
+                            ClientShopData.shipSlots).getString(), AtomUi.BOLD, Text.BODY, IOStyle.TEXT, x + 8, y + 10,
+                    160.5F, Text.Align.LEFT);
+            long value = liveValue();
+            String payoutText = liveValueSummary();
+            Text.drawLine(c, Component.translatable("gui.module_shop.shipping.next_payout",
+                            payoutText, liveItems()).getString(), AtomUi.REGULAR, Text.SMALL,
+                    (value > 0L || hasLivePhysValue()) ? IOStyle.ORANGE : IOStyle.TEXT_2, x + 8, y + 21, 156.5F, Text.Align.LEFT);
+            Text.drawLine(c, (ClientShopData.shipLimit > 0L
+                            ? Component.translatable("gui.module_shop.shipping.today_line",
+                            ClientShopData.money(ClientShopData.shipSoldToday),
+                            ClientShopData.money(ClientShopData.shipLimit))
+                            : Component.translatable("gui.module_shop.shipping.today_line_unlimited",
+                            ClientShopData.money(ClientShopData.shipSoldToday))).getString(), AtomUi.REGULAR,
+                    Text.SMALL, IOStyle.TEXT_2, x + 8, y + 29, 160.5F, Text.Align.LEFT);
+            Draw.fill(c, x + 6, y + ShippingBinMenu.BIN_Y - 4, ShippingBinMenu.BIN_X + 156,
+                    rows * 18 + 4, 3, IOStyle.CARD);
+            for (int i = 0; i < getMenu().binSlots(); i++) {
+                SkiaDialog.slotFrame(c, x + ShippingBinMenu.BIN_X + (i % 9) * 18,
+                        y + ShippingBinMenu.BIN_Y + (i / 9) * 18);
+            }
+            Text.drawLine(c, Component.translatable("gui.module_shop.shipping.bag").getString(), AtomUi.REGULAR,
+                    Text.SMALL, IOStyle.TEXT_3, x + 8, y + getMenu().inventoryY() - 6, 160.5F, Text.Align.LEFT);
+            SkiaDialog.playerSlots(c, x + ShippingBinMenu.BIN_X, y + getMenu().inventoryY());
+            // 右侧清单底板 + 搜索框底（搜索文字由原版输入框画在上面）
+            SkiaDialog.card(c, x + LIST_X - 6, y + 2, LIST_W + 12, this.imageHeight - 6);
+            boolean focused = this.searchBox != null && this.searchBox.isFocused();
+            Draw.fill(c, x + LIST_X, y + SEARCH_Y, LIST_W, CTRL_H, 3, IOStyle.FIELD_BG);
+            Draw.stroke(c, x + LIST_X, y + SEARCH_Y, LIST_W, CTRL_H, 3, 1, focused ? IOStyle.BLUE : IOStyle.BORDER_DIM);
+            SkiaDialog.themeBox(this.searchBox);
+            if (this.searchBox != null && this.searchBox.getValue().isEmpty() && !focused) {
+                Text.drawLine(c, Component.translatable("gui.module_shop.search.placeholder").getString(),
+                        AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_3, x + LIST_X + 5, y + SEARCH_Y + CTRL_H / 2.0F,
+                        LIST_W - 22 + 0.5F, Text.Align.LEFT);
+            }
+            if (this.searchBox != null && !this.searchBox.getValue().isEmpty()) {
+                boolean clrHover = IOStyle.inside(x + LIST_X + LIST_W - 15, y + SEARCH_Y, 15, CTRL_H,
+                        this.lastMouseX, this.lastMouseY);
+                Text.drawLine(c, "×", AtomUi.BOLD, Text.BODY, clrHover ? IOStyle.RED : IOStyle.TEXT_3,
+                        x + LIST_X + LIST_W - 14, y + SEARCH_Y + CTRL_H / 2.0F, 12, Text.Align.CENTER);
+            }
+        });
+    }
+
+    private void skOverlay(GuiGraphics g, int x, int y, int mouseX, int mouseY) {
+        this.jeiHover = ItemStack.EMPTY;
+        this.pendingTooltipStack = ItemStack.EMPTY;
+        this.pendingTooltipEntry = null;
+        this.rowRects.clear();
+        this.starRects.clear();
+        this.sortRects.clear();
+        this.catRects.clear();
+        rebuildVisible();
+        int[] dd = openDropdownRect();
+        boolean underDropdown = dd != null && overlaps(dd[0], dd[1], dd[2], dd[3], mouseX, mouseY, 1, 1);
+        this.listItems.begin(mouseX, mouseY, !underDropdown);
+        SkiaFrame.draw(g, c -> {
+            skHighlight(c, x, y);
+            skList(c, x, y, mouseX, mouseY, underDropdown);
+        });
+        this.listItems.flush(g, this.font);
+        if (dd != null) {
+            SkiaFrame.draw(g, c -> skDropdowns(c, x, y, mouseX, mouseY));
+        }
+        if (!this.pendingTooltipStack.isEmpty()) {
+            List<Component> tooltip = new ArrayList<>(getTooltipFromItem(this.minecraft, this.pendingTooltipStack));
+            appendDailyCapTooltip(tooltip);
+            tooltip.add(Component.translatable("gui.module_shop.shipping.tip_click")
+                    .withStyle(net.minecraft.ChatFormatting.DARK_GRAY));
+            g.renderTooltip(this.font, tooltip, java.util.Optional.empty(), this.pendingTooltipStack, mouseX, mouseY);
+            this.pendingTooltipStack = ItemStack.EMPTY;
+            this.pendingTooltipEntry = null;
+        } else if (this.hoveredSlot != null && this.hoveredSlot.hasItem()) {
+            g.renderTooltip(this.font, this.hoveredSlot.getItem(), mouseX, mouseY);
+        }
+    }
+
+    private void skHighlight(io.github.humbleui.skija.Canvas c, int x, int y) {
+        if (!this.onlyOwned && !this.onlyMarked) {
+            return;
+        }
+        for (Slot slot : getMenu().slots) {
+            if (slot.container != this.minecraft.player.getInventory() || !slot.hasItem()) {
+                continue;
+            }
+            ItemStack stack = slot.getItem();
+            int color = 0;
+            if (this.onlyMarked && ShippingFavorites.contains(itemId(stack))) {
+                color = IOStyle.ORANGE;
+            } else if (this.onlyOwned && sellable(stack)) {
+                color = IOStyle.GREEN;
+            }
+            if (color != 0) {
+                Draw.stroke(c, x + slot.x - 1, y + slot.y - 1, 18, 18, 2, 1.2F, color);
+                Draw.stroke(c, x + slot.x - 2.5F, y + slot.y - 2.5F, 21, 21, 3, 1, Draw.alpha(color, 0.35F));
+            }
+        }
+    }
+
+    private void skControl(io.github.humbleui.skija.Canvas c, String key, float x, float y, float w, float h,
+                           String label, boolean active, boolean chevron, boolean open, int mouseX, int mouseY) {
+        float hv = skHover(key, mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + h);
+        float on = skHover(key + ":on", active);
+        Draw.fill(c, x, y, w, h, 3, Draw.lerp(Draw.lerp(IOStyle.GRAY_BTN, IOStyle.GRAY_BTN_HOVER, hv),
+                Draw.alpha(IOStyle.BLUE, 0.22F), on));
+        Draw.stroke(c, x, y, w, h, 3, 1, Draw.lerp(Draw.lerp(IOStyle.BORDER_DIM, IOStyle.BORDER_HOVER, hv),
+                IOStyle.BLUE, on));
+        float textW = w - 8 - (chevron ? 10 : 0);
+        Text.drawLine(c, label, AtomUi.REGULAR, Text.SMALL, active ? IOStyle.BLUE : IOStyle.TEXT, x + 4,
+                y + h / 2.0F, textW + 0.5F, Text.Align.LEFT);
+        if (chevron) {
+            float cx = x + w - 7;
+            float cy = y + h / 2.0F;
+            float d = open ? -1.5F : 1.5F;
+            Draw.line(c, cx - 3, cy - d, cx, cy + d, 1.2F, IOStyle.TEXT_2);
+            Draw.line(c, cx, cy + d, cx + 3, cy - d, 1.2F, IOStyle.TEXT_2);
+        }
+    }
+
+    private void skList(io.github.humbleui.skija.Canvas c, int x, int y, int mouseX, int mouseY,
+                        boolean underDropdown) {
+        int sx = x + LIST_X;
+        int halfW = (LIST_W - 4) / 2;
+        int sortX = sx + halfW + 4;
+        String catName = this.category.isEmpty()
+                ? Component.translatable("gui.module_shop.shipping.cat_all").getString() : modName(this.category);
+        skControl(c, "cat", sx, y + ROW2_Y, halfW, CTRL_H, catName, this.catOpen, true, this.catOpen, mouseX, mouseY);
+        skControl(c, "sort", sortX, y + ROW2_Y, halfW, CTRL_H,
+                Component.translatable("gui.module_shop.shipping.sort_label", sortName()).getString(), this.sortOpen,
+                true, this.sortOpen, mouseX, mouseY);
+        skControl(c, "owned", sx, y + ROW3_Y, halfW, CTRL_H,
+                Component.translatable("gui.module_shop.shipping.only_owned").getString(), this.onlyOwned, false,
+                false, mouseX, mouseY);
+        skControl(c, "marked", sortX, y + ROW3_Y, halfW, CTRL_H,
+                Component.translatable("gui.module_shop.shipping.only_marked").getString(), this.onlyMarked, false,
+                false, mouseX, mouseY);
+        int top = y + LIST_TOP;
+        int countY = y + this.imageHeight - 16;
+        int bottom = countY - 4;
+        int per = Math.max(1, (bottom - top) / LIST_ROW_H);
+        if (this.visible.isEmpty()) {
+            Text.drawLine(c, Component.translatable("gui.module_shop.shipping.list_empty").getString(),
+                    AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_3, sx, top + 14, LIST_W + 0.5F, Text.Align.CENTER);
+            return;
+        }
+        int maxScroll = Math.max(0, this.visible.size() - per);
+        this.listScroll = Mth.clamp(this.listScroll, 0, maxScroll);
+        float rowW = maxScroll > 0 ? LIST_W - 8.0F : LIST_W - 4.0F;
+        float rightReserve = maxScroll > 0 ? 10.0F : 7.0F;
+        int saved = c.save();
+        Draw.clip(c, sx, top, LIST_W, bottom - top);
+        this.listItems.pushClip(sx, top, LIST_W, bottom - top);
+        for (int i = this.listScroll; i < this.visible.size() && i - this.listScroll < per; i++) {
+            Entry entry = this.visible.get(i);
+            int ry = top + (i - this.listScroll) * LIST_ROW_H;
+            boolean hover = !underDropdown && IOStyle.inside(sx, ry, (int) rowW, LIST_ROW_H - 1, mouseX, mouseY);
+            float hv = skHover("row:" + entry.id(), hover);
+            Draw.fill(c, sx, ry, rowW, LIST_ROW_H - 1, 2, Draw.lerp(IOStyle.SIDEBAR, IOStyle.ROW_HOVER, hv));
+            boolean marked = ShippingFavorites.contains(entry.id());
+            boolean starHover = !underDropdown && IOStyle.inside(sx + 1, ry + 2, 11, LIST_ROW_H - 4, mouseX, mouseY);
+            Text.drawLine(c, marked ? "★" : "☆", AtomUi.REGULAR, Text.BODY,
+                    marked ? IOStyle.ORANGE : (starHover ? IOStyle.TEXT : IOStyle.TEXT_3), sx + 2, ry + LIST_ROW_H / 2.0F,
+                    10, Text.Align.CENTER);
+            this.listItems.add(entry.stack(), sx + 14, ry, 15, true);
+            int used = ClientShopData.shipRuleUsedCount(entry.ruleLine());
+            String capText = entry.dailyMax() > 0 ? (used + "/" + entry.dailyMax()) : "∞";
+            int capColor = entry.dailyMax() > 0
+                    ? (used >= entry.dailyMax() ? IOStyle.RED : (used > 0 ? IOStyle.ORANGE : IOStyle.TEXT_2))
+                    : IOStyle.TEXT_3;
+            float pw = Math.min(62.0F, Math.max(22.0F,
+                    Text.width(PriceDisplay.formatPlain(entry.priceSpec()), AtomUi.BOLD, Text.SMALL) + 14.0F));
+            float capW = Math.min(38.0F, Text.width(capText, AtomUi.REGULAR, Text.SMALL) + 2.5F);
+            float maxCols = Math.max(36.0F, LIST_W - rightReserve - 36.0F - 24.0F);
+            if (pw + capW + 3.0F > maxCols) {
+                pw = Math.max(22.0F, maxCols - capW - 3.0F);
+            }
+            float priceX = sx + LIST_W - rightReserve - pw;
+            float capX = priceX - 3.0F - capW;
+            PriceDisplay.drawCell(c, this.listItems, entry.priceSpec(), priceX,
+                    ry + LIST_ROW_H / 2.0F, pw + 0.5F, Text.Align.RIGHT, IOStyle.ORANGE, false);
+            Text.drawLine(c, capText, AtomUi.REGULAR, Text.SMALL, capColor,
+                    capX, ry + LIST_ROW_H / 2.0F, capW + 0.5F, Text.Align.RIGHT);
+            Text.drawLine(c, entry.stack().getHoverName().getString(), AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT,
+                    sx + 32, ry + LIST_ROW_H / 2.0F, Math.max(12.0F, capX - 3.0F - (sx + 32)) + 0.5F, Text.Align.LEFT);
+            this.starRects.add(new int[]{sx + 1, ry + 2, 11, LIST_ROW_H - 4, i});
+            this.rowRects.add(new int[]{sx + 14, ry, (int) rowW - 14, LIST_ROW_H - 1, i});
+            if (hover) {
+                this.pendingTooltipStack = entry.stack();
+                this.pendingTooltipEntry = entry;
+                this.jeiHover = entry.stack();
+            }
+        }
+        this.listItems.popClip();
+        c.restoreToCount(saved);
+        if (maxScroll > 0) {
+            float viewH = per * LIST_ROW_H;
+            float thumbH = Math.min(viewH, Math.max(18.0F, viewH * per / (float) Math.max(1, this.visible.size())));
+            float thumbY = top + (viewH - thumbH) * this.listScroll / (float) Math.max(1, maxScroll);
+            boolean barHot = !underDropdown && (this.draggingListBar
+                    || IOStyle.inside(sx + LIST_W - 10, top, 12, (int) viewH, mouseX, mouseY));
+            float trackX = sx + LIST_W - 4.5F;
+            Draw.fill(c, trackX, top, 2.5F, viewH, 1.25F, IOStyle.HAIR);
+            Draw.fill(c, trackX, thumbY, barHot ? 3.0F : 2.5F, thumbH, 1.5F,
+                    this.draggingListBar ? IOStyle.BLUE : (barHot ? IOStyle.TEXT_2 : IOStyle.TEXT_3));
+        }
+        Text.drawLine(c, Component.translatable("gui.module_shop.shipping.list_count", this.visible.size(),
+                        allEntries().size()).getString(), AtomUi.REGULAR, Text.SMALL, IOStyle.TEXT_3, sx, countY + 4,
+                LIST_W + 0.5F, Text.Align.LEFT);
+    }
+
+    private void skDropdowns(io.github.humbleui.skija.Canvas c, int x, int y, int mouseX, int mouseY) {
+        int sx = x + LIST_X;
+        int panelY = y + LIST_TOP;
+        List<String> labels = new ArrayList<>();
+        int current;
+        int first = 0;
+        int rows;
+        int total = 4;
+        if (this.catOpen) {
+            List<String> cats = categories();
+            total = cats.size() + 1;
+            rows = Math.min(DD_CAT_ROWS, total);
+            this.catScroll = Mth.clamp(this.catScroll, 0, Math.max(0, total - rows));
+            first = this.catScroll;
+            current = 0;
+            for (int i = 0; i < total; i++) {
+                String ns = i == 0 ? "" : cats.get(i - 1);
+                labels.add(i == 0 ? Component.translatable("gui.module_shop.shipping.cat_all").getString()
+                        : modName(ns));
+                if (ns.equals(this.category)) {
+                    current = i;
+                }
+            }
+            this.catRect[0] = sx;
+            this.catRect[1] = panelY;
+            this.catRect[2] = DD_CAT_W;
+            this.catRect[3] = rows * DD_ROW_H + 4;
+        } else {
+            rows = 4;
+            current = this.sort;
+            labels.add(Component.translatable("gui.module_shop.shipping.sort_default").getString());
+            labels.add(Component.translatable("gui.module_shop.shipping.sort_price_asc").getString());
+            labels.add(Component.translatable("gui.module_shop.shipping.sort_price_desc").getString());
+            labels.add(Component.translatable("gui.module_shop.shipping.sort_name").getString());
+        }
+        int pw = LIST_W;
+        int ph = rows * DD_ROW_H + 4;
+        int catMax = this.catOpen ? Math.max(0, total - rows) : 0;
+        boolean hasCatBar = catMax > 0;
+        int rowInnerW = hasCatBar ? pw - 10 : pw - 4;
+        Draw.fill(c, sx + 1, panelY + 2, pw, ph, 4, 0x50000000);
+        Draw.fill(c, sx, panelY, pw, ph, 4, IOStyle.SHEET);
+        Draw.stroke(c, sx, panelY, pw, ph, 4, 1, IOStyle.BORDER);
+        for (int i = first; i < Math.min(labels.size(), first + rows); i++) {
+            int ry = panelY + 2 + (i - first) * DD_ROW_H;
+            boolean cur = i == current;
+            boolean hover = IOStyle.inside(sx + 2, ry, rowInnerW, DD_ROW_H, mouseX, mouseY);
+            if (cur || hover) {
+                Draw.fill(c, sx + 2, ry, rowInnerW, DD_ROW_H, 3, cur ? IOStyle.BLUE_TINT : IOStyle.ROW_HOVER);
+            }
+            Text.drawLine(c, labels.get(i), AtomUi.REGULAR, Text.SMALL, cur ? IOStyle.BLUE : IOStyle.TEXT, sx + 8,
+                    ry + DD_ROW_H / 2.0F, (rowInnerW - 12) + 0.5F, Text.Align.LEFT);
+            if (this.catOpen) {
+                this.catRects.add(new int[]{sx + 2, ry, rowInnerW, DD_ROW_H, i});
+            } else {
+                this.sortRects.add(new int[]{sx + 2, ry, rowInnerW, DD_ROW_H, i});
+            }
+        }
+        if (hasCatBar) {
+            float trackY = panelY + 3.0F;
+            float viewH = rows * DD_ROW_H - 2.0F;
+            float thumbH = Math.min(viewH, Math.max(18.0F, viewH * rows / (float) Math.max(1, total)));
+            float thumbY = trackY + (viewH - thumbH) * this.catScroll / (float) Math.max(1, catMax);
+            boolean barHot = this.draggingCatBar
+                    || IOStyle.inside(sx + pw - 10, panelY, 12, ph, mouseX, mouseY);
+            float trackX = sx + pw - 5.5F;
+            Draw.fill(c, trackX, trackY, 2.5F, viewH, 1.25F, IOStyle.HAIR);
+            Draw.fill(c, trackX, thumbY, barHot ? 3.0F : 2.5F, thumbH, 1.5F,
+                    this.draggingCatBar ? IOStyle.BLUE : (barHot ? IOStyle.TEXT_2 : IOStyle.TEXT_3));
+        }
+    }
+
     // =========================================================== 交互
+
+    private int listPer() {
+        int top = this.topPos + LIST_TOP;
+        int bottom = this.topPos + this.imageHeight - 20;
+        return Math.max(1, (bottom - top) / LIST_ROW_H);
+    }
+
+    private int listMaxScroll() {
+        return Math.max(0, this.visible.size() - listPer());
+    }
+
+    private void applyListDrag(double mouseY) {
+        int per = listPer();
+        int maxScroll = listMaxScroll();
+        if (maxScroll <= 0) {
+            this.listScroll = 0;
+            return;
+        }
+        float top = this.topPos + LIST_TOP;
+        float viewH = per * LIST_ROW_H;
+        float thumbH = Math.min(viewH, Math.max(18.0F, viewH * per / (float) Math.max(1, this.visible.size())));
+        float span = Math.max(1.0F, viewH - thumbH);
+        float targetTop = Mth.clamp((float) mouseY - this.listDragOffsetY, top, top + span);
+        this.listScroll = Mth.clamp(Math.round(((targetTop - top) / span) * maxScroll), 0, maxScroll);
+    }
+
+    private void applyCatDrag(double mouseY) {
+        int total = categories().size() + 1;
+        int rows = Math.min(DD_CAT_ROWS, total);
+        int catMax = Math.max(0, total - rows);
+        if (catMax <= 0) {
+            this.catScroll = 0;
+            return;
+        }
+        float trackY = this.topPos + LIST_TOP + 3.0F;
+        float viewH = rows * DD_ROW_H - 2.0F;
+        float thumbH = Math.min(viewH, Math.max(18.0F, viewH * rows / (float) Math.max(1, total)));
+        float span = Math.max(1.0F, viewH - thumbH);
+        float targetTop = Mth.clamp((float) mouseY - this.catDragOffsetY, trackY, trackY + span);
+        this.catScroll = Mth.clamp(Math.round(((targetTop - trackY) / span) * catMax), 0, catMax);
+    }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
@@ -547,13 +1017,43 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         int sx = x + LIST_X;
         int halfW = (LIST_W - 4) / 2;
         int sortX = sx + halfW + 4;
+        if (button == 0 && this.searchBox != null && !this.searchBox.getValue().isEmpty()
+                && IOStyle.inside(sx + LIST_W - 15, y + SEARCH_Y, 15, CTRL_H, mouseX, mouseY)) {
+            Bricks.click();
+            this.searchBox.setValue("");
+            this.listScroll = 0;
+            setFocused(this.searchBox);
+            this.searchBox.setFocused(true);
+            return true;
+        }
         if ((this.catOpen || this.sortOpen) && button == 0) {
+            if (this.catOpen) {
+                int total = categories().size() + 1;
+                int rows = Math.min(DD_CAT_ROWS, total);
+                int catMax = Math.max(0, total - rows);
+                int panelY = y + LIST_TOP;
+                int ph = rows * DD_ROW_H + 4;
+                if (catMax > 0 && IOStyle.inside(sx + DD_CAT_W - 10, panelY, 12, ph, mouseX, mouseY)) {
+                    float trackY = panelY + 3.0F;
+                    float viewH = rows * DD_ROW_H - 2.0F;
+                    float thumbH = Math.min(viewH, Math.max(18.0F, viewH * rows / (float) Math.max(1, total)));
+                    float thumbY = trackY + (viewH - thumbH) * this.catScroll / (float) Math.max(1, catMax);
+                    this.catDragOffsetY = (mouseY >= thumbY && mouseY <= thumbY + thumbH)
+                            ? (float) mouseY - thumbY : thumbH * 0.5F;
+                    this.draggingCatBar = true;
+                    if (mouseY < thumbY || mouseY > thumbY + thumbH) {
+                        applyCatDrag(mouseY);
+                    }
+                    return true;
+                }
+            }
             for (int[] rect : this.catRects) {
                 if (IOStyle.inside(rect[0], rect[1], rect[2], rect[3], mouseX, mouseY)) {
                     Bricks.click();
                     List<String> cats = categories();
                     this.category = rect[4] == 0 ? "" : cats.get(rect[4] - 1);
                     this.catOpen = false;
+                    this.draggingCatBar = false;
                     this.listScroll = 0;
                     return true;
                 }
@@ -568,12 +1068,21 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
             }
             this.catOpen = false;
             this.sortOpen = false;
+            this.draggingCatBar = false;
+            return true;
+        }
+        if (button == 0 && this.searchBox != null
+                && IOStyle.inside(sx, y + SEARCH_Y, LIST_W - 15, CTRL_H, mouseX, mouseY)) {
+            setFocused(this.searchBox);
+            this.searchBox.setFocused(true);
+            this.searchBox.mouseClicked(mouseX, mouseY, button);
             return true;
         }
         if (button == 0 && IOStyle.inside(sx, y + ROW2_Y, halfW, CTRL_H, mouseX, mouseY)) {
             Bricks.click();
             this.catOpen = !this.catOpen;
             this.sortOpen = false;
+            this.draggingCatBar = false;
             this.catScroll = 0;
             return true;
         }
@@ -581,6 +1090,7 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
             Bricks.click();
             this.sortOpen = !this.sortOpen;
             this.catOpen = false;
+            this.draggingCatBar = false;
             return true;
         }
         if (button == 0 && IOStyle.inside(sx, y + ROW3_Y, halfW, CTRL_H, mouseX, mouseY)) {
@@ -593,6 +1103,21 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
             Bricks.click();
             this.onlyMarked = !this.onlyMarked;
             this.listScroll = 0;
+            return true;
+        }
+        int per = listPer();
+        int maxScroll = listMaxScroll();
+        int listTop = y + LIST_TOP;
+        int viewH = per * LIST_ROW_H;
+        if (button == 0 && maxScroll > 0 && IOStyle.inside(sx + LIST_W - 10, listTop, 12, viewH, mouseX, mouseY)) {
+            float thumbH = Math.min(viewH, Math.max(18.0F, viewH * per / (float) Math.max(1, this.visible.size())));
+            float thumbY = listTop + (viewH - thumbH) * this.listScroll / (float) Math.max(1, maxScroll);
+            this.listDragOffsetY = (mouseY >= thumbY && mouseY <= thumbY + thumbH)
+                    ? (float) mouseY - thumbY : thumbH * 0.5F;
+            this.draggingListBar = true;
+            if (mouseY < thumbY || mouseY > thumbY + thumbH) {
+                applyListDrag(mouseY);
+            }
             return true;
         }
         for (int[] rect : this.starRects) {
@@ -609,6 +1134,31 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
             }
         }
         return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    @Override
+    public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+        if (button == 0) {
+            if (this.draggingCatBar) {
+                applyCatDrag(mouseY);
+                return true;
+            }
+            if (this.draggingListBar) {
+                applyListDrag(mouseY);
+                return true;
+            }
+        }
+        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (button == 0 && (this.draggingCatBar || this.draggingListBar)) {
+            this.draggingCatBar = false;
+            this.draggingListBar = false;
+            return true;
+        }
+        return super.mouseReleased(mouseX, mouseY, button);
     }
 
     /**
@@ -636,24 +1186,33 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
     }
 
     @Override
-    public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
-        if (delta != 0.0D) {
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollY) {
+        if (scrollY != 0.0D) {
             if (this.catOpen && IOStyle.inside(this.catRect[0], this.catRect[1], this.catRect[2], this.catRect[3],
                     mouseX, mouseY)) {
-                this.catScroll = Math.max(0, this.catScroll + (delta > 0 ? -1 : 1));
+                int total = categories().size() + 1;
+                int rows = Math.min(DD_CAT_ROWS, total);
+                int catMax = Math.max(0, total - rows);
+                this.catScroll = Mth.clamp(this.catScroll + (scrollY > 0 ? -1 : 1), 0, catMax);
                 return true;
             }
             if (mouseX >= this.leftPos + LIST_X - 6 && mouseX < this.leftPos + LIST_X + LIST_W
                     && mouseY >= this.topPos + LIST_TOP) {
-                this.listScroll = Math.max(0, this.listScroll + (delta > 0 ? -1 : 1));
+                this.listScroll = Mth.clamp(this.listScroll + (scrollY > 0 ? -1 : 1), 0, listMaxScroll());
                 return true;
             }
         }
-        return super.mouseScrolled(mouseX, mouseY, delta);
+        return super.mouseScrolled(mouseX, mouseY, scrollY);
     }
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE
+                && this.searchBox != null && this.searchBox.isFocused() && !this.searchBox.getValue().isEmpty()) {
+            this.searchBox.setValue("");
+            this.listScroll = 0;
+            return true;
+        }
         // 搜索框聚焦时数字键不要拿去交换快捷栏。
         if (this.searchBox != null && this.searchBox.isFocused()
                 && keyCode >= org.lwjgl.glfw.GLFW.GLFW_KEY_1 && keyCode <= org.lwjgl.glfw.GLFW.GLFW_KEY_9) {
@@ -676,9 +1235,28 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
         return total;
     }
 
-    /** 本次结算金额（本地实时预估，真正结算以服务端为准）。 */
+    /** 本次结算金额（星币部分，本地实时预估）。 */
     private long liveValue() {
-        long total = 0L;
+        long[] starOut = {0L};
+        computeLiveLedger(starOut, null);
+        return starOut[0];
+    }
+
+    private boolean hasLivePhysValue() {
+        Map<String, Long> physOut = new LinkedHashMap<>();
+        computeLiveLedger(new long[1], physOut);
+        return !physOut.isEmpty();
+    }
+
+    private String liveValueSummary() {
+        long[] starOut = {0L};
+        Map<String, Long> physOut = new LinkedHashMap<>();
+        computeLiveLedger(starOut, physOut);
+        return PriceDisplay.formatLedgerSummary(starOut[0], physOut);
+    }
+
+    private void computeLiveLedger(long[] starOut, Map<String, Long> physOut) {
+        long starTotal = 0L;
         Map<String, Integer> counted = new LinkedHashMap<>();
         for (int i = 0; i < getMenu().binSlots(); i++) {
             ItemStack stack = getMenu().getSlot(i).getItem();
@@ -690,21 +1268,42 @@ public class ShippingBinScreen extends AbstractContainerScreen<ShippingBinMenu> 
                     continue;
                 }
                 String key = Integer.toString(rule.line());
-                int already = counted.getOrDefault(key, 0);
+                int already = counted.containsKey(key) ? counted.get(key) : ClientShopData.shipRuleUsedCount(rule.line());
                 int allowed = rule.dailyMax() <= 0 ? stack.getCount() : Math.max(0, rule.dailyMax() - already);
                 int count = Math.min(stack.getCount(), allowed);
                 if (count > 0) {
                     counted.put(key, already + count);
-                    total += rule.price() * count;
+                    PriceSpec spec = specOfRule(rule);
+                    if (spec.supportsStar()) {
+                        starTotal += spec.starPrice * count;
+                    }
+                    if (physOut != null && spec.supportsPhys()) {
+                        physOut.merge(spec.physTierKey, spec.physCount * (long) count, Long::sum);
+                    }
                 }
                 break;
             }
         }
         long limit = ClientShopData.shipLimit;
         if (limit > 0L) {
-            return Math.min(total, Math.max(0L, limit - ClientShopData.shipSoldToday));
+            starTotal = Math.min(starTotal, Math.max(0L, limit - ClientShopData.shipSoldToday));
         }
-        return total;
+        starOut[0] = starTotal;
+    }
+
+    private void appendDailyCapTooltip(List<Component> tooltip) {
+        if (this.pendingTooltipEntry == null) {
+            return;
+        }
+        String label = Component.translatable("gui.module_shop.v2.col.daily_cap").getString();
+        if (this.pendingTooltipEntry.dailyMax() > 0) {
+            int used = ClientShopData.shipRuleUsedCount(this.pendingTooltipEntry.ruleLine());
+            boolean full = used >= this.pendingTooltipEntry.dailyMax();
+            tooltip.add(Component.literal(label + ": " + used + "/" + this.pendingTooltipEntry.dailyMax())
+                    .withStyle(full ? net.minecraft.ChatFormatting.RED : net.minecraft.ChatFormatting.YELLOW));
+        } else {
+            tooltip.add(Component.literal(label + ": ∞").withStyle(net.minecraft.ChatFormatting.GRAY));
+        }
     }
 
     /** 0.8 倍小字（超宽自动截断）。 */

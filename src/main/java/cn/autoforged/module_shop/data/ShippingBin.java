@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -28,8 +28,11 @@ public final class ShippingBin {
     public long soldToday;
     public final Map<Integer, Integer> ruleUsed = new HashMap<>();
     public long lastSettleGameDay = Long.MIN_VALUE;
-    /** 上一次结算的结果（界面展示用）。 */
+    /** 上一次结算的结果（星币总额，界面展示用）。 */
     public long lastPayout;
+    /** 上一次结算发放的各档位实体货币（tierKey -> count）。 */
+    public final Map<String, Long> lastPhysPayout = new java.util.LinkedHashMap<>();
+    public String lastPayoutSummary = "";
     public int lastCount;
     /** 结算时玩家不在线 → 登录后补一条提示，别让人不知道钱是哪来的。 */
     public boolean pendingNotice;
@@ -117,7 +120,7 @@ public final class ShippingBin {
         return true;
     }
 
-    public CompoundTag save(RegistryAccess registries) {
+    public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = new CompoundTag();
         tag.putInt("level", level);
         ListTag list = new ListTag();
@@ -134,12 +137,26 @@ public final class ShippingBin {
         tag.put("ruleUsed", used);
         tag.putLong("lastSettleGameDay", lastSettleGameDay);
         tag.putLong("lastPayout", lastPayout);
+        if (!lastPhysPayout.isEmpty()) {
+            CompoundTag physTag = new CompoundTag();
+            for (Map.Entry<String, Long> e : lastPhysPayout.entrySet()) {
+                if (e.getKey() != null && !e.getKey().isEmpty() && e.getValue() != null && e.getValue() > 0L) {
+                    physTag.putLong(e.getKey(), e.getValue());
+                }
+            }
+            if (!physTag.isEmpty()) {
+                tag.put("lastPhysPayout", physTag);
+            }
+        }
+        if (lastPayoutSummary != null && !lastPayoutSummary.isEmpty()) {
+            tag.putString("lastPayoutSummary", lastPayoutSummary);
+        }
         tag.putInt("lastCount", lastCount);
         tag.putBoolean("pendingNotice", pendingNotice);
         return tag;
     }
 
-    public static ShippingBin load(CompoundTag tag, RegistryAccess registries) {
+    public static ShippingBin load(CompoundTag tag, HolderLookup.Provider registries) {
         ShippingBin bin = new ShippingBin();
         bin.level = Math.max(1, tag.getInt("level"));
         ListTag list = tag.getList("slots", Tag.TAG_COMPOUND);
@@ -160,6 +177,16 @@ public final class ShippingBin {
         bin.lastSettleGameDay = tag.contains("lastSettleGameDay")
                 ? tag.getLong("lastSettleGameDay") : Long.MIN_VALUE;
         bin.lastPayout = tag.getLong("lastPayout");
+        if (tag.contains("lastPhysPayout", Tag.TAG_COMPOUND)) {
+            CompoundTag physTag = tag.getCompound("lastPhysPayout");
+            for (String key : physTag.getAllKeys()) {
+                long v = physTag.getLong(key);
+                if (v > 0L) {
+                    bin.lastPhysPayout.put(key, v);
+                }
+            }
+        }
+        bin.lastPayoutSummary = tag.getString("lastPayoutSummary");
         bin.lastCount = tag.getInt("lastCount");
         bin.pendingNotice = tag.getBoolean("pendingNotice");
         return bin;

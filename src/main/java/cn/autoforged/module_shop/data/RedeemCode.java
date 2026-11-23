@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import net.minecraft.core.RegistryAccess;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.world.item.ItemStack;
@@ -37,8 +37,9 @@ public final class RedeemCode {
     public final Map<UUID, Integer> usedBy = new HashMap<>();
     /** 物品奖励（深拷贝落盘）。 */
     public final List<ItemStack> items = new ArrayList<>();
-    /** 星币奖励。 */
+    /** 星币奖励（兼容字段，新双独立账本以 moneySpec 为准）。 */
     public long money;
+    public PriceSpec moneySpec = PriceSpec.ZERO;
     /** 邮件标题（空 = 用模板标题）。 */
     public String title = "";
     /** 备注：附加到邮件正文末尾。 */
@@ -73,11 +74,26 @@ public final class RedeemCode {
         return remainingFor(id) > 0;
     }
 
-    public boolean hasReward() {
-        return !items.isEmpty() || money > 0L;
+    public void setMoneySpec(PriceSpec spec) {
+        this.moneySpec = spec == null ? PriceSpec.ZERO : spec;
+        this.money = this.moneySpec.supportsStar() ? this.moneySpec.starPrice : 0L;
     }
 
-    public CompoundTag save(RegistryAccess registries) {
+    public PriceSpec resolveMoneySpec() {
+        if (moneySpec == null) {
+            return PriceSpec.star(money);
+        }
+        if (moneySpec.mode == PriceSpec.CurrencyMode.STAR_ONLY && moneySpec.starPrice != money) {
+            return PriceSpec.star(money);
+        }
+        return moneySpec;
+    }
+
+    public boolean hasReward() {
+        return !items.isEmpty() || resolveMoneySpec().isValid();
+    }
+
+    public CompoundTag save(HolderLookup.Provider registries) {
         CompoundTag tag = new CompoundTag();
         tag.putString("code", code);
         tag.putLong("expireAt", expireAt);
@@ -100,7 +116,7 @@ public final class RedeemCode {
             itemList.add(ShopNbt.saveStack(stack, registries));
         }
         tag.put("items", itemList);
-        tag.putLong("money", money);
+        resolveMoneySpec().writeToParent(tag, "moneySpec", "money");
         tag.putString("title", title == null ? "" : title);
         tag.putString("note", note == null ? "" : note);
         tag.putString("creator", creator == null ? "" : creator);
@@ -108,7 +124,7 @@ public final class RedeemCode {
         return tag;
     }
 
-    public static RedeemCode load(CompoundTag tag, RegistryAccess registries) {
+    public static RedeemCode load(CompoundTag tag, HolderLookup.Provider registries) {
         RedeemCode code = new RedeemCode();
         code.code = tag.getString("code");
         code.expireAt = tag.getLong("expireAt");
@@ -137,7 +153,7 @@ public final class RedeemCode {
                 code.items.add(stack);
             }
         }
-        code.money = tag.getLong("money");
+        code.setMoneySpec(PriceSpec.readFromParent(tag, "moneySpec", "money"));
         code.title = tag.getString("title");
         code.note = tag.getString("note");
         code.creator = tag.getString("creator");
