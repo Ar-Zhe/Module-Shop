@@ -43,6 +43,33 @@ public final class MallItem {
      * 刷新 / 补货（{@link #clearPersonalUsed}）时整张表清空 = 每个人的库存都恢复。
      */
     public final java.util.Map<java.util.UUID, Integer> personalUsed = new java.util.LinkedHashMap<>();
+    /** 物品 NBT 编码缓存（不存档）：购物城上万件商品重复下发时避免每次重跑 ItemStack.save。 */
+    private transient Tag cachedItemTag;
+    private transient ItemStack cachedItemRef;
+    private transient int cachedItemCount;
+    private transient HolderLookup.Provider cachedItemRegs;
+
+    private CompoundTag saveCachedStack(HolderLookup.Provider registries) {
+        CompoundTag tag = new CompoundTag();
+        if (stack == null || stack.isEmpty()) {
+            return tag;
+        }
+        Tag encoded = this.cachedItemTag;
+        if (encoded == null || this.cachedItemRef != stack
+                || this.cachedItemCount != stack.getCount()
+                || this.cachedItemRegs != registries) {
+            CompoundTag fresh = ShopNbt.saveStack(stack, registries);
+            encoded = fresh.get("item");
+            this.cachedItemTag = encoded;
+            this.cachedItemRef = stack;
+            this.cachedItemCount = stack.getCount();
+            this.cachedItemRegs = registries;
+        }
+        if (encoded != null) {
+            tag.put("item", encoded);
+        }
+        return tag;
+    }
 
     public MallItem() {
     }
@@ -155,12 +182,16 @@ public final class MallItem {
      * 客户端只认 {@code stock} 字段，所以界面代码不需要区分两种模式。
      */
     public CompoundTag saveForView(HolderLookup.Provider registries, java.util.UUID viewer, boolean personal) {
-        // 直接按字段拼，不走 save()：save() 会把 personalUsed（每个买过的玩家一条）整表序列化，
-        // 这里又马上删掉 —— 货架上千件、买家上百人时，每次下发快照都要白白构造几十万个 NBT 节点。
-        CompoundTag tag = ShopNbt.saveStack(stack, registries);
+        // 直接按字段拼并复用物品 NBT 缓存：货架上万件时免去重复 ItemStack.save 与 personalUsed 序列化。
+        CompoundTag tag = saveCachedStack(registries);
         resolvePriceSpec().writeToParent(tag, "priceSpec", "price");
         tag.putString("rarity", rarity.id());
-        tag.putInt("stock", (personal || permanentLimit) ? remainingFor(viewer) : stock);
+        boolean perPlayer = personal || permanentLimit;
+        int viewStock = perPlayer ? remainingFor(viewer) : stock;
+        tag.putInt("stock", viewStock);
+        if (perPlayer && viewStock != stock) {
+            tag.putInt("globalStock", stock);
+        }
         tag.putInt("stockMax", stockMax);
         tag.putInt("sort", sort);
         if (permanentLimit) {

@@ -1312,6 +1312,30 @@ public final class ShopManager {
         sendSnapshot(player, tab, silent, false);
     }
 
+    /** 已发给各在线玩家的购物城货架指纹：未变化时快照直接带 mallUnchanged=true，避免每次开商店/动钱重传上万件商品。 */
+    private static final Map<UUID, Long> LAST_SENT_MALL_HASH = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static long mallViewHash(ShopSavedData data, UUID viewer, boolean personalStock) {
+        long h = 1125899906842597L;
+        h = 31L * h + (personalStock ? 1L : 0L);
+        h = 31L * h + data.mallPool.size();
+        for (MallItem item : data.mallPool) {
+            h = 31L * h + System.identityHashCode(item);
+            h = 31L * h + System.identityHashCode(item.stack);
+            h = 31L * h + item.stack.getCount();
+            h = 31L * h + item.stock;
+            h = 31L * h + item.stockMax;
+            h = 31L * h + item.sort;
+            h = 31L * h + item.rarity.ordinal();
+            h = 31L * h + (item.permanentLimit ? 1L : 0L);
+            h = 31L * h + item.resolvePriceSpec().hashCode();
+            if (personalStock || item.permanentLimit) {
+                h = 31L * h + item.remainingFor(viewer);
+            }
+        }
+        return h == 0L ? 1L : h;
+    }
+
     private static void sendSnapshot(ServerPlayer player, @Nullable String tab, boolean silent, boolean open) {
         ConfigMigration.runOnce();
         logBalanceCapOnce();
@@ -1322,8 +1346,10 @@ public final class ShopManager {
         // 需求 3：价格始终以服务端商品池为权威，下发前用最新池数据刷新每日报价。
         refreshDailyPrices(account, data);
         HolderLookup.Provider regs = player.level().registryAccess();
-
-        CompoundTag tag = new CompoundTag();
+        boolean ownedBatch = ShopNbt.beginBatchIfAbsent(regs);
+        CompoundTag tag;
+        try {
+        tag = new CompoundTag();
         tag.putString("kind", "snapshot");
         tag.putBoolean("silent", silent);
         // open=true 才允许客户端"自动弹出商店界面"（默认 false：只更新数据，绝不再抢夺玩家的界面）
@@ -1512,33 +1538,24 @@ public final class ShopManager {
             tag.put("adminBuyback", offerList(data.buybackPool, regs));
         }
 
-        // ---- 购物城（新增模块）：常驻货架 + 管理端同结构列表 + 最近购买记录 ----
-        // 「个人库存」模式下每件商品的 stock 字段按**这个玩家自己的剩余量**下发，
-        // 所以客户端不用区分两种模式，只认 stock 就是对的。
+        // ---- 购物城（新增模块）：按指纹增量下发 + 复用单份列表，彻底消除上万件商品开商店/动钱卡顿 ----
         boolean personalStock = Config.mallStockPersonal();
-        ListTag mallList = new ListTag();
-        for (int i = 0; i < data.mallPool.size(); i++) {
-            MallItem item = data.mallPool.get(i);
-            CompoundTag c = item.saveForView(regs, player.getUUID(), personalStock);
-            c.putInt("index", i);
-            mallList.add(c);
-        }
-        tag.put("mall", mallList);
+        long mallHash = mallViewHash(data, player.getUUID(), personalStock);
+        Long prevMallHash = LAST_SENT_MALL_HASH.get(player.getUUID());
         tag.putBoolean("mallStockPersonal", personalStock);
-        // 管理页复用 ConfiguredOffer 的结构（amount 当库存用，-1 = 无限），前端一套行渲染即可。
-        if (snapshotAdmin) {
-            ListTag adminMallList = new ListTag();
-            for (MallItem item : data.mallPool) {
-                CompoundTag c = ShopNbt.saveStack(item.stack, regs);
-                item.resolvePriceSpec().writeToParent(c, "priceSpec", "price");
-                c.putString("rarity", item.rarity.id());
-                c.putInt("amount", item.stock);
-                if (item.permanentLimit) {
-                    c.putBoolean("permanentLimit", true);
-                }
-                adminMallList.add(c);
+        if (prevMallHash != null && prevMallHash == mallHash) {
+            tag.putBoolean("mallUnchanged", true);
+        } else {
+            ListTag mallList = new ListTag();
+            for (int i = 0; i < data.mallPool.size(); i++) {
+                MallItem item = data.mallPool.get(i);
+                CompoundTag c = item.saveForView(regs, player.getUUID(), personalStock);
+                c.putInt("index", i);
+                mallList.add(c);
             }
-            tag.put("adminMall", adminMallList);
+            tag.put("mall", mallList);
+            tag.putBoolean("adminMallFromMall", true);
+            LAST_SENT_MALL_HASH.put(player.getUUID(), mallHash);
         }
         // 管理页的「出货箱」模块：把**兑换规则**按条目下发（代表物品 + 单价 + 每日份数），
         // 格式错误的那几行也在列表里（物品为空 + 原文与原因），界面把它们标红，右键即可删掉。
@@ -1684,6 +1701,11 @@ public final class ShopManager {
         cn.autoforged.module_shop.shop.home.ProfileStatsService.writeSnapshot(player, tag);
         cn.autoforged.module_shop.shop.home.AnnouncementConfig.get().writeSnapshot(tag);
         cn.autoforged.module_shop.shop.currency.CurrencySettlement.writeSnapshot(player, tag, regs);
+        } finally {
+            if (ownedBatch) {
+                ShopNbt.endBatch();
+            }
+        }
 
         ClientboundShopSyncPayload.send(player, tag);
     }
@@ -1800,6 +1822,7 @@ public final class ShopManager {
     }
 
     public static void reload(MinecraftServer server) {
+        LAST_SENT_MALL_HASH.clear();
         cn.autoforged.module_shop.shop.home.AnnouncementConfig.reload();
         cn.autoforged.module_shop.shop.currency.PhysicalCurrencyConfig.reload();
         AdminAuthService.reload();
@@ -2946,6 +2969,7 @@ public final class ShopManager {
      */
     public static void resetShippingTick() {
         shippingLoggedDay = Long.MIN_VALUE;
+        LAST_SENT_MALL_HASH.clear();
     }
 
     /** 出货箱：放不进去的提醒节流（玩家 UUID → 上次提醒时刻）。 */
@@ -8200,6 +8224,7 @@ public final class ShopManager {
     }
 
     public static void onLogin(ServerPlayer player) {
+        LAST_SENT_MALL_HASH.remove(player.getUUID());
         // 签到（需求 7）：开启「自动签到」时登录即签到。
         autoSignInIfNeeded(player);
         // 活动日奖励（需求 7）：当天登录即可领取管理员配置的星币。
@@ -8268,6 +8293,7 @@ public final class ShopManager {
     }
 
     public static void onLogout(ServerPlayer player) {
+        LAST_SENT_MALL_HASH.remove(player.getUUID());
         returnPending(player);
         TradeManager.onLogout(player);
         cn.autoforged.module_shop.shop.auction.AuctionService.onLogout(player);

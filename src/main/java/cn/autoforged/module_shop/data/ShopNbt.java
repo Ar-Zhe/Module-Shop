@@ -38,6 +38,15 @@ public final class ShopNbt {
         beginBatch();
     }
 
+    /** 若当前不在外层批量编码窗口内则开启新窗口并返回 true（供单人 sendSnapshot 复用且不干扰 flushBroadcastSnapshots）。 */
+    public static boolean beginBatchIfAbsent(@Nullable HolderLookup.Provider registries) {
+        if (batchCache != null) {
+            return false;
+        }
+        beginBatch();
+        return true;
+    }
+
     public static void endBatch() {
         batchCache = null;
     }
